@@ -284,3 +284,117 @@ export function describeEvent(
       return `${event.type} in ${bot}`;
   }
 }
+
+// ── tier 2: integration and broadcasts (phase 3) ──
+
+export function narrateIntegrateInsight(input: {
+  text: string;
+  confidence?: string;
+  bots: string[];
+}): string {
+  const parts = [
+    ...(input.confidence ? [`confidence ${input.confidence}`] : []),
+    ...(input.bots.length > 1 ? [`across ${andList(input.bots)}`] : []),
+    ...(input.bots.length === 1 ? [`from ${input.bots[0]}`] : []),
+  ];
+  return `I realised: ${quoteModelText(input.text, 300)}${parts.length ? ` (${parts.join('; ')})` : ''}.`;
+}
+
+export function narrateIntegrateContradiction(input: { text: string }): string {
+  return `These disagree: ${quoteModelText(input.text, 300)}.`;
+}
+
+export function narrateIntegratePrediction(input: {
+  text: string;
+  probability: number;
+  horizonHours: number;
+}): string {
+  const pct = Math.round(input.probability * 100);
+  return `I predict, at ${pct} %, within ${num(input.horizonHours)} h: ${quoteModelText(input.text)}.`;
+}
+
+export function narrateIntegratePass(input: {
+  events: number;
+  insights: number;
+  contradictions: number;
+  predictions: number;
+  broadcasts: number;
+}): string {
+  const head = `Integrated ${plural(input.events, 'event', 'events')}`;
+  if (input.insights + input.contradictions + input.predictions + input.broadcasts === 0) {
+    return `${head}; no new thought.`;
+  }
+  return `${head}: ${plural(input.insights, 'insight', 'insights')}, ${plural(input.contradictions, 'contradiction', 'contradictions')}, ${plural(input.predictions, 'prediction', 'predictions')}, ${plural(input.broadcasts, 'broadcast', 'broadcasts')}.`;
+}
+
+export function narrateIntegrateFailed(input: { error: string }): string {
+  return `Could not integrate: the model call failed (${quoteModelText(input.error, 160)}). I kept what I gathered for the next pass.`;
+}
+
+export function narrateIntegrateUnparsable(): string {
+  return 'Could not read the integration answer as JSON. I kept what I gathered for the next pass.';
+}
+
+export function narrateIntegrateCapped(
+  input: { reason: 'cap'; maxPerDay: number } | { reason: 'tokens'; maxTokensPerDay: number }
+): string {
+  const what =
+    input.reason === 'cap'
+      ? `integration budget (${plural(input.maxPerDay, 'call', 'calls')})`
+      : `integration token budget (${plural(input.maxTokensPerDay, 'token', 'tokens')})`;
+  return `Reached today's ${what}. I keep noticing and will integrate again tomorrow.`;
+}
+
+export function narrateIntegratePaused(input: { backend: string }): string {
+  const name = BACKEND_NAMES[input.backend] ?? input.backend;
+  return `${name} is rate-limited across the fleet (circuit open). Integration is paused until it recovers.`;
+}
+
+export function narratePredictionResolved(input: {
+  text: string;
+  happened: boolean;
+  brier: number;
+}): string {
+  const how = input.happened ? 'came true' : 'did not happen';
+  return `My prediction ${quoteModelText(input.text)} ${how} (Brier ${Math.round(input.brier * 100) / 100}).`;
+}
+
+export function narrateBroadcast(input: {
+  kind: 'wake' | 'directive' | 'goal' | 'question';
+  bot: string;
+  status: 'sent' | 'failed' | 'capped';
+  text?: string;
+  error?: string;
+  cap?: number;
+}): string {
+  const { bot } = input;
+  const quoted = input.text ? quoteModelText(input.text) : '';
+  if (input.status === 'capped') {
+    const verb = {
+      wake: `wake ${bot}`,
+      directive: `give ${bot} a directive`,
+      goal: `add a goal for ${bot}`,
+      question: `ask the operator through ${bot}`,
+    }[input.kind];
+    return `Did not ${verb}: it already had ${plural(input.cap ?? 0, 'broadcast', 'broadcasts')} today.`;
+  }
+  if (input.status === 'failed') {
+    const verb = {
+      wake: `wake ${bot}`,
+      directive: `give ${bot} a directive`,
+      goal: `add a goal for ${bot}`,
+      question: `ask the operator through ${bot}`,
+    }[input.kind];
+    return `Could not ${verb} (${quoteModelText(input.error ?? 'not delivered', 160)}).`;
+  }
+  switch (input.kind) {
+    case 'wake':
+      return `I woke ${bot}.`;
+    case 'directive':
+      return `I gave ${bot} a directive: ${quoted}.`;
+    case 'goal':
+      return `I added a goal for ${bot}: ${quoted}.`;
+    case 'question':
+      return `I asked the operator, through ${bot}: ${quoted}.`;
+  }
+}

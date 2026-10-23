@@ -9,10 +9,13 @@ import type { Logger } from '../logger';
  * neurons are left out. Results are wrapped as external content: the graph
  * holds what other bots and the watcher's model wrote. Not sensitive: tier 0
  * reduces every non-operator message to topic words before it reaches the
- * graph, so no private conversation is in it.
+ * graph, so no private conversation is in it. Neurons that operator messages
+ * support (`meta.operatorSourced`) are returned only to the operator on a
+ * verified surface (`callerIdentity` kind `operator`).
  */
 import { cosineSimilarity } from '../memory/search';
-import type { Neuron } from '../watcher/types';
+import { type Neuron, isOperatorSourced } from '../watcher/types';
+import { callerIdentity } from './operator-gate';
 import { type Tool, type ToolResult, wrapExternalContent } from './types';
 
 export const FLEET_MEMORY_MAX_RESULTS = 10;
@@ -86,8 +89,13 @@ export function createFleetMemorySearchTool(getSource: () => FleetMemorySource |
       }
       const qWords = titleTokens(query);
       const scored: Array<{ n: Neuron; score: number }> = [];
+      // Operator-sourced neurons only for the operator on a verified surface
+      // (dashboard thread, or Telegram in private); never in a group, never for
+      // the bot's own runs, other users or collaboration.
+      const operator = callerIdentity(args).kind === 'operator';
       for (const n of source.graph.list()) {
         if (n.archivedAt) continue;
+        if (!operator && isOperatorSourced(n)) continue;
         const text = Math.max(textSimilarity(query, n.text), coverage(qWords, n.text));
         let score = text >= MIN_TEXT_SCORE ? text : 0;
         const vec = queryVec ? source.graph.getEmbedding(n.id) : undefined;

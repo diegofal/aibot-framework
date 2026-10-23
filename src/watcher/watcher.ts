@@ -10,14 +10,20 @@
  * budget + fleet breaker, query log under `__watcher__`).
  */
 import { EventEmitter } from 'node:events';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import type { ChannelStatus } from '../bot/telegram-errors';
+import type { WatcherBroadcastSource } from '../bot/types';
 import type { UserDirectory } from '../bot/user-directory';
 import type { ChannelKind } from '../channel/types';
 import type { Config } from '../config';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
+import { backupSoulFile } from '../soul';
+import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
+import { readAgentCycles } from '../stats/readers/agent-cycles';
 import {
   type BirthDeps,
   beginBirth,
@@ -26,9 +32,17 @@ import {
   relayout,
   runResync,
 } from './birth';
+import {
+  type Broadcast,
+  type BroadcastDelivery,
+  type BroadcastSignal,
+  Broadcaster,
+  writeWatcherGoal,
+} from './broadcast';
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
 import { Graph, type GraphChange } from './graph';
+import { type IntegrateOutcome, Integrator } from './integrate';
 import {
   type InstrumentOptions,
   type InstrumentedClient,
@@ -39,11 +53,14 @@ import {
 import { WatcherLog } from './log';
 import { narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
 import { type NoticeOutcome, Noticer } from './notice';
+import { applyServed, duePredictions, resolvePredictions } from './outcomes';
 import { bufferFile, watcherDir, watcherLogDir } from './paths';
-import { type SenderInfo, Sense } from './sense';
+import { type SenderInfo, Sense, inboundSender } from './sense';
 import {
   type BirthRecord,
   type LinkStatus,
+  type Neuron,
+  type NeuronKind,
   WATCHER_DEFAULTS,
   type WatcherConfig,
   type WatcherEvent,
@@ -56,6 +73,19 @@ import {
 const DAY_MS = 86_400_000;
 /** How often the notice timer asks whether a pass is due (`Noticer.due`). */
 export const NOTICE_CHECK_MS = 30_000;
+/** How often the integrate timer asks whether a pass is due (`Integrator.due`). */
+export const INTEGRATE_CHECK_MS = 60_000;
+/** Outcomes (served broadcasts, due predictions) are checked at most this often. */
+export const OUTCOMES_EVERY_MS = 10 * 60_000;
+/** Neuron kinds the operator can 👍/👎 (contradictions: confirm or dismiss). */
+export const SIGNAL_KINDS: readonly NeuronKind[] = ['insight', 'contradiction', 'prediction'];
+
+/** `<dir>/taste.json`: the operator's signals, per neuron kind and per broadcast kind. */
+export interface WatcherTaste {
+  updatedAt: string;
+  neurons: Record<string, { up: number; down: number }>;
+  broadcasts: Record<string, { up: number; down: number }>;
+}
 
 /** The fleet breaker as the watcher uses it (`BackendCircuitBreaker`). */
 export interface WatcherBreaker {
@@ -86,6 +116,10 @@ export interface WatcherDeps {
   queryLog?: { append(entry: LlmQueryEntry): void };
   /** The fleet circuit breaker (`BotContext.circuitBreaker`). */
   breaker?: WatcherBreaker;
+  /** Phase 3: the entry points broadcasts use (wake, directive, goal, question). */
+  broadcastDelivery?: BroadcastDelivery;
+  /** Phase 4: the interoceptive record the integrate prompt shows as "## How I am". */
+  interoception?: () => Record<string, unknown>;
 }
 
 export class Watcher extends EventEmitter {
@@ -107,6 +141,13 @@ export class Watcher extends EventEmitter {
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private noticeRun: Promise<NoticeOutcome | null> | null = null;
   private readonly noticer?: Noticer;
+  /** Phase 3: broadcasts (always on disk; delivered only through `broadcastDelivery`). */
+  readonly broadcaster: Broadcaster;
+  private readonly integrator?: Integrator;
+  private integrateTimer: ReturnType<typeof setInterval> | null = null;
+  private integrateRun: Promise<IntegrateOutcome | null> | null = null;
+  private outcomesRun: Promise<void> | null = null;
+  private lastOutcomesAt = 0;
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -135,6 +176,7 @@ export class Watcher extends EventEmitter {
       now: this.now,
       botName: (id) => this.botName(id),
       sender: (e) => this.sender(e),
+      onItem: (item) => this.integrator?.observe(item),
       logger: this.logger,
     });
     this.budget = new DailyBudget({
@@ -162,6 +204,35 @@ export class Watcher extends EventEmitter {
         now: this.now,
         botName: (id) => this.botName(id),
         ...(deps.embed ? { embed: deps.embed } : {}),
+        logger: this.logger,
+      });
+    }
+    this.broadcaster = new Broadcaster({
+      dir: this.dir,
+      now: this.now,
+      delivery: deps.broadcastDelivery ?? {},
+      log: this.log,
+      botName: (id) => this.botName(id),
+      logger: this.logger,
+    });
+    const integrate = this.tierClient('integrate');
+    if (integrate) {
+      this.integrator = new Integrator({
+        dir: this.dir,
+        graph: this.graph,
+        log: this.log,
+        client: integrate,
+        budget: this.budget,
+        config: () => this.cfg(),
+        now: this.now,
+        bots: () =>
+          (this.deps.config().bots ?? [])
+            .filter((b) => b.enabled !== false)
+            .map((b) => ({ id: b.id, name: this.botName(b.id) })),
+        botName: (id) => this.botName(id),
+        broadcaster: this.broadcaster,
+        ...(deps.embed ? { embed: deps.embed } : {}),
+        ...(deps.interoception ? { interoception: deps.interoception } : {}),
         logger: this.logger,
       });
     }
@@ -204,6 +275,10 @@ export class Watcher extends EventEmitter {
     this.setPhase('notice');
     this.noticeRun = noticer
       .run()
+      .then((outcome) => {
+        this.integrator?.observeNotice(outcome);
+        return outcome;
+      })
       .catch((err): NoticeOutcome | null => {
         this.fail(err);
         return null;
@@ -213,6 +288,95 @@ export class Watcher extends EventEmitter {
         if (this.running && !this.stopping) this.setPhase('sense');
       });
     return this.noticeRun;
+  }
+
+  /** True while the integrate timer runs (after birth, with `integrate.enabled`). */
+  get integrating(): boolean {
+    return this.integrateTimer !== null;
+  }
+
+  /**
+   * One integrate pass now (the timer calls it when due). Null when
+   * integration is off or there is no integrate client. One in flight;
+   * phase `integrate`, back to `sense`. Never throws.
+   */
+  integrateNow(): Promise<IntegrateOutcome | null> {
+    const integrator = this.integrator;
+    if (!integrator || !this.cfg().integrate.enabled || !this.running) {
+      return Promise.resolve(null);
+    }
+    if (this.integrateRun) return this.integrateRun;
+    this.setPhase('integrate');
+    this.integrateRun = integrator
+      .run()
+      .catch((err): IntegrateOutcome | null => {
+        this.fail(err);
+        return null;
+      })
+      .finally(() => {
+        this.integrateRun = null;
+        if (this.running && !this.stopping) this.setPhase('sense');
+      });
+    return this.integrateRun;
+  }
+
+  /**
+   * Served broadcasts (from the bots' cycle rows) and due predictions (a tier
+   * 1 call each, on the notice budget). Only with integration enabled. One in
+   * flight; never throws.
+   */
+  outcomesNow(): Promise<void> {
+    if (!this.cfg().integrate.enabled || !this.running) return Promise.resolve();
+    if (this.outcomesRun) return this.outcomesRun;
+    this.lastOutcomesAt = this.now();
+    this.outcomesRun = this.outcomes()
+      .catch((err) => this.fail(err))
+      .finally(() => {
+        this.outcomesRun = null;
+      });
+    return this.outcomesRun;
+  }
+
+  /** What the last integrate pass said it attends to (neuron ids; phase 4 reads it). */
+  attending(): string[] {
+    return this.integrator?.attending() ?? [];
+  }
+
+  /** 👍/👎 on an insight, contradiction or prediction; undefined for other kinds or unknown ids. */
+  signalNeuron(id: string, signal: BroadcastSignal): Neuron | undefined {
+    const n = this.graph.get(id);
+    if (!n || !SIGNAL_KINDS.includes(n.kind)) return undefined;
+    const next = this.graph.patchMeta(id, {
+      signal,
+      signalAt: new Date(this.now()).toISOString(),
+    });
+    this.writeTaste();
+    return next;
+  }
+
+  signalBroadcast(id: string, signal: BroadcastSignal): Broadcast | undefined {
+    const b = this.broadcaster.signal(id, signal);
+    if (b) this.writeTaste();
+    return b;
+  }
+
+  /** The operator's signals counted from the records (also written to `taste.json`). */
+  taste(): WatcherTaste {
+    const count = (into: WatcherTaste['neurons'], key: string, s: string | undefined) => {
+      if (s !== 'up' && s !== 'down') return;
+      into[key] ??= { up: 0, down: 0 };
+      into[key][s] += 1;
+    };
+    const taste: WatcherTaste = {
+      updatedAt: new Date(this.now()).toISOString(),
+      neurons: {},
+      broadcasts: {},
+    };
+    for (const n of this.graph.list()) {
+      if (SIGNAL_KINDS.includes(n.kind)) count(taste.neurons, n.kind, n.meta?.signal);
+    }
+    for (const b of this.broadcaster.list()) count(taste.broadcasts, b.kind, b.signal);
+    return taste;
   }
 
   /** Writes the wake row and returns; birth or resync continue in the background. */
@@ -268,8 +432,12 @@ export class Watcher extends EventEmitter {
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
       this.stopNoticeTimer();
+      this.stopIntegrateTimer();
       await this.background;
       await this.noticeRun;
+      await this.integrateRun;
+      await this.outcomesRun;
+      this.integrator?.persist();
       this.sense.tick();
       this.graph.compact();
       this.buffer.persist(bufferFile(this.dir));
@@ -303,6 +471,7 @@ export class Watcher extends EventEmitter {
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),
       ...(this.lastError ? { lastError: this.lastError } : {}),
+      ...(this.integrator ? { attending: this.integrator.attending() } : {}),
     };
   }
 
@@ -341,6 +510,7 @@ export class Watcher extends EventEmitter {
         if (this.running && !this.stopping) {
           this.setPhase('sense');
           this.startNoticeTimer();
+          this.startIntegrateTimer();
         }
       });
   }
@@ -359,6 +529,82 @@ export class Watcher extends EventEmitter {
   private stopNoticeTimer(): void {
     if (this.noticeTimer) clearInterval(this.noticeTimer);
     this.noticeTimer = null;
+  }
+
+  /** Begins only after birth or resync, with an integrate client and `integrate.enabled`. */
+  private startIntegrateTimer(): void {
+    if (this.integrateTimer || !this.integrator || !this.cfg().integrate.enabled) return;
+    const timer = setInterval(() => {
+      if (!this.running || this.stopping || !this.cfg().integrate.enabled) return;
+      if (this.now() - this.lastOutcomesAt >= OUTCOMES_EVERY_MS) void this.outcomesNow();
+      if (this.integrator?.due()) void this.integrateNow();
+    }, INTEGRATE_CHECK_MS);
+    (timer as { unref?: () => void }).unref?.();
+    this.integrateTimer = timer;
+  }
+
+  private stopIntegrateTimer(): void {
+    if (this.integrateTimer) clearInterval(this.integrateTimer);
+    this.integrateTimer = null;
+  }
+
+  private async outcomes(): Promise<void> {
+    const read = this.deps.readCycles;
+    if (read) {
+      const nowMs = this.now();
+      const since = nowMs - 2 * DAY_MS;
+      const bots = new Set(
+        this.broadcaster
+          .list()
+          .filter((b) => !b.servedByCycle && Date.parse(b.createdAt) >= since)
+          .map((b) => b.botId)
+      );
+      const rows = [...bots].flatMap((botId) => {
+        try {
+          return read(botId, since, nowMs);
+        } catch {
+          return [];
+        }
+      });
+      if (rows.length) applyServed(this.broadcaster, rows);
+    }
+    const notice = this.tierClient('notice');
+    if (!notice || duePredictions(this.graph, this.now()).length === 0) return;
+    await resolvePredictions({
+      graph: this.graph,
+      client: notice,
+      log: this.log,
+      now: this.now,
+      events: (from, to) => this.logLines(from, to),
+      logger: this.logger,
+    });
+  }
+
+  /** Code-written log lines between two instants (what prediction resolution reads). */
+  private logLines(fromMs: number, toMs: number): string[] {
+    const out: string[] = [];
+    const fromDay = new Date(fromMs).toISOString().slice(0, 10);
+    const toDay = new Date(toMs).toISOString().slice(0, 10);
+    for (const date of this.log.dates()) {
+      if (date < fromDay || date > toDay) continue;
+      for (const row of this.log.read(date)) {
+        const t = Date.parse(row.ts);
+        if (t < fromMs || t > toMs || row.op.startsWith('prediction:')) continue;
+        if (row.phase === 'sense' || row.phase === 'notice' || row.phase === 'integrate') {
+          out.push(`${row.ts} ${row.text}`);
+        }
+      }
+    }
+    return out.sort().slice(-40);
+  }
+
+  private writeTaste(): void {
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      writeFileSync(join(this.dir, 'taste.json'), JSON.stringify(this.taste(), null, 2), 'utf-8');
+    } catch (err) {
+      this.logger.warn({ err }, 'Watcher: could not write taste.json');
+    }
   }
 
   private startTimers(): void {
@@ -404,18 +650,10 @@ export class Watcher extends EventEmitter {
     } catch {
       contact = undefined;
     }
-    const isOperator =
-      e.channelKind === 'dashboard' ||
-      contact?.metadata?.role === 'operator' ||
-      (e.channelKind === 'telegram' && opChat !== undefined && String(opChat) === String(address));
-    return {
-      isOperator,
-      ...(contact?.displayName
-        ? { name: contact.displayName }
-        : isOperator
-          ? { name: 'the operator' }
-          : {}),
-    };
+    return inboundSender(e, {
+      ...(opChat !== undefined ? { operatorChatId: opChat } : {}),
+      contact,
+    });
   }
 
   private setPhase(phase: WatcherPhase): void {
@@ -462,6 +700,66 @@ export interface FleetWatcherSource {
   getCircuitBreaker?(): WatcherBreaker | undefined;
   getToolRegistry?(): {
     setFleetMemory(source: () => ReturnType<Watcher['fleetMemory']>): void;
+    /** Phase 3: the shared executor a question broadcast sends `send_proactive_message` through. */
+    createExecutor?(
+      chatId: number,
+      botId: string
+    ): (
+      name: string,
+      args: Record<string, unknown>
+    ) => Promise<{ success: boolean; content: string }>;
+  };
+  /** Phase 3: the entry points broadcasts use (optional so older fakes still fit). */
+  requestImmediateAgentRun?(botId: string, opts?: { feedback?: boolean }): void;
+  getCuriosityService?(): {
+    recordDirective(botId: string, text: string, source: 'watcher'): void;
+  };
+  setWatcherBroadcasts?(source: WatcherBroadcastSource | undefined): void;
+}
+
+/** A question broadcast reaches the operator with this prefix, through the bot it concerns. */
+export const WATCHER_QUESTION_PREFIX = 'Fleet watcher: ';
+
+/**
+ * The four broadcast entry points over the bot manager: wake =
+ * `requestImmediateAgentRun(botId, { feedback: false })`; directive =
+ * `CuriosityService.recordDirective(…, 'watcher')`; goal = `writeWatcherGoal`
+ * on the bot's GOALS.md (same soul-dir resolution as `startBot`); question =
+ * the shared `send_proactive_message` executor of the bot with
+ * `chatId: 'operator'`, so the proactive throttle and Work → Sent to you apply.
+ */
+export function fleetBroadcastDelivery(
+  config: Config,
+  manager: FleetWatcherSource,
+  logger: Logger
+): BroadcastDelivery {
+  return {
+    wake: (botId) => {
+      if (!manager.requestImmediateAgentRun) throw new Error('wake is not available');
+      manager.requestImmediateAgentRun(botId, { feedback: false });
+    },
+    directive: (botId, text) => {
+      const curiosity = manager.getCuriosityService?.();
+      if (!curiosity) throw new Error('directives are not available');
+      curiosity.recordDirective(botId, text, 'watcher');
+    },
+    goal: (botId, text, reason) => {
+      const bot = config.bots.find((b) => b.id === botId);
+      if (!bot) throw new Error(`unknown bot ${botId}`);
+      const { soulDir } = resolveBotPaths(config, bot);
+      writeWatcherGoal(join(soulDir, 'GOALS.md'), text, reason, {
+        backup: (p) => backupSoulFile(p, logger),
+      });
+    },
+    question: async (botId, text) => {
+      const exec = manager.getToolRegistry?.().createExecutor?.(0, botId);
+      if (!exec) return { ok: false, detail: 'send_proactive_message is not available' };
+      const res = await exec('send_proactive_message', {
+        chatId: 'operator',
+        message: `${WATCHER_QUESTION_PREFIX}${text}`,
+      });
+      return { ok: res.success === true, detail: String(res.content ?? '') };
+    },
   };
 }
 
@@ -493,11 +791,24 @@ export function createFleetWatcher(
     llm: createWatcherClients(config, { logger, ollama: ollama as OllamaClient }),
     ...(queryLog ? { queryLog } : {}),
     ...(breaker ? { breaker } : {}),
+    readCycles: (botId, since, now) => {
+      try {
+        return readAgentCycles(resolveStatsDirs(config).agentCycles, botId, since, now);
+      } catch {
+        return [];
+      }
+    },
+    broadcastDelivery: fleetBroadcastDelivery(config, manager, logger),
   });
   try {
     manager.getToolRegistry?.().setFleetMemory(() => watcher.fleetMemory());
   } catch (err) {
     logger.warn({ err }, 'Watcher: could not register fleet_memory_search');
+  }
+  try {
+    manager.setWatcherBroadcasts?.(watcher.broadcaster);
+  } catch (err) {
+    logger.warn({ err }, 'Watcher: could not publish broadcasts to the agent loop');
   }
   return watcher;
 }

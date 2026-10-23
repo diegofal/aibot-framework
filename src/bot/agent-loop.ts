@@ -38,6 +38,7 @@ import {
   buildContinuousPlannerPrompt,
   buildExecutorPrompt,
   buildFeedbackProcessorPrompt,
+  buildFleetBroadcastSection,
   buildPlannerPrompt,
 } from './agent-loop-prompts';
 import {
@@ -145,6 +146,10 @@ interface CycleAttribution {
   exploring?: boolean;
   /** The planner's task answer and what it was offered (for the cycle row). */
   plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
+  /** Fleet-watcher broadcasts the planner was shown this cycle (for the cycle row). */
+  broadcastIds?: string[];
+  /** The shown broadcast the planner said its plan acts on (`serves_broadcast`). */
+  servesBroadcast?: string;
 }
 
 /** The optional task fields of a planner answer. */
@@ -523,6 +528,35 @@ export class AgentLoop {
       this.ctx.logger.warn({ err, botId }, 'Standing goals block: could not compute due goals');
       return [];
     }
+  }
+
+  /**
+   * The fleet watcher's broadcasts for this bot's planner (`## Fleet broadcast`),
+   * marked shown for the running cycle and noted on its attribution. Undefined
+   * without a watcher or broadcasts; never throws (a failure drops the block).
+   */
+  private plannerFleetBroadcast(botId: string): string | undefined {
+    const source = this.ctx.watcherBroadcasts;
+    if (!source) return undefined;
+    try {
+      const items = source.pendingFor(botId);
+      if (items.length === 0) return undefined;
+      const ids = items.map((i) => i.id);
+      const a = this.cycleAttribution.get(botId);
+      source.markShown(ids, a?.cycleId);
+      if (a) a.broadcastIds = ids;
+      return buildFleetBroadcastSection(items);
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Fleet broadcast block: could not read broadcasts');
+      return undefined;
+    }
+  }
+
+  /** Record `serves_broadcast` only when it names a broadcast this cycle showed. */
+  private noteServesBroadcast(botId: string, ref: string | undefined): void {
+    const a = this.cycleAttribution.get(botId);
+    if (!a || !ref || !a.broadcastIds?.includes(ref)) return;
+    a.servesBroadcast = ref;
   }
 
   /** The planner answered with the Workers block built at `builtAt`: its ended runs are seen. */
@@ -1108,6 +1142,8 @@ export class AgentLoop {
         ...(attribution.newTasks?.length ? { newTasks: attribution.newTasks } : {}),
         ...(attribution.dispatched?.length ? { dispatched: attribution.dispatched } : {}),
         ...(attribution.plannerTasks ? { plannerTasks: attribution.plannerTasks } : {}),
+        ...(attribution.broadcastIds?.length ? { broadcastIds: attribution.broadcastIds } : {}),
+        ...(attribution.servesBroadcast ? { servesBroadcast: attribution.servesBroadcast } : {}),
       });
       if (status === 'completed' && goal.goalId) {
         this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
@@ -2215,6 +2251,7 @@ export class AgentLoop {
     const plannerWorkers = this.plannerWorkersInput(botId);
     const plannerNowMs = Date.now();
     const standingDue = this.plannerStandingDue(botId, botConfig, goals, plannerNowMs);
+    const fleetBroadcast = this.plannerFleetBroadcast(botId);
     let plannerTaskFields: PlannerTaskFields = {};
 
     if (isContinuous) {
@@ -2259,6 +2296,7 @@ export class AgentLoop {
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
         standingDue,
+        fleetBroadcast,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
@@ -2337,6 +2375,7 @@ export class AgentLoop {
       selectedToolCategories = continuousResult.toolCategories;
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
+      this.noteServesBroadcast(botId, continuousResult.serves_broadcast);
       plannerTaskFields = taskFieldsOf(continuousResult);
       this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, continuousResult);
@@ -2381,6 +2420,7 @@ export class AgentLoop {
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
         standingDue,
+        fleetBroadcast,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
@@ -2458,6 +2498,7 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
+      this.noteServesBroadcast(botId, plannerResult.serves_broadcast);
       plannerTaskFields = taskFieldsOf(plannerResult);
       this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, plannerResult);

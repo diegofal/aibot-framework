@@ -7,6 +7,7 @@ import {
   buildDirectivesSection,
   buildExecutorPrompt,
   buildFeedbackProcessorPrompt,
+  buildFleetBroadcastSection,
   buildOperatorGoalsSection,
   buildPlannerPrompt,
   buildStrategistPrompt,
@@ -475,5 +476,51 @@ describe('the conversation is not loop work', () => {
     expect(buildStrategistPrompt({ ...planner, chatReplies: replies }).system).toContain(
       'CONVERSATION IS NOT WORK'
     );
+  });
+});
+
+describe('Fleet broadcast section (watcher phase 3)', () => {
+  const planner = {
+    identity: 'TestBot',
+    soul: 'A bot',
+    motivations: 'Be helpful',
+    goals: '## Goals\n- Goal 1',
+    recentMemory: 'Did stuff',
+    datetime: '2026-03-08T12:00:00Z',
+    availableTools: ['web_search'],
+    hasCreateTool: false,
+  };
+  const items = [
+    { id: 'b-11111111', kind: 'directive' as const, text: 'Coordinate with Scout on Acme' },
+    { id: 'b-22222222', kind: 'wake' as const, text: '' },
+  ];
+
+  test('lists every broadcast with its id and the serves_broadcast instruction', () => {
+    const text = buildFleetBroadcastSection(items);
+    expect(text).toContain('## Fleet broadcast');
+    expect(text).toContain('- [b-11111111] directive: Coordinate with Scout on Acme');
+    expect(text).toContain('- [b-22222222] wake: the fleet watcher woke you');
+    expect(text).toContain('serves_broadcast');
+  });
+
+  test('empty when there are no broadcasts', () => {
+    expect(buildFleetBroadcastSection([])).toBe('');
+  });
+
+  test('both planner prompts carry it, with the serves_broadcast schema line', () => {
+    const fleetBroadcast = buildFleetBroadcastSection(items);
+    for (const build of [buildPlannerPrompt, buildContinuousPlannerPrompt]) {
+      const { system } = build({ ...planner, fleetBroadcast });
+      expect(system).toContain('## Fleet broadcast');
+      expect(system).toContain('- serves_broadcast: string');
+    }
+  });
+
+  test('without broadcasts neither prompt has the section nor the schema line', () => {
+    for (const build of [buildPlannerPrompt, buildContinuousPlannerPrompt]) {
+      const { system } = build(planner);
+      expect(system).not.toContain('## Fleet broadcast');
+      expect(system).not.toContain('serves_broadcast');
+    }
   });
 });

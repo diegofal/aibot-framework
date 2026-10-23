@@ -93,7 +93,7 @@ import { sendLongMessage } from './telegram-utils';
 import { TenantFacade } from './tenant-facade';
 import { ToolAuditLog } from './tool-audit-log';
 import { ToolRegistry } from './tool-registry';
-import type { BotContext, SeenUser } from './types';
+import type { BotContext, SeenUser, WatcherBroadcastSource } from './types';
 import { UserDirectory } from './user-directory';
 
 export class BotManager {
@@ -1645,6 +1645,11 @@ export class BotManager {
   /** The fleet-wide circuit breaker per backend; the watcher consults it before every LLM call. */
   getCircuitBreaker(): BackendCircuitBreaker | undefined {
     return this.botContext?.circuitBreaker;
+  }
+
+  /** The fleet watcher's broadcasts, for the planner's `## Fleet broadcast` block (absent = none). */
+  setWatcherBroadcasts(source: WatcherBroadcastSource | undefined): void {
+    (this.botContext as { watcherBroadcasts?: WatcherBroadcastSource }).watcherBroadcasts = source;
   }
 
   /** The fleet contact directory; the watcher reads people from it at birth. */

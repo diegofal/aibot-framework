@@ -30,9 +30,17 @@ import {
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
+import {
+  SIGNAL_NEURON_KINDS,
+  broadcastRowsHtml,
+  insightRowsHtml,
+  metricsStripHtml,
+} from './watcher-metrics-helpers.js';
 import { dashboardSocketUrl, openReconnectingSocket } from './ws-reconnect.js';
 
 const CLOCK_MS = 30_000;
+/** Metrics and broadcasts are re-read this often (they come from records, not the socket). */
+const SLOW_CLOCK_MS = 60_000;
 const LOG_PAGE = 1000;
 const LOG_MAX_PAGES = 20;
 const TITLE = '<div class="page-title">Watcher</div>';
@@ -48,6 +56,7 @@ export function destroyWatcher() {
   page.socket?.close();
   page.ball?.dispose();
   clearInterval(page.clock);
+  clearInterval(page.slowClock);
   clearTimeout(page.replay?.timer);
   page = null;
 }
@@ -117,6 +126,7 @@ function drawReplayBar() {
 
 function shell() {
   return `${TITLE}<div class="watcher-page">
+    <div id="watcher-metrics"></div>
     <section class="watcher-stage" aria-label="The watcher's graph">
       <div class="watcher-ball" id="watcher-ball"></div>
       <div class="watcher-ball-fallback" id="watcher-ball-fallback" hidden>The 3D view could not start in this browser (WebGL unavailable). The log below still updates live.</div>
@@ -132,7 +142,61 @@ function shell() {
       <div class="watcher-log-head"><div class="watcher-log-title">Log</div><div id="watcher-log-filter" class="watcher-log-filter"></div><button type="button" class="btn btn-sm" data-action="watcher-pause">Pause</button></div>
       <div id="watcher-log-body" class="watcher-log-body"></div>
     </section>
+    <section class="watcher-thoughts">
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">Insights</div><div id="watcher-insights"></div></div>
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">Broadcasts</div><div id="watcher-broadcasts"></div></div>
+    </section>
   </div>`;
+}
+
+function drawMetrics() {
+  const host = $('#watcher-metrics');
+  if (host && page.metrics) host.innerHTML = metricsStripHtml(page.metrics);
+}
+
+function drawInsights() {
+  const host = $('#watcher-insights');
+  if (host) host.innerHTML = insightRowsHtml([...page.model.neurons.values()], Date.now());
+}
+
+function drawBroadcasts() {
+  const host = $('#watcher-broadcasts');
+  if (host) host.innerHTML = broadcastRowsHtml(page.broadcasts ?? [], Date.now());
+}
+
+async function refreshSlow() {
+  const mine = page;
+  const [metrics, broadcasts] = await Promise.all([
+    api('/api/watcher/metrics?window=7d').catch(() => null),
+    api('/api/watcher/broadcasts?limit=30').catch(() => null),
+  ]);
+  if (page !== mine || !page) return;
+  if (metrics && !metrics.error) page.metrics = metrics;
+  if (Array.isArray(broadcasts?.broadcasts)) page.broadcasts = broadcasts.broadcasts;
+  drawMetrics();
+  drawBroadcasts();
+}
+
+async function sendSignal(id, signal) {
+  const res = await api(`/api/watcher/neurons/${encodeURIComponent(id)}/signal`, {
+    method: 'POST',
+    body: { signal },
+  }).catch((err) => ({ error: err?.message || 'Request failed' }));
+  if (!page) return;
+  if (!res || res.error) {
+    showToast(`Could not save the signal: ${res?.error ?? 'no answer'}`, { tone: 'danger' });
+    return;
+  }
+  if (res.neuron) {
+    page.model.neurons.set(res.neuron.id, res.neuron);
+    drawInsights();
+  }
+  if (res.broadcast) {
+    page.broadcasts = (page.broadcasts ?? []).map((b) =>
+      b.id === res.broadcast.id ? { ...b, ...res.broadcast } : b
+    );
+    drawBroadcasts();
+  }
 }
 
 /* ── Live events ─────────────────────────────────────────────────── */
@@ -167,6 +231,12 @@ function onEffect(effect) {
       return;
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
+  if (
+    (effect.kind === 'spawn' || effect.kind === 'update') &&
+    SIGNAL_NEURON_KINDS.includes(page.model.neurons.get(effect.id)?.kind)
+  ) {
+    drawInsights();
+  }
 }
 
 function onMessage(e) {
@@ -383,6 +453,12 @@ function wire(el) {
       default:
         break;
     }
+    const signal = e.target.closest('[data-watcher-signal]');
+    if (signal) {
+      return sendSignal(signal.dataset.signalId, signal.dataset.watcherSignal);
+    }
+    const neuronLink = e.target.closest('[data-watcher-neuron]');
+    if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
     const li = e.target.closest('li.watcher-row');
     if (li && !page.replay && li.dataset.neurons) selectRow(li);
   });
@@ -435,9 +511,11 @@ export async function renderWatcher(el) {
     return;
   }
 
-  const [graph, log] = await Promise.all([
+  const [graph, log, metrics, broadcasts] = await Promise.all([
     api('/api/watcher/graph').catch(() => null),
     api('/api/watcher/log?limit=200').catch(() => null),
+    api('/api/watcher/metrics?window=7d').catch(() => null),
+    api('/api/watcher/broadcasts?limit=30').catch(() => null),
   ]);
   if (gen !== generation) return;
   if (isWatcherOff(graph) || isWatcherOff(log)) {
@@ -463,6 +541,9 @@ export async function renderWatcher(el) {
     selectedSeq: null,
     replay: null,
     stopped: false,
+    metrics: metrics && !metrics.error ? metrics : null,
+    broadcasts: Array.isArray(broadcasts?.broadcasts) ? broadcasts.broadcasts : [],
+    slowClock: null,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -471,7 +552,13 @@ export async function renderWatcher(el) {
   drawLogHead();
   drawLog();
   drawReplayBar();
+  drawMetrics();
+  drawInsights();
+  drawBroadcasts();
   wire(el);
+  page.slowClock = setInterval(() => {
+    if (page) void refreshSlow();
+  }, SLOW_CLOCK_MS);
 
   page.socket = openReconnectingSocket({
     url: () => dashboardSocketUrl(location, '/ws/watcher', { token: getAuthToken() }),

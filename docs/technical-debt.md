@@ -178,6 +178,24 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Hours: bind public identity to a verified widget session (`userHash`) before matching.
 
+### Watcher broadcasts can carry operator-sourced insight text to a bot
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/integrate.ts` → `src/watcher/broadcast.ts` (directive / goal kinds) |
+| **Decided by** | lead, watcher phase 3 (the privacy rule covers `fleet_memory_search` only) |
+
+**What was deferred.** `fleet_memory_search` hides `meta.operatorSourced` neurons from everyone but the verified operator, and everything an integrate pass creates is marked operator-sourced when the model saw operator material. A directive or goal broadcast written from such an insight still reaches the target bot's planner (and its GOALS.md), and that bot may then talk about it with non-operator users. Birth neurons (read from shared MEMORY.md) carry no operator provenance either.
+
+**Why it was the right call then.** The bots are the operator's own; the decision in scope was cross-bot recall by other people.
+
+**What it costs while it stands.** An operator fact can surface, paraphrased, through a bot that has public users.
+
+**The trigger.** The first watcher broadcast to a bot with public REST / widget / WhatsApp users.
+
+**Estimated cost to pay.** Hours: refuse directive/goal broadcasts from operator-sourced insights to bots with public channels, or rewrite them without the operator material.
+
 ## Paid
 
 ### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")

@@ -518,3 +518,43 @@ describe('noticeItems', () => {
     });
   });
 });
+
+describe('Noticer provenance (phase 3)', () => {
+  const keepOf =
+    (text: string, from: string[], kind = 'fact') =>
+    async () => ({ text: JSON.stringify({ keep: [{ text, kind, from }] }) });
+
+  test('a neuron an operator message supports is marked operatorSourced', async () => {
+    const op = item(operatorSays('b1', 'My daughter starts school on Monday'), 0.9, {
+      fromOperator: true,
+    });
+    const s = setup({ reply: keepOf('The operator daughter starts school on Monday', [op.id]) });
+    s.buffer.push(op);
+    const out = await s.noticer.run();
+    expect(out.status).toBe('noticed');
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  test('a neuron only bot activity supports is not operatorSourced', async () => {
+    const e = item(toolError('b1', 'c-1'));
+    const s = setup({ reply: keepOf('wiley.com blocks the fetcher', [e.id], 'pattern') });
+    s.buffer.push(e);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBeUndefined();
+  });
+
+  test('records the earliest supporting event time as eventAt (latency to notice)', async () => {
+    const early = item({ ...(toolError('b1') as object), timestamp: t - 120_000 } as SensedEvent);
+    const late = item(toolError('b1'));
+    const s = setup({
+      reply: keepOf('wiley.com blocks the fetcher', [late.id, early.id], 'pattern'),
+    });
+    s.buffer.push(early);
+    s.buffer.push(late);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.eventAt).toBe(new Date(t - 120_000).toISOString());
+  });
+});

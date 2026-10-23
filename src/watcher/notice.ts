@@ -44,6 +44,7 @@ import {
   type BufferItem,
   type Confidence,
   type Neuron,
+  OPERATOR_SOURCED,
   type Vec3,
   type WatcherConfig,
   isHumanInbound,
@@ -386,6 +387,7 @@ export class Noticer {
       .map((n) => n.pos)
       .filter((p): p is Vec3 => Array.isArray(p));
     const hashId = `n-${createHash('sha1').update(text).digest('hex').slice(0, 8)}`;
+    const eventAt = earliestEventAt(support);
     const neuron = graph.addNeuron({
       kind,
       text,
@@ -394,7 +396,12 @@ export class Noticer {
       activations: 1,
       ...(isConfidence(keep.confidence) ? { confidence: keep.confidence } : {}),
       pos: placeWithoutEmbedding({ id: hashId, kind }, neighbourPos),
-      meta: { source: 'notice', model },
+      meta: {
+        source: 'notice',
+        model,
+        ...(eventAt ? { eventAt } : {}),
+        ...(support.some((i) => i.fromOperator === true) ? { [OPERATOR_SOURCED]: 'true' } : {}),
+      },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);
     const edgeIds: string[] = [];
@@ -439,4 +446,14 @@ export class Noticer {
     );
     return { neuron, created: true, from };
   }
+}
+
+/** ISO time of the earliest event behind these buffer items (metric 2), or undefined. */
+export function earliestEventAt(items: BufferItem[]): string | undefined {
+  let min = Number.POSITIVE_INFINITY;
+  for (const i of items) {
+    const ts = (i.event as { timestamp?: unknown }).timestamp;
+    if (typeof ts === 'number' && Number.isFinite(ts) && ts > 0 && ts < min) min = ts;
+  }
+  return Number.isFinite(min) ? new Date(min).toISOString() : undefined;
 }

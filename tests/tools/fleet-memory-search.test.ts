@@ -126,3 +126,68 @@ describe('fleet_memory_search', () => {
     expect((tool.definition as { sensitive?: boolean }).sensitive).toBeFalsy();
   });
 });
+
+describe('fleet_memory_search: operator-sourced neurons (privacy)', () => {
+  const setupPrivate = () => {
+    graph.addNeuron({
+      kind: 'fact',
+      text: 'The operator daughter Emma starts school in March',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { operatorSourced: 'true' },
+    });
+    add('The school calendar changes in March');
+    return createFleetMemorySearchTool(() => ({ graph }));
+  };
+  const query = { query: 'school in March' };
+  const sees = async (args: Record<string, unknown>) =>
+    (await setupPrivate().execute({ ...query, ...args }, logger)).content.includes('Emma');
+
+  test('the dashboard operator (_actor operator) sees them', async () => {
+    expect(await sees({ _actor: 'operator' })).toBe(true);
+  });
+
+  test('the operator on Telegram (verified) sees them', async () => {
+    expect(
+      await sees({ _requester: { isOperator: true, channelKind: 'telegram', address: '42' } })
+    ).toBe(true);
+  });
+
+  test('the operator in a group does not', async () => {
+    expect(
+      await sees({
+        _isGroup: true,
+        _requester: { isOperator: true, channelKind: 'telegram', address: '42' },
+      })
+    ).toBe(false);
+  });
+
+  test('an operator claimed on web (unverified) does not', async () => {
+    expect(
+      await sees({ _requester: { isOperator: true, channelKind: 'web', address: 'op@x.io' } })
+    ).toBe(false);
+  });
+
+  test('another user does not', async () => {
+    expect(
+      await sees({ _requester: { isOperator: false, channelKind: 'telegram', address: '7' } })
+    ).toBe(false);
+  });
+
+  test('the agent loop (_actor self) does not', async () => {
+    expect(await sees({ _actor: 'self' })).toBe(false);
+  });
+
+  test('an operator cron run does not', async () => {
+    expect(await sees({ _actor: 'operator-cron' })).toBe(false);
+  });
+
+  test('collaboration / no caller at all does not', async () => {
+    expect(await sees({})).toBe(false);
+  });
+
+  test('everyone still gets the neurons with no operator-sourced support', async () => {
+    const res = await setupPrivate().execute({ ...query, _actor: 'self' }, logger);
+    expect(res.content).toContain('school calendar changes');
+  });
+});

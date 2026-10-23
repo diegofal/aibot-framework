@@ -41,6 +41,33 @@ export interface SenderInfo {
   isOperator: boolean;
 }
 
+/**
+ * Who wrote a `human_inbound`. The operator only on a surface that verifies
+ * the identity: the operator's private Telegram chat (`operator.telegramChatId`,
+ * matched on the chat, so a group message from the operator's user id is not
+ * it). Never from a directory contact's role (on REST, web, WhatsApp the
+ * sender id is client-supplied) and never from `channelKind: 'dashboard'`: the
+ * dashboard thread arrives on `operator_message`, and no channel adapter emits
+ * a `human_inbound` with that kind, so one that claims it is not trusted.
+ */
+export function inboundSender(
+  event: HumanInboundEvent,
+  ctx: {
+    operatorChatId?: number | string;
+    contact?: { displayName?: string } | undefined;
+  }
+): SenderInfo {
+  const op = ctx.operatorChatId;
+  const isOperator =
+    event.channelKind === 'telegram' &&
+    op !== undefined &&
+    op !== null &&
+    String(op) !== '' &&
+    String(event.chatId) === String(op);
+  const name = ctx.contact?.displayName ?? (isOperator ? 'the operator' : undefined);
+  return { isOperator, ...(name ? { name } : {}) };
+}
+
 export interface SenseDeps {
   graph: Graph;
   buffer: WorkingBuffer;
@@ -50,6 +77,8 @@ export interface SenseDeps {
   botName?: (botId: string) => string;
   /** Who wrote a `human_inbound`; unknown senders are not the operator. */
   sender?: (event: HumanInboundEvent) => SenderInfo;
+  /** Every item kept in the buffer (integrate accumulates them: notice drains the buffer). */
+  onItem?: (item: BufferItem) => void;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -164,6 +193,11 @@ export class Sense {
       ...(fromOperator ? { fromOperator: true as const } : {}),
     };
     this.deps.buffer.push(item);
+    try {
+      this.deps.onItem?.(item);
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher sense: an item listener threw');
+    }
     return item;
   }
 

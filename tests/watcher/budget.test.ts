@@ -90,3 +90,35 @@ describe('DailyBudget', () => {
     expect(b.firstCapToday('notice')).toBe(true);
   });
 });
+
+describe('DailyBudget.reserve (concurrent calls)', () => {
+  test('a reservation counts against the cap until it is recorded', () => {
+    limits.integrate.maxPerDay = 1;
+    const b = make();
+    expect(b.reserve('integrate')).toEqual({ ok: true });
+    // a second trigger while the first call is in flight is refused
+    expect(b.reserve('integrate')).toEqual({ ok: false, reason: 'cap' });
+    expect(b.allow('integrate')).toEqual({ ok: false, reason: 'cap' });
+    b.record('integrate', { tokens: 5 });
+    expect(b.used('integrate').calls).toBe(1);
+    expect(b.allow('integrate')).toEqual({ ok: false, reason: 'cap' });
+  });
+
+  test('recording releases the reservation (no double count)', () => {
+    limits.notice.maxPerDay = 2;
+    const b = make();
+    b.reserve('notice');
+    b.record('notice', {});
+    expect(b.reserve('notice')).toEqual({ ok: true });
+    b.record('notice', {});
+    expect(b.allow('notice')).toEqual({ ok: false, reason: 'cap' });
+  });
+
+  test('a refused reservation reserves nothing', () => {
+    open.integrate = true;
+    const b = make();
+    expect(b.reserve('integrate')).toEqual({ ok: false, reason: 'breaker' });
+    open.integrate = false;
+    expect(b.reserve('integrate')).toEqual({ ok: true });
+  });
+});

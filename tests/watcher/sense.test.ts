@@ -7,7 +7,7 @@ import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-l
 import { WorkingBuffer } from '../../src/watcher/buffer';
 import { Graph, type GraphChange } from '../../src/watcher/graph';
 import { WatcherLog } from '../../src/watcher/log';
-import { Sense } from '../../src/watcher/sense';
+import { Sense, inboundSender } from '../../src/watcher/sense';
 import { WATCHER_DEFAULTS, type WatcherLogRow } from '../../src/watcher/types';
 
 let dir: string;
@@ -201,5 +201,107 @@ describe('Sense', () => {
     expect(sense.lastTickAt).toBeUndefined();
     stream.emit('activity', { type: 'llm:start', botId: 'b1', timestamp: t });
     expect(sense.lastTickAt).toBe('2026-10-23T10:00:00.000Z');
+  });
+});
+
+describe('inboundSender (who counts as the operator)', () => {
+  const ev = (over: Record<string, unknown> = {}) =>
+    ({
+      botId: 'b1',
+      channelKind: 'telegram',
+      chatId: '42',
+      userId: '42',
+      timestamp: 0,
+      text: 'hi',
+      ...over,
+    }) as never;
+  const operatorContact = {
+    displayName: 'Diego',
+    metadata: { role: 'operator' },
+  } as never;
+
+  test('the operator Telegram private chat is the operator', () => {
+    expect(inboundSender(ev(), { operatorChatId: 42 })).toEqual({
+      isOperator: true,
+      name: 'the operator',
+    });
+  });
+
+  test('a Telegram group message from the operator user id is not', () => {
+    expect(inboundSender(ev({ chatId: '-1001' }), { operatorChatId: 42 }).isOperator).toBe(false);
+  });
+
+  test('another Telegram chat is not the operator', () => {
+    expect(inboundSender(ev({ chatId: '7', userId: '7' }), { operatorChatId: 42 }).isOperator).toBe(
+      false
+    );
+  });
+
+  test('without a configured operator chat nobody on Telegram is the operator', () => {
+    expect(inboundSender(ev(), {}).isOperator).toBe(false);
+  });
+
+  for (const kind of ['rest', 'web', 'whatsapp', 'discord', 'dashboard']) {
+    test(`a contact with the operator role on ${kind} is not trusted`, () => {
+      const who = inboundSender(ev({ channelKind: kind, chatId: 'a@b.c', userId: 'a@b.c' }), {
+        operatorChatId: 42,
+        contact: operatorContact,
+      });
+      expect(who.isOperator).toBe(false);
+      expect(who.name).toBe('Diego');
+    });
+  }
+
+  test('a known contact keeps its display name', () => {
+    expect(
+      inboundSender(ev({ chatId: '7', userId: '7' }), {
+        operatorChatId: 42,
+        contact: { displayName: 'Ana' } as never,
+      })
+    ).toEqual({ isOperator: false, name: 'Ana' });
+  });
+});
+
+describe('Sense.onItem (phase 3: integrate accumulates what notice drains)', () => {
+  test('every item pushed into the buffer is also handed to onItem', () => {
+    const now = () => t;
+    const graph = new Graph(join(dir, 'g2'), { now });
+    graph.load();
+    const seen: string[] = [];
+    const buffer = new WorkingBuffer();
+    const sense = new Sense({
+      graph,
+      buffer,
+      log: new WatcherLog(join(dir, 'log2'), { now }),
+      now,
+      config: () => WATCHER_DEFAULTS,
+      onItem: (item) => seen.push(item.id),
+    });
+    const item = sense.handle({ type: 'worker:waiting', botId: 'b1', timestamp: t } as never);
+    expect(item).not.toBeNull();
+    expect(seen).toEqual([item?.id]);
+    expect(sense.handle({ type: 'llm:start', botId: 'b1', timestamp: t } as never)).toBeNull();
+    expect(seen).toHaveLength(1);
+  });
+
+  test('an onItem that throws does not lose the buffer item', () => {
+    const now = () => t;
+    const graph = new Graph(join(dir, 'g3'), { now });
+    graph.load();
+    const buffer = new WorkingBuffer();
+    const sense = new Sense({
+      graph,
+      buffer,
+      log: new WatcherLog(join(dir, 'log3'), { now }),
+      now,
+      config: () => WATCHER_DEFAULTS,
+      onItem: () => {
+        throw new Error('boom');
+      },
+    });
+    expect(
+      sense.handle({ type: 'worker:waiting', botId: 'b1', timestamp: t } as never)
+    ).not.toBeNull();
+    expect(buffer.size()).toBe(1);
   });
 });

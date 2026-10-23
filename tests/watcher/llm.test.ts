@@ -261,3 +261,34 @@ describe('instrumented', () => {
     expect((await call.chat(messages)).ok).toBe(true);
   });
 });
+
+describe('instrumented: concurrent calls never exceed the cap', () => {
+  test('two calls started together with one call left: only one reaches the backend', async () => {
+    const b = budget(1);
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const client = {
+      backend: 'claude-cli',
+      generate: async () => ({ text: '' }),
+      chat: async () => {
+        calls++;
+        await gate;
+        return { text: 'ok' };
+      },
+    } as unknown as LLMClient;
+    const c = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      { tier: 'notice', caller: 'watcher:notice', budget: b }
+    );
+    const first = c.chat([{ role: 'user', content: 'a' }]);
+    const second = c.chat([{ role: 'user', content: 'b' }]);
+    await new Promise((r) => setTimeout(r, 5));
+    release();
+    expect((await first).ok).toBe(true);
+    expect(await second).toEqual({ ok: false, reason: 'cap' });
+    expect(calls).toBe(1);
+  });
+});

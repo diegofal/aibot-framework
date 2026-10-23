@@ -117,6 +117,9 @@ export function parsePlannerResult(
         ...(typeof parsed.serves_goal === 'string' && parsed.serves_goal.trim()
           ? { serves_goal: parsed.serves_goal.trim() }
           : {}),
+        ...(typeof parsed.serves_broadcast === 'string' && parsed.serves_broadcast.trim()
+          ? { serves_broadcast: parsed.serves_broadcast.trim() }
+          : {}),
         ...taskFields,
       };
     },

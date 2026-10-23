@@ -136,3 +136,15 @@ describe('BotManager watcher getters', () => {
     await m.stopAll();
   });
 });
+
+describe('BotManager.setWatcherBroadcasts (phase 3)', () => {
+  test('publishes the source on the shared context the agent loop reads', async () => {
+    const m = await manager();
+    const source = { pendingFor: () => [], markShown: () => {} };
+    m.setWatcherBroadcasts(source);
+    expect((m as any).botContext.watcherBroadcasts).toBe(source);
+    m.setWatcherBroadcasts(undefined);
+    expect((m as any).botContext.watcherBroadcasts).toBeUndefined();
+    await m.stopAll();
+  });
+});

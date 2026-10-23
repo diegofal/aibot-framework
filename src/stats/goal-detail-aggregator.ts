@@ -105,7 +105,9 @@ export interface CycleWindow {
   llm: LlmQueryEntry[];
 }
 
-function isLoopCaller(caller: string): boolean {
+/** Agent-loop LLM callers (cycle windows are rebuilt from them). Watcher calls (`watcher:*`) run outside any bot cycle and never count. */
+export function isLoopCaller(caller: string): boolean {
+  if (caller.startsWith('watcher:')) return false;
   return AGENT_LOOP_CALLERS.has(caller) || caller.startsWith('curiosity:');
 }
 

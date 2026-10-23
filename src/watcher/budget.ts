@@ -56,6 +56,8 @@ function usageOf(raw: unknown): TierUsage {
 export class DailyBudget {
   private day: BudgetDay | null = null;
   private readonly now: () => number;
+  /** Calls reserved and not recorded yet (process-local: a restart has none in flight). */
+  private readonly inFlight: Record<WatcherTier, number> = { notice: 0, integrate: 0 };
 
   constructor(private readonly deps: DailyBudgetDeps) {
     this.now = deps.now ?? Date.now;
@@ -65,15 +67,29 @@ export class DailyBudget {
     if (this.deps.isCircuitOpen?.(tier)) return { ok: false, reason: 'breaker' };
     const used = this.current()[tier];
     const limits = this.deps.limits();
-    if (used.calls >= limits[tier].maxPerDay) return { ok: false, reason: 'cap' };
+    if (used.calls + this.inFlight[tier] >= limits[tier].maxPerDay) {
+      return { ok: false, reason: 'cap' };
+    }
     if (tier === 'integrate' && used.tokens >= limits.integrate.maxTokensPerDay) {
       return { ok: false, reason: 'tokens' };
     }
     return { ok: true };
   }
 
-  /** One call made (successful or not: the backend was still called). */
+  /**
+   * `allow` plus a slot held until `record`: a call in flight counts against
+   * the cap, so concurrent triggers can never start more calls than are left.
+   * Synchronous, so check and hold cannot interleave.
+   */
+  reserve(tier: WatcherTier): BudgetDecision {
+    const decision = this.allow(tier);
+    if (decision.ok) this.inFlight[tier] += 1;
+    return decision;
+  }
+
+  /** One call made (successful or not: the backend was still called). Releases a reservation. */
   record(tier: WatcherTier, usage: { tokens?: number; costUsd?: number }): TierUsage {
+    if (this.inFlight[tier] > 0) this.inFlight[tier] -= 1;
     const day = this.current();
     const u = day[tier];
     u.calls += 1;

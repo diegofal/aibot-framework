@@ -8,6 +8,10 @@
  *   GET  /log              { rows } newest first; ?date=YYYY-MM-DD&limit=&before=<seq>
  *   GET  /neurons/:id      { neuron, edges, why }
  *   GET  /birth            birth.json, or {} before birth
+ *   GET  /metrics          ?window=7d|30d → the metric table (phase 3)
+ *   GET  /broadcasts       { broadcasts } newest first, each with `why`; ?botId=&limit=
+ *   POST /neurons/:id/signal  { signal: up|down } on an insight / contradiction /
+ *                          prediction (`n-…`) or a broadcast (`b-…`)
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -17,9 +21,13 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
+import type { Broadcast } from '../../watcher/broadcast';
+import { computeMetrics, parseMetricsWindow } from '../../watcher/metrics';
+import { loadMetricsRecords } from '../../watcher/metrics/records';
 import type { Neuron } from '../../watcher/types';
 import { WATCHER_DEFAULTS, type WatcherConfig } from '../../watcher/types';
 import type { Watcher } from '../../watcher/watcher';
+import { broadcastToWhy } from '../../why/builders/broadcast';
 import { neuronToWhy } from '../../why/builders/watcher';
 import type { CycleReader } from '../../why/cycle-index';
 
@@ -34,6 +42,9 @@ export interface WatcherRouteDeps {
   watcher: () => Watcher | undefined;
   /** Cycle-log rows, for the cycle a neuron came from in its `why`. */
   readCycles?: CycleReader;
+  /** Live Claude CLI semaphore (conversation-latency guard); absent = no reading. */
+  semaphore?: () => { queuedInteractive: number; activeWatcher: number };
+  now?: () => number;
 }
 
 export function watcherRoutes(deps: WatcherRouteDeps): Hono {
@@ -115,7 +126,86 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     return c.json(w.readBirth() ?? {});
   });
 
+  app.get('/metrics', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const window = parseMetricsWindow(c.req.query('window'));
+    if (!window) return c.json({ error: 'window must be 7d or 30d' }, 400);
+    const records = loadMetricsRecords({
+      config: deps.config,
+      dir: w.dir,
+      neurons: () => w.graph.list(),
+      nowMs: (deps.now ?? Date.now)(),
+      window,
+      ...(deps.semaphore ? { semaphore: deps.semaphore } : {}),
+    });
+    return c.json(computeMetrics(records, window));
+  });
+
+  app.get('/broadcasts', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const limit = clampInt(c.req.query('limit'), BROADCASTS_DEFAULT_LIMIT, 1, BROADCASTS_MAX_LIMIT);
+    const botId = c.req.query('botId') || undefined;
+    const broadcasts = w.broadcaster.list({ ...(botId ? { botId } : {}), limit }).map((b) => {
+      const insight = w.graph.get(b.insightId);
+      const servedCycle = servedCycleRow(deps, b);
+      return {
+        ...b,
+        why: broadcastToWhy({
+          broadcast: b,
+          ...(insight ? { insight } : {}),
+          ...(servedCycle ? { servedCycle } : {}),
+          botName: botNameOf(deps.config, w, b.botId),
+        }),
+      };
+    });
+    return c.json({ broadcasts });
+  });
+
+  /** 👍/👎 on an insight, contradiction or prediction (`n-…`), or a broadcast (`b-…`). */
+  app.post('/neurons/:id/signal', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const body = (await c.req.json().catch(() => null)) as { signal?: unknown } | null;
+    const signal = body?.signal;
+    if (signal !== 'up' && signal !== 'down') {
+      return c.json({ error: 'signal must be "up" or "down"' }, 400);
+    }
+    const id = c.req.param('id');
+    if (id.startsWith('b-')) {
+      const broadcast = w.signalBroadcast(id, signal);
+      return broadcast ? c.json({ broadcast }) : c.json(notFound, 404);
+    }
+    const neuron = w.signalNeuron(id, signal);
+    return neuron ? c.json({ neuron }) : c.json(notFound, 404);
+  });
+
   return app;
+}
+
+const BROADCASTS_DEFAULT_LIMIT = 50;
+const BROADCASTS_MAX_LIMIT = 200;
+
+function botNameOf(config: Config, w: Watcher, botId: string): string {
+  return (
+    w.graph.findByKey(`bot:${botId}`)?.meta?.name ??
+    config.bots.find((b) => b.id === botId)?.name ??
+    botId
+  );
+}
+
+function servedCycleRow(deps: WatcherRouteDeps, b: Broadcast) {
+  if (!deps.readCycles || !b.servedByCycle) return undefined;
+  try {
+    const at = Date.parse(b.servedAt ?? b.createdAt);
+    return deps
+      .readCycles(b.botId, at - 2 * CYCLE_WINDOW_MS, at + CYCLE_WINDOW_MS)
+      .find((r) => r.cycleId === b.servedByCycle);
+  } catch (err) {
+    deps.logger.debug({ err, botId: b.botId }, 'Watcher route: cycle log unreadable');
+    return undefined;
+  }
 }
 
 function byRecentLive(a: Neuron, b: Neuron): number {

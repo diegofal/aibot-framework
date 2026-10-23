@@ -46,6 +46,7 @@ const ACTORS: Record<string, WhyActor> = {
   lint: 'lint',
   operator: 'operator',
   wizard: 'operator',
+  watcher: 'watcher',
   system: 'system',
 };
 
@@ -59,10 +60,11 @@ const REASON_SOURCES: Record<string, string> = {
   lint: 'Goal lint',
   operator: 'You',
   wizard: 'You, when creating the agent',
+  watcher: 'Fleet watcher',
 };
 
 /** Writers that record a reason with every change since 2026-10-12 (the operator needs none). */
-const REASONING_ACTORS = new Set(['strategist', 'curiosity', 'reflection', 'lint']);
+const REASONING_ACTORS = new Set(['strategist', 'curiosity', 'reflection', 'lint', 'watcher']);
 
 /** Actors that only act inside an agent-loop cycle. */
 const LOOP_ACTORS = new Set<WhyActor>(['agent', 'strategist', 'curiosity', 'reflection']);

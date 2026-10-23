@@ -102,7 +102,7 @@ export interface InstrumentedClient {
 export interface InstrumentOptions {
   tier: WatcherTier;
   caller: WatcherCaller;
-  budget: Pick<DailyBudget, 'allow' | 'record'>;
+  budget: Pick<DailyBudget, 'reserve' | 'record'>;
   queryLog?: { append(entry: LlmQueryEntry): void };
   /** The fleet breaker (`BotContext.circuitBreaker`); a watcher 429 counts like anyone's. */
   breaker?: {
@@ -140,7 +140,7 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
     model: tier.model,
     backend: tier.backend,
     async chat(messages, callOpts = {}) {
-      const decision = opts.budget.allow(opts.tier);
+      const decision = opts.budget.reserve(opts.tier);
       if (!decision.ok) return { ok: false, reason: decision.reason };
       const started = Date.now();
       try {

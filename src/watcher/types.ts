@@ -129,6 +129,8 @@ export interface WatcherState {
   edges: number;
   linkStatus: LinkStatus;
   lastError?: string;
+  /** Phase 3: neuron ids the last integrate pass said it attends to (`Integrator.attending`). */
+  attending?: string[];
 }
 
 export type WatcherEventType =
@@ -228,4 +230,16 @@ export function emptyCounts(): Record<NeuronKind, number> {
 
 export function isHumanInbound(event: SensedEvent): event is HumanInboundEvent {
   return typeof (event as HumanInboundEvent).channelKind === 'string' && !('type' in event);
+}
+
+/**
+ * `Neuron.meta` key set to `'true'` when an operator message (a verified
+ * operator surface) is part of what supports the neuron, directly (notice) or
+ * through the neurons an insight stands on (integrate). `fleet_memory_search`
+ * shows such neurons only to the operator.
+ */
+export const OPERATOR_SOURCED = 'operatorSourced';
+
+export function isOperatorSourced(n: Pick<Neuron, 'meta'>): boolean {
+  return n.meta?.[OPERATOR_SOURCED] === 'true';
 }

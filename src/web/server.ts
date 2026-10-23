@@ -12,6 +12,7 @@ import { wsChannel, wsToInbound } from '../channel/websocket';
 import type { WsChatData } from '../channel/websocket';
 import type { ClaudeAccountService } from '../claude-accounts/service';
 import type { Config } from '../config';
+import { getClaudeCliStats } from '../core/cli-semaphore';
 import type { SkillRegistry } from '../core/skill-registry';
 import type { CronService } from '../cron';
 import { startAutoArchive } from '../hygiene/auto-archive';
@@ -239,7 +240,19 @@ export function startWebServer(deps: WebServerDeps): void {
   // Fleet watcher: admin / single-tenant only (404 for tenants), { enabled: false } when off.
   app.route(
     '/api/watcher',
-    watcherRoutes({ config, logger, watcher: () => deps.watcher, readCycles })
+    watcherRoutes({
+      config,
+      logger,
+      watcher: () => deps.watcher,
+      readCycles,
+      semaphore: () => {
+        const s = getClaudeCliStats();
+        return {
+          queuedInteractive: s.queuedByPriority.interactive ?? 0,
+          activeWatcher: s.activeByPriority.watcher ?? 0,
+        };
+      },
+    })
   );
   app.route(
     '/api/agents',

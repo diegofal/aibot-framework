@@ -257,3 +257,22 @@ describe('Graph', () => {
     expect(last.type === 'neuron' && last.neuron.archivedAt).toBeTruthy();
   });
 });
+
+describe('Graph.patchMeta (phase 3)', () => {
+  test('merges meta, persists, and emits the neuron', () => {
+    const changes: GraphChange[] = [];
+    const g = graph({ onChange: (c) => changes.push(c) });
+    const n = g.addNeuron(fact('A prediction', { meta: { dueAt: 'x' } }));
+    changes.length = 0;
+    const next = g.patchMeta(n.id, { resolvedAt: 'y', happened: 'true' });
+    expect(next?.meta).toEqual({ dueAt: 'x', resolvedAt: 'y', happened: 'true' });
+    expect(changes.map((c) => c.type)).toEqual(['neuron']);
+    expect(next?.activations).toBe(n.activations);
+    const again = graph();
+    expect(again.get(n.id)?.meta).toEqual({ dueAt: 'x', resolvedAt: 'y', happened: 'true' });
+  });
+
+  test('unknown id is undefined', () => {
+    expect(graph().patchMeta('n-nope', { a: 'b' })).toBeUndefined();
+  });
+});

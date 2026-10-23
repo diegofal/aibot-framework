@@ -215,6 +215,15 @@ export class Graph {
     return next;
   }
 
+  /** Merge attributes into a neuron's `meta` (signals, prediction resolutions). Not a firing. */
+  patchMeta(id: string, patch: Record<string, string>): Neuron | undefined {
+    const n = this.neurons.get(id);
+    if (!n) return undefined;
+    const next: Neuron = { ...n, meta: { ...(n.meta ?? {}), ...patch } };
+    this.writeNeuron(next);
+    return next;
+  }
+
   archive(id: string): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n || n.archivedAt) return n;

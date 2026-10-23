@@ -83,6 +83,31 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     neighbours: [],
     cycle: { cycleId: 'c1', startedAt: '2026-10-22T08:00:00Z', planSummary: 'P', goalTitle: 'G' },
   },
+  broadcast: {
+    broadcast: {
+      id: 'b-00000001',
+      botId: 'b1',
+      kind: 'directive',
+      text: 'Coordinate with Scout on Acme',
+      insightId: 'n-00000002',
+      createdAt: '2026-10-23T10:00:00.000Z',
+      deliveredAt: '2026-10-23T10:00:00.000Z',
+      servedByCycle: 'c1',
+      servedAt: '2026-10-23T11:00:00.000Z',
+    },
+    insight: {
+      id: 'n-00000002',
+      kind: 'insight',
+      text: 'Jarvis and Scout chase the same lead',
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      createdAt: '2026-10-23T09:59:00.000Z',
+      lastActivatedAt: '2026-10-23T09:59:00.000Z',
+      activations: 1,
+    },
+    servedCycle: { cycleId: 'c1', startedAt: '2026-10-23T10:30:00Z', planSummary: 'P' },
+    botName: 'Jarvis',
+  },
   workerRun: {
     run: {
       runId: 'run-1',

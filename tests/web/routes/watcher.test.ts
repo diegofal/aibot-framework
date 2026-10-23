@@ -232,3 +232,110 @@ describe('watcher routes', () => {
     await watcher?.stop();
   });
 });
+
+describe('watcher routes (phase 3)', () => {
+  const postJson = (a: Hono, path: string, body: unknown) =>
+    a.request(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('GET /metrics parses the window and answers the metric table', async () => {
+    const { config, watcher } = setup();
+    const a = app(config, watcher);
+    const week = await (await a.request('/api/watcher/metrics')).json();
+    expect(week.window).toBe('7d');
+    expect(week.metrics).toHaveLength(8);
+    expect(week.guards).toHaveLength(4);
+    expect(JSON.stringify(week)).not.toContain('NaN');
+    const month = await (await a.request('/api/watcher/metrics?window=30d')).json();
+    expect(month.window).toBe('30d');
+    expect((await a.request('/api/watcher/metrics?window=24h')).status).toBe(400);
+  });
+
+  it('GET /metrics is 404 when off and for tenants', async () => {
+    const off = setup(false);
+    expect((await app(off.config, undefined).request('/api/watcher/metrics')).status).toBe(404);
+    const { config, watcher } = setup();
+    expect((await app(config, watcher, 't1').request('/api/watcher/metrics')).status).toBe(404);
+  });
+
+  it('GET /broadcasts lists them newest first, with a why for each', async () => {
+    const { config, watcher } = setup();
+    const w = watcher as Watcher;
+    await w.broadcaster.send({ botId: 'b1', kind: 'wake', text: '', insightId: 'n-1' });
+    t += 1000;
+    await w.broadcaster.send({
+      botId: 'b1',
+      kind: 'directive',
+      text: 'Check it',
+      insightId: 'n-2',
+    });
+    const a = app(config, w);
+    const body = await (await a.request('/api/watcher/broadcasts')).json();
+    expect(body.broadcasts.map((b: { insightId: string }) => b.insightId)).toEqual(['n-2', 'n-1']);
+    for (const b of body.broadcasts) expect(WhySchema.safeParse(b.why).success).toBe(true);
+    const one = await (await a.request('/api/watcher/broadcasts?limit=1')).json();
+    expect(one.broadcasts).toHaveLength(1);
+  });
+
+  it('POST /neurons/:id/signal stores 👍/👎 on an insight', async () => {
+    const { config, watcher } = setup();
+    const w = watcher as Watcher;
+    w.graph.load();
+    const insight = w.graph.addNeuron({
+      kind: 'insight',
+      text: 'An insight',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+    });
+    const a = app(config, w);
+    const res = await postJson(a, `/api/watcher/neurons/${insight.id}/signal`, { signal: 'up' });
+    expect(res.status).toBe(200);
+    expect((await res.json()).neuron.meta.signal).toBe('up');
+    expect(w.graph.get(insight.id)?.meta?.signal).toBe('up');
+  });
+
+  it('POST /neurons/:id/signal also takes a broadcast id', async () => {
+    const { config, watcher } = setup();
+    const w = watcher as Watcher;
+    const sent = await w.broadcaster.send({
+      botId: 'b1',
+      kind: 'wake',
+      text: '',
+      insightId: 'n-1',
+    });
+    const id = sent.broadcast?.id as string;
+    const res = await postJson(app(config, w), `/api/watcher/neurons/${id}/signal`, {
+      signal: 'down',
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).broadcast.signal).toBe('down');
+  });
+
+  it('POST /neurons/:id/signal refuses bad input and unknown or unsignalable ids', async () => {
+    const { config, watcher } = setup();
+    const w = watcher as Watcher;
+    w.graph.load();
+    const fact = w.graph.addNeuron({
+      kind: 'fact',
+      text: 'A fact',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+    });
+    const a = app(config, w);
+    expect(
+      (await postJson(a, `/api/watcher/neurons/${fact.id}/signal`, { signal: 'meh' })).status
+    ).toBe(400);
+    expect(
+      (await postJson(a, `/api/watcher/neurons/${fact.id}/signal`, { signal: 'up' })).status
+    ).toBe(404);
+    expect((await postJson(a, '/api/watcher/neurons/n-nope/signal', { signal: 'up' })).status).toBe(
+      404
+    );
+    expect((await postJson(a, '/api/watcher/neurons/b-nope/signal', { signal: 'up' })).status).toBe(
+      404
+    );
+  });
+});

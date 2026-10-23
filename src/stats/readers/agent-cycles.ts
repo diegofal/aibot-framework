@@ -35,6 +35,9 @@ export interface AgentCycleRecord {
   /** The task the cycle served (`AgentCycleEntry.taskId`). */
   taskId?: string;
   taskText?: string;
+  /** Fleet-watcher broadcasts the planner was shown, and the one it served (`AgentCycleEntry`). */
+  broadcastIds?: string[];
+  servesBroadcast?: string;
   /** Tasks the planner created this cycle. */
   newTasks?: string[];
   /** Tasks the planner dispatched to workers, and what came of it. */

@@ -5,6 +5,7 @@
  */
 import { agentProposalToWhy } from './agent-proposal';
 import { askToWhy } from './ask';
+import { broadcastToWhy } from './broadcast';
 import { collaborationToWhy } from './collaboration';
 import { cronJobToWhy, cronRunToWhy } from './cron';
 import { cycleToWhy } from './cycle';
@@ -48,6 +49,7 @@ export const WHY_BUILDERS = {
   taskEvent: taskEventToWhy,
   workerRun: workerRunToWhy,
   neuron: neuronToWhy,
+  broadcast: broadcastToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;
