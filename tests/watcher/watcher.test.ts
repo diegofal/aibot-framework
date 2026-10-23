@@ -1529,6 +1529,46 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.stop();
   });
 
+  test('a stop during a slow probe: the next start probes at once, the stale probe answer is ignored', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    let probes = 0;
+    let answerStaleProbe: ((v: number[]) => void) | undefined;
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: (text: string) => {
+        calls++;
+        if (text === 'probe') probes++;
+        // The first run's probe: a cold model load that answers only much later.
+        if (calls === 1)
+          return new Promise<number[]>((r) => {
+            answerStaleProbe = r;
+          });
+        return Promise.resolve([1, 0, 0]);
+      },
+    });
+    await watcher.start();
+    expect(await until(() => calls === 1)).toBe(true);
+    await watcher.stop();
+    const started = Date.now();
+    await watcher.start();
+    expect(
+      await until(() => watcher.graph.embeddedIds().length === watcher.graph.liveCount(), 4000)
+    ).toBe(true);
+    // No grace wait for the stale run: the new one starts at once.
+    expect(Date.now() - started).toBeLessThan(700);
+    expect(probes).toBe(2);
+    const linkRows = () => watcher.log.recent(50).filter((r) => r.op === 'maintain:link').length;
+    expect(linkRows()).toBe(1);
+    const callsBefore = calls;
+    answerStaleProbe?.([1, 0, 0]);
+    await new Promise((r) => setTimeout(r, 100));
+    // The stale run's late probe answer starts nothing and writes nothing.
+    expect(calls).toBe(callsBefore);
+    expect(linkRows()).toBe(1);
+    await watcher.stop();
+  });
+
   test('a slow-failing embedder at start: sense first, then one probe and one row with the real error', async () => {
     await bornWithoutEmbeddings();
     let calls = 0;

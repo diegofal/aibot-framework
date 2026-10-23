@@ -95,11 +95,6 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
-/**
- * How long a new run waits for a `linkMissing` a previous `stop()` left in
- * flight (its writes are already dropped) before starting its own.
- */
-export const STALE_LINK_WAIT_MS = 1000;
 /** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
 export const SENSE_STATE_EVERY_MS = 5_000;
 /** How often the notice timer asks whether a pass is due (`Noticer.due`). */
@@ -879,21 +874,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private async backfill(deps: BirthDeps): Promise<LinkResult | undefined> {
     const current = this.linkRun;
     if (current && !current.isCancelled()) return current.promise;
-    if (current) {
-      // A run a previous stop() left behind: give it a moment to settle (its
-      // writes are dropped), then start this run's own.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        current.promise,
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, STALE_LINK_WAIT_MS);
-        }),
-      ]);
-      if (timer) clearTimeout(timer);
-      if (this.linkRun === current) this.linkRun = null;
-      // Another call of this run may have started it meanwhile.
-      if (this.linkRun && !this.linkRun.isCancelled()) return this.linkRun.promise;
-    }
+    // A run a previous stop() left behind is cancelled: it drops its probe
+    // answer and stops (`linkMissing` honours `isCancelled`), so this run
+    // starts its own at once.
     if (!this.running || this.stopping || deps.isCancelled?.()) return undefined;
     const isCancelled = () => deps.isCancelled?.() ?? false;
     const entry = {

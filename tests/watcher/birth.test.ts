@@ -829,6 +829,69 @@ describe('linking: an embedder that is down', () => {
     expect(calls).toBe(32);
     expect(res.embedded).toBe(31);
     expect(res.failure).toContain('ECONNREFUSED');
+    // The run did not stop: the one failed embed is a note, not a partial run.
+    expect(res.status).toBe('ok');
+    expect(res.skipped).toBe(1);
+  });
+
+  test('linkMissing that recovers from one transient error: no "Stopped" row, the skip noted, birth.json ok', async () => {
+    const { d, graph, rows } = await born();
+    for (const n of graph.list()) graph.setEmbedding(n.id, [0, 0, 1]);
+    addPending(graph, 32);
+    let calls = 0;
+    const config = { ...d.config, soul: { search: { concurrency: 3 } } } as Config;
+    const res = await linkMissing({
+      ...d,
+      config,
+      embed: async () => {
+        calls++;
+        // call 1 is the probe; the first embed of the batch fails once
+        if (calls === 2) throw refused();
+        await new Promise((r) => setTimeout(r, 2));
+        return [1, 0, 0];
+      },
+    });
+    expect(res?.embedded).toBe(31);
+    expect(res?.status).toBe('ok');
+    const row = rows.at(-1);
+    expect(row?.op).toBe('maintain:link');
+    expect(row?.text).not.toContain('Stopped');
+    expect(row?.text).toContain('1 embed failed and was skipped');
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('ok');
+  });
+
+  test('birth\'s link stage that recovers from one transient error ends ok, with no "Stopped" row', async () => {
+    let calls = 0;
+    const { rows, record } = await born({
+      embed: async () => {
+        calls++;
+        if (calls === 1) throw refused();
+        await new Promise((r) => setTimeout(r, 2));
+        return [1, 0, 0];
+      },
+    });
+    const linkRows = rows.filter((r) => r.op === 'birth:link');
+    expect(linkRows.some((r) => r.text.includes('Stopped'))).toBe(false);
+    expect(linkRows.some((r) => r.text.includes('1 embed failed and was skipped'))).toBe(true);
+    expect(record.linkStatus).toBe('ok');
+  });
+
+  test('linkMissing whose embeds all resolve [] leaves birth.json as it was, never ok', async () => {
+    const { d, graph, rows } = await born();
+    graph.setEmbedding(graph.list()[0].id, [1, 0, 0]);
+    addPending(graph, 40);
+    const before = readBirthRecord(d.dir)?.linkStatus;
+    expect(before).not.toBe('ok');
+    let calls = 0;
+    const res = await linkMissing({
+      ...d,
+      // the probe answers; every neuron's embed resolves [] without throwing
+      embed: async () => (++calls === 1 ? [1, 0, 0] : []),
+    });
+    expect(res?.embedded).toBe(0);
+    expect(res?.status).not.toBe('ok');
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe(before);
+    expect(rows.at(-1)?.text).toContain('returned no vectors');
   });
 
   test('linkMissing that stops at an error after embedding some marks birth.json partial', async () => {

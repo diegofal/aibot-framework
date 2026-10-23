@@ -115,12 +115,25 @@ export function narrateLinking(input: { neurons: number; edges: number }): strin
 export function narrateLateLink(input: {
   embedded: number;
   edges: number;
+  /** Set only when the run stopped at it. */
   failure?: string;
+  /** Embeds that failed in a run that went on (a recovered transient error). */
+  skipped?: number;
 }): string {
   const base = `Embedded ${plural(input.embedded, 'neuron', 'neurons')} I had not embedded yet: ${plural(input.edges, 'new related edge', 'new related edges')}.`;
-  return input.failure
-    ? `${base} Stopped at an embedding error (${input.failure}); the rest at the next maintenance.`
-    : base;
+  if (input.failure)
+    return `${base} Stopped at an embedding error (${input.failure}); the rest at the next maintenance.`;
+  return input.skipped ? `${base} ${narrateSkipped(input.skipped, 'maintenance')}` : base;
+}
+
+/** Birth's link stage went through every neuron, but some embeds failed on the way. */
+export function narrateLinkSkipped(input: { skipped: number; failure?: string }): string {
+  const why = input.failure ? ` (${input.failure})` : '';
+  return `${plural(input.skipped, 'embed failed and was skipped', 'embeds failed and were skipped')}${why}; ${input.skipped === 1 ? 'it gets' : 'they get'} embedded at the next start or maintenance.`;
+}
+
+function narrateSkipped(skipped: number, next: string): string {
+  return `${plural(skipped, 'embed failed and was skipped', 'embeds failed and were skipped')}; the next ${next} tries again.`;
 }
 
 /** Maintenance embedded nothing: the real reason; nothing was re-placed. */
