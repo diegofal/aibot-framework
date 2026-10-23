@@ -9,9 +9,21 @@ import type { Logger } from '../logger';
  * neurons are left out. Results are wrapped as external content: the graph
  * holds what other bots and the watcher's model wrote. Not sensitive: tier 0
  * reduces every non-operator message to topic words before it reaches the
- * graph, so no private conversation is in it. Neurons that operator messages
- * support (`meta.operatorSourced`) are returned only to the operator on a
- * verified surface (`callerIdentity` kind `operator`).
+ * graph, so no private conversation is in it.
+ *
+ * Who sees what (`visibleTo`):
+ * - the operator on a verified surface (`callerIdentity` kind `operator`):
+ *   every live neuron;
+ * - anyone else (the bot's own runs, its users, collaboration, MCP): only
+ *   neurons that are not operator-sourced (`meta.operatorSourced`: operator
+ *   messages, and everything birth read from operator-owned material — memory,
+ *   goals, contacts) AND either supported by the calling bot itself
+ *   (`support.bots` has `_botId`) or a general fleet entity (`kind: entity`,
+ *   the bots themselves, minus tenant bots). What only another bot or the
+ *   watcher knows stays out.
+ * A tenant bot (multi-tenant, `bots[].tenantId`) never gets an answer: the
+ * graph is the instance's (`isTenantBot`; `ToolRegistry` also keeps the
+ * tool out of its definitions).
  */
 import { cosineSimilarity } from '../memory/search';
 import { type Neuron, isOperatorSourced } from '../watcher/types';
@@ -39,11 +51,41 @@ function coverage(query: string[], text: string): number {
   return query.filter((w) => words.has(w)).length / query.length;
 }
 
+export interface FleetMemoryToolOptions {
+  /** True for a tenant bot in multi-tenant mode: refused, and its entity hidden from others. */
+  isTenantBot?: (botId: string) => boolean;
+}
+
+/** May a caller see this neuron? `operator` sees all; others see their bot's own and the fleet entities. */
+export function visibleTo(
+  n: Neuron,
+  caller: { operator: boolean; botId?: string },
+  isTenantBot: (botId: string) => boolean = () => false
+): boolean {
+  if (caller.operator) return true;
+  if (isOperatorSourced(n)) return false;
+  if (n.kind === 'entity') {
+    const owner = n.meta?.botId ?? n.support.bots[0];
+    return !owner || !isTenantBot(owner) || owner === caller.botId;
+  }
+  return !!caller.botId && n.support.bots.includes(caller.botId);
+}
+
 function botLabel(source: FleetMemorySource, botId: string): string {
   return source.graph.findByKey(`bot:${botId}`)?.meta?.name ?? botId;
 }
 
-export function createFleetMemorySearchTool(getSource: () => FleetMemorySource | undefined): Tool {
+export function createFleetMemorySearchTool(
+  getSource: () => FleetMemorySource | undefined,
+  opts: FleetMemoryToolOptions = {}
+): Tool {
+  const isTenantBot = (id: string) => {
+    try {
+      return opts.isTenantBot?.(id) === true;
+    } catch {
+      return true;
+    }
+  };
   return {
     definition: {
       type: 'function',
@@ -69,6 +111,14 @@ export function createFleetMemorySearchTool(getSource: () => FleetMemorySource |
     async execute(args: Record<string, unknown>, logger: Logger): Promise<ToolResult> {
       const query = String(args.query ?? '').trim();
       if (!query) return { success: false, content: 'Missing required parameter: query' };
+      const callerBot = typeof args._botId === 'string' && args._botId ? args._botId : undefined;
+      if (callerBot && isTenantBot(callerBot)) {
+        return {
+          success: false,
+          failureKind: 'policy',
+          content: 'The fleet memory is not available for this agent.',
+        };
+      }
       const source = getSource();
       if (!source) {
         return { success: false, content: 'The fleet memory is not available right now.' };
@@ -89,13 +139,16 @@ export function createFleetMemorySearchTool(getSource: () => FleetMemorySource |
       }
       const qWords = titleTokens(query);
       const scored: Array<{ n: Neuron; score: number }> = [];
-      // Operator-sourced neurons only for the operator on a verified surface
-      // (dashboard thread, or Telegram in private); never in a group, never for
-      // the bot's own runs, other users or collaboration.
-      const operator = callerIdentity(args).kind === 'operator';
+      // Everything only for the operator on a verified surface (dashboard
+      // thread, or Telegram in private); never in a group. Anyone else: see
+      // `visibleTo`.
+      const caller = {
+        operator: callerIdentity(args).kind === 'operator',
+        ...(callerBot ? { botId: callerBot } : {}),
+      };
       for (const n of source.graph.list()) {
         if (n.archivedAt) continue;
-        if (!operator && isOperatorSourced(n)) continue;
+        if (!visibleTo(n, caller, isTenantBot)) continue;
         const text = Math.max(textSimilarity(query, n.text), coverage(qWords, n.text));
         let score = text >= MIN_TEXT_SCORE ? text : 0;
         const vec = queryVec ? source.graph.getEmbedding(n.id) : undefined;

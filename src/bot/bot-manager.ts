@@ -1688,6 +1688,22 @@ export class BotManager {
     return this.llmQueryLog;
   }
 
+  /** The shared tool audit (the watcher writes its question sends under `__watcher__`). */
+  getToolAuditLog(): ToolAuditLog {
+    return this.toolAuditLog;
+  }
+
+  /**
+   * How a message reaches the operator on Telegram for `botId`, as
+   * `send_proactive_message` resolves it: the bot's own instance, else another
+   * bot's with `operator.borrowFleetTelegram`; undefined = the dashboard only.
+   */
+  getOperatorTelegramRoute(
+    botId: string
+  ): { api: { sendMessage: (chatId: number, text: string) => Promise<unknown> } } | undefined {
+    return this.bots.get(botId) ?? fleetTelegramBorrower(this.bots, () => this.config)(botId);
+  }
+
   /** Warn about bots that have soul files in the legacy config/soul/ path */
   private checkSoulSourceConsistency(): void {
     const legacyBaseDir = this.config.soul.dir;

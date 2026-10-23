@@ -186,7 +186,7 @@ Each entry is a `###` heading with this table and these paragraphs:
 | **Where** | `src/watcher/integrate.ts` → `src/watcher/broadcast.ts` (directive / goal kinds) |
 | **Decided by** | lead, watcher phase 3 (the privacy rule covers `fleet_memory_search` only) |
 
-**What was deferred.** `fleet_memory_search` hides `meta.operatorSourced` neurons from everyone but the verified operator, and everything an integrate pass creates is marked operator-sourced when the model saw operator material. A directive or goal broadcast written from such an insight still reaches the target bot's planner (and its GOALS.md), and that bot may then talk about it with non-operator users. Birth neurons (read from shared MEMORY.md) carry no operator provenance either.
+**What was deferred.** `fleet_memory_search` hides `meta.operatorSourced` neurons from everyone but the verified operator, and everything an integrate pass creates is marked operator-sourced when the model saw operator material. A directive or goal broadcast written from such an insight still reaches the target bot's planner (and its GOALS.md), and that bot may then talk about it with non-operator users. Since review round 1, birth marks what it reads from operator-owned material (memory, goals, contacts, knowledge) operator-sourced, so more insights carry the flag; the broadcast path still ignores it.
 
 **Why it was the right call then.** The bots are the operator's own; the decision in scope was cross-bot recall by other people.
 

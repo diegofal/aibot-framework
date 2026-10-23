@@ -392,16 +392,15 @@ async function main() {
     const shutdown = async () => {
       shuttingDown = true;
       logger.info('Shutting down...');
-      // The watcher goes first: it compacts its graph and logs that it is going to sleep.
-      if (watcher) {
-        try {
-          await watcher.stop();
-        } catch (err) {
-          logger.warn({ err }, 'Watcher failed to stop cleanly');
-        }
-      }
-      // Worker runs are aborted and persisted `interrupted` (bounded to 20 s) before the bots stop.
-      await shutdownRuntime({ getWorkerPool, stopAll: () => manager.stopAll(), logger });
+      // The watcher (its model calls aborted, bounded to 5 s; it compacts its graph and
+      // logs that it is going to sleep) stops alongside the worker abort. Worker runs
+      // are aborted and persisted `interrupted` (bounded to 20 s) before the bots stop.
+      await shutdownRuntime({
+        getWorkerPool,
+        stopAll: () => manager.stopAll(),
+        logger,
+        ...(watcher ? { stopWatcher: () => watcher.stop() } : {}),
+      });
       cronService.stop();
       sessionManager.dispose();
       memoryManager?.dispose();

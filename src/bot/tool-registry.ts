@@ -66,7 +66,11 @@ import { createProductionLogTool } from '../tools/production-log';
 import { createRecallMemoryTool } from '../tools/recall-memory';
 import { createRedditHotTool, createRedditReadTool, createRedditSearchTool } from '../tools/reddit';
 import { createSendMessageTool } from '../tools/send-message';
-import { createSendProactiveMessageTool } from '../tools/send-proactive-message';
+import {
+  ProactiveThrottle,
+  createSendProactiveMessageTool,
+  resolveProactiveLimits,
+} from '../tools/send-proactive-message';
 import { createSignalCompletionTool } from '../tools/signal-completion';
 import {
   createSaveMemoryTool,
@@ -190,8 +194,23 @@ export class ToolRegistry {
   /** Declarative HTTP APIs registered as `api_*` tools (per-bot via `bots`). */
   private httpApis: HttpApiConfig[] = [];
   private knowledgeMesh?: import('./knowledge-mesh').KnowledgeMesh;
+  /**
+   * The fleet's proactive throttle (one per bot per cooldown, plus the fleet
+   * daily cap): `send_proactive_message` and the watcher's question broadcasts
+   * (keyed `__watcher__`) share it.
+   */
+  private readonly proactiveThrottle: ProactiveThrottle;
 
-  constructor(private ctx: BotContext) {}
+  constructor(private ctx: BotContext) {
+    this.proactiveThrottle = new ProactiveThrottle(() =>
+      resolveProactiveLimits(this.ctx.config.operator)
+    );
+  }
+
+  /** The throttle `send_proactive_message` uses (the watcher's questions count against it too). */
+  getProactiveThrottle(): ProactiveThrottle {
+    return this.proactiveThrottle;
+  }
 
   setKarmaService(ks: KarmaService): void {
     this.karmaService = ks;
@@ -217,13 +236,16 @@ export class ToolRegistry {
    * Register `fleet_memory_search` over the watcher's graph (called once the
    * watcher exists, `createFleetWatcher`). Only when `watcher.enabled`;
    * idempotent. The source is read per call, so a stopped watcher answers
-   * "not available" instead of a stale graph.
+   * "not available" instead of a stale graph. Never for a tenant bot
+   * (`getExcludedSet`; the tool refuses one too): the graph is the instance's.
    */
   setFleetMemory(getSource: () => FleetMemorySource | undefined): void {
     if (!this.ctx.config.watcher?.enabled) return;
     const name = 'fleet_memory_search';
     removeToolsInPlace(this.ctx.tools, (t) => t.definition.function.name === name);
-    this.ctx.tools.push(createFleetMemorySearchTool(getSource));
+    this.ctx.tools.push(
+      createFleetMemorySearchTool(getSource, { isTenantBot: (id) => this.isTenantBot(id) })
+    );
     this.ctx.toolDefinitions.length = 0;
     this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
     this.ctx.logger.info('fleet_memory_search registered');
@@ -490,6 +512,7 @@ export class ToolRegistry {
     // Proactive messaging tool (for agent loop user awareness)
     tools.push(
       createSendProactiveMessageTool({
+        throttle: this.proactiveThrottle,
         getOperator: () => this.ctx.config.operator,
         sendTelegramMessage: async (chatId: number, text: string, botId: string) => {
           // The bot's own instance, else another bot's only when the operator
@@ -848,6 +871,14 @@ export class ToolRegistry {
   /**
    * Get the full excluded set for a bot: disabledTools + disabledSkills + dynamic scope exclusions.
    */
+  /** A tenant bot in multi-tenant mode (`bots[].tenantId`). */
+  private isTenantBot(botId: string): boolean {
+    return (
+      !!this.ctx.config.multiTenant?.enabled &&
+      !!this.ctx.config.bots.find((b) => b.id === botId)?.tenantId
+    );
+  }
+
   private getExcludedSet(botId: string): Set<string> {
     const disabled = this.getDisabledSet(botId);
 
@@ -869,6 +900,8 @@ export class ToolRegistry {
       for (const name of PERSONAL_TOOL_NAMES) disabled.add(name);
     }
     for (const name of httpApiToolsExcludedForBot(this.httpApis, botId)) disabled.add(name);
+    // The watcher's graph is the instance's: never a tenant bot's.
+    if (this.isTenantBot(botId)) disabled.add('fleet_memory_search');
 
     if (!this.dynamicToolRegistry) return disabled;
     const dynamicExcluded = this.dynamicToolRegistry.getExcludedNamesForBot(botId);

@@ -140,15 +140,19 @@ export interface SendProactiveMessageDeps {
   getOperator?: () => OperatorConfig | undefined;
   /** Injectable clock for the throttle. */
   now?: () => number;
+  /**
+   * The fleet's throttle, when the owner shares it (`ToolRegistry` hands the
+   * same one to the watcher's question broadcasts); else the tool builds its own.
+   */
+  throttle?: ProactiveThrottle;
 }
 
 export function createSendProactiveMessageTool(deps: SendProactiveMessageDeps): Tool {
   // One tool instance is shared by the whole fleet (ToolRegistry builds it
   // once), so this closure is where "fleet-wide" actually lives.
-  const throttle = new ProactiveThrottle(
-    () => resolveProactiveLimits(deps.getOperator?.()),
-    deps.now ?? Date.now
-  );
+  const throttle =
+    deps.throttle ??
+    new ProactiveThrottle(() => resolveProactiveLimits(deps.getOperator?.()), deps.now ?? Date.now);
 
   return {
     definition: {

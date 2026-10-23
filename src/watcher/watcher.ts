@@ -16,6 +16,7 @@ import type { SelfStateInput } from '../bot/agent-loop-prompts';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import type { ChannelStatus } from '../bot/telegram-errors';
+import type { ToolAuditEntry } from '../bot/tool-audit-log';
 import type { WatcherBroadcastSource, WatcherSelfStateSource } from '../bot/types';
 import type { UserDirectory } from '../bot/user-directory';
 import type { ChannelKind } from '../channel/types';
@@ -26,6 +27,7 @@ import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
   type BirthDeps,
   beginBirth,
@@ -75,7 +77,7 @@ import {
   interoception,
   lastOperatorMs,
 } from './self-model';
-import { type SenderInfo, Sense, inboundSender } from './sense';
+import { type SenderInfo, Sense, WATCHER_BOT_ID, inboundSender } from './sense';
 import {
   type BirthRecord,
   type LinkStatus,
@@ -99,6 +101,12 @@ export const INTEGRATE_CHECK_MS = 60_000;
 export const OUTCOMES_EVERY_MS = 10 * 60_000;
 /** How often the introspection sampler asks whether a sample is due. */
 export const INTROSPECT_CHECK_MS = 60_000;
+/**
+ * How long `stop()` waits for birth and in-flight passes after aborting their
+ * model calls, before it compacts and persists anyway (shutdown must fit the
+ * container's grace period; `WatcherDeps.stopTimeoutMs` overrides it).
+ */
+export const WATCHER_STOP_TIMEOUT_MS = 5_000;
 /** Neuron kinds the operator can 👍/👎 (contradictions: confirm or dismiss). */
 export const SIGNAL_KINDS: readonly NeuronKind[] = ['insight', 'contradiction', 'prediction'];
 
@@ -156,12 +164,14 @@ export interface WatcherDeps {
   ) => { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined;
   /** Phase 4: randomness of the daily introspection sampler (tests). */
   random?: () => number;
+  /** Bound of `stop()`'s wait for in-flight work (default `WATCHER_STOP_TIMEOUT_MS`). */
+  stopTimeoutMs?: number;
 }
 
 export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   readonly graph: Graph;
   readonly log: WatcherLog;
-  readonly buffer = new WorkingBuffer();
+  private readonly workingBuffer = new WorkingBuffer();
   readonly dir: string;
   /** Daily LLM budget, shared by every tier. */
   readonly budget: DailyBudget;
@@ -190,6 +200,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private readonly sampler: IntrospectionSampler;
   private introspectTimer: ReturnType<typeof setInterval> | null = null;
   private introspectRun: Promise<IntrospectionOutcome> | null = null;
+  /** Aborted by `stop()`: every model call in flight (`instrumented`) is linked to it. */
+  private stopCtrl = new AbortController();
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -212,7 +224,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     });
     this.sense = new Sense({
       graph: this.graph,
-      buffer: this.buffer,
+      buffer: this.workingBuffer,
       log: this.log,
       config: () => this.cfg(),
       now: this.now,
@@ -241,7 +253,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     if (notice) {
       this.noticer = new Noticer({
         graph: this.graph,
-        buffer: this.buffer,
+        buffer: this.workingBuffer,
         log: this.log,
         client: notice,
         budget: this.budget,
@@ -304,8 +316,19 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       now: this.now,
       ...(this.deps.queryLog ? { queryLog: this.deps.queryLog } : {}),
       ...(this.deps.breaker ? { breaker: this.deps.breaker } : {}),
+      signal: () => this.stopCtrl.signal,
     };
     return instrumented(client, opts);
+  }
+
+  /**
+   * The working buffer. Sensing runs off the bots' publish call (`Sense`
+   * batches it); every read here senses what is queued first, so a reader
+   * always sees everything published so far.
+   */
+  get buffer(): WorkingBuffer {
+    this.sense?.flush();
+    return this.workingBuffer;
   }
 
   /** True while the notice timer runs (after birth, with `notice.enabled`). */
@@ -327,6 +350,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const noticer = this.noticer;
     if (!noticer || !this.cfg().notice.enabled || !this.running) return Promise.resolve(null);
     if (this.noticeRun) return this.noticeRun;
+    this.sense.flush();
     this.setPhase('notice');
     this.noticeRun = noticer
       .run()
@@ -361,6 +385,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       return Promise.resolve(null);
     }
     if (this.integrateRun) return this.integrateRun;
+    this.sense.flush();
     this.setPhase('integrate');
     this.integrateRun = integrator
       .run()
@@ -398,6 +423,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * Every reader may fail; never throws.
    */
   interoception(): Interoception {
+    this.sense.flush();
     const backends = [
       ...new Set(
         (['notice', 'integrate'] as const)
@@ -550,12 +576,20 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     return taste;
   }
 
-  /** Writes the wake row and returns; birth or resync continue in the background. */
+  /**
+   * Writes the wake row and returns; birth or resync continue in the background.
+   * A start that throws leaves the watcher asleep (`running: false`, the error
+   * in `lastError`), so a later start can try again.
+   */
   async start(): Promise<WatcherState> {
+    if (this.running) return this.state();
+    // A birth a failed start left behind stops between stages; never run two.
+    await this.background;
     if (this.running) return this.state();
     this.running = true;
     this.stopping = false;
     this.lastError = undefined;
+    if (this.stopCtrl.signal.aborted) this.stopCtrl = new AbortController();
     try {
       this.graph.load();
       this.buffer.restore(bufferFile(this.dir));
@@ -596,26 +630,45 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.startTimers();
     } catch (err) {
       this.fail(err);
+      this.abandonStart();
     }
     return this.state();
+  }
+
+  /** Undo a start that threw: nothing attached, no timers, background birth cancelled. */
+  private abandonStart(): void {
+    this.stopping = true;
+    this.stopCtrl.abort();
+    try {
+      this.sense.detach();
+      this.presence.detach();
+    } catch {
+      // detaching what never attached
+    }
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
+    this.stopNoticeTimer();
+    this.stopIntegrateTimer();
+    this.stopIntrospectTimer();
+    this.running = false;
+    this.setPhase('sleep');
   }
 
   async stop(): Promise<WatcherState> {
     if (!this.running) return this.state();
     this.stopping = true;
+    // Abort every model call in flight: shutdown never waits on the CLI timeout.
+    this.stopCtrl.abort();
     try {
       this.sense.detach();
+      this.sense.flush();
       this.presence.detach();
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
       this.stopNoticeTimer();
       this.stopIntegrateTimer();
       this.stopIntrospectTimer();
-      await this.background;
-      await this.noticeRun;
-      await this.integrateRun;
-      await this.outcomesRun;
-      await this.introspectRun;
+      await this.settleInFlight();
       this.integrator?.persist();
       this.sense.tick();
       this.graph.compact();
@@ -630,6 +683,37 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     return this.state();
   }
 
+  /**
+   * Wait for birth and the passes in flight, at most `stopTimeoutMs`: their
+   * model calls are already aborted; what cannot be (an embedding) is left
+   * behind so stop can compact and persist.
+   */
+  private async settleInFlight(): Promise<void> {
+    const work = [
+      this.background,
+      this.noticeRun,
+      this.integrateRun,
+      this.outcomesRun,
+      this.introspectRun,
+    ].filter((p): p is Promise<never> => !!p);
+    const bound = this.deps.stopTimeoutMs ?? WATCHER_STOP_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), bound);
+    });
+    try {
+      const outcome = await Promise.race([
+        Promise.allSettled(work).then(() => 'done' as const),
+        timeout,
+      ]);
+      if (outcome === 'timeout') {
+        this.logger.warn({ boundMs: bound }, 'Watcher: in-flight work did not stop in time');
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /** Resolves when birth or resync (whatever runs in the background) is done. */
   idle(): Promise<void> {
     return this.background;
@@ -640,6 +724,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   state(): WatcherState {
+    this.sense?.flush();
     const record = readBirthRecord(this.dir);
     return {
       running: this.running,
@@ -846,7 +931,6 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
 
   private sender(e: HumanInboundEvent): SenderInfo {
     const address = e.userId ?? e.chatId;
-    const opChat = this.deps.config().operator?.telegramChatId;
     let contact: ReturnType<UserDirectory['findByChannel']>;
     try {
       contact = this.deps.botManager
@@ -855,10 +939,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     } catch {
       contact = undefined;
     }
-    return inboundSender(e, {
-      ...(opChat !== undefined ? { operatorChatId: opChat } : {}),
-      contact,
-    });
+    return inboundSender(e, { contact });
   }
 
   private setPhase(phase: WatcherPhase): void {
@@ -905,15 +986,13 @@ export interface FleetWatcherSource {
   getCircuitBreaker?(): WatcherBreaker | undefined;
   getToolRegistry?(): {
     setFleetMemory(source: () => ReturnType<Watcher['fleetMemory']>): void;
-    /** Phase 3: the shared executor a question broadcast sends `send_proactive_message` through. */
-    createExecutor?(
-      chatId: number,
-      botId: string
-    ): (
-      name: string,
-      args: Record<string, unknown>
-    ) => Promise<{ success: boolean; content: string }>;
+    /** The fleet's proactive throttle a question broadcast counts against (as `__watcher__`). */
+    getProactiveThrottle?(): Pick<ProactiveThrottle, 'check' | 'record'>;
   };
+  /** A question broadcast's Telegram route for the bot it concerns (own, else borrowed). */
+  getOperatorTelegramRoute?(botId: string): TelegramRoute | undefined;
+  /** Where a question broadcast is audited (under `__watcher__`: Work → Sent to you). */
+  getToolAuditLog?(): { append(entry: ToolAuditEntry): void };
   /** Phase 3: the entry points broadcasts use (optional so older fakes still fit). */
   requestImmediateAgentRun?(botId: string, opts?: { feedback?: boolean }): void;
   getCuriosityService?(): {
@@ -931,13 +1010,93 @@ export interface FleetWatcherSource {
 /** A question broadcast reaches the operator with this prefix, through the bot it concerns. */
 export const WATCHER_QUESTION_PREFIX = 'Fleet watcher: ';
 
+interface TelegramRoute {
+  api: { sendMessage: (chatId: number, text: string) => Promise<unknown> };
+}
+
+export interface WatcherQuestionDeps {
+  /** The fleet's proactive throttle; the watcher is its own sender (`__watcher__`). */
+  throttle: Pick<ProactiveThrottle, 'check' | 'record'>;
+  operatorChatId: () => number | undefined;
+  /** The bot's Telegram route to the operator; undefined = the dashboard is the channel. */
+  telegram: (botId: string) => TelegramRoute | undefined;
+  audit?: (entry: ToolAuditEntry) => void;
+  now?: () => number;
+  logger: Pick<Logger, 'warn'>;
+}
+
+/**
+ * Ask the operator a question broadcast's text, without the bot's executor (so
+ * no karma, no use of the bot's own cooldown, nothing in its audit): the shared
+ * proactive throttle keyed `__watcher__` (the fleet cap is shared), the bot's
+ * Telegram route (none = kept for the dashboard, like `send_proactive_message`),
+ * and one tool-audit row under `__watcher__` that `/api/proactive` lists in
+ * Work → Sent to you. A refusal is audited as `policy`; only a delivery that
+ * landed is counted against the throttle. Never throws.
+ */
+export async function deliverWatcherQuestion(
+  deps: WatcherQuestionDeps,
+  botId: string,
+  text: string
+): Promise<{ ok: boolean; detail: string }> {
+  const now = deps.now ?? Date.now;
+  const started = now();
+  const message = `${WATCHER_QUESTION_PREFIX}${text}`;
+  const finish = (ok: boolean, detail: string, failureKind?: 'policy') => {
+    try {
+      deps.audit?.({
+        timestamp: new Date(started).toISOString(),
+        botId: WATCHER_BOT_ID,
+        chatId: 0,
+        toolName: 'send_proactive_message',
+        args: { chatId: 'operator', message, aboutBot: botId },
+        success: ok,
+        result: detail.slice(0, 500),
+        durationMs: Math.max(0, now() - started),
+        retryAttempts: 0,
+        ...(failureKind ? { failureKind } : {}),
+      });
+    } catch (err) {
+      deps.logger.warn({ err }, 'Watcher: could not audit a question broadcast');
+    }
+    return { ok, detail };
+  };
+  const gate = deps.throttle.check(WATCHER_BOT_ID);
+  if (!gate.allowed) return finish(false, gate.reason, 'policy');
+  const chatId = deps.operatorChatId();
+  if (chatId === undefined || chatId === null || !Number.isFinite(Number(chatId))) {
+    return finish(false, 'The operator has no Telegram chat configured (operator.telegramChatId).');
+  }
+  let route: TelegramRoute | undefined;
+  try {
+    route = deps.telegram(botId);
+  } catch {
+    route = undefined;
+  }
+  if (!route) {
+    deps.throttle.record(WATCHER_BOT_ID);
+    return finish(
+      true,
+      'Not sent by Telegram: no Telegram connection for this bot. The operator sees it in the dashboard (Work → Sent to you).'
+    );
+  }
+  try {
+    await route.api.sendMessage(Number(chatId), message);
+  } catch (err) {
+    return finish(false, `Failed to send: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  deps.throttle.record(WATCHER_BOT_ID);
+  return finish(true, `Message sent to the operator (chat ${chatId})`);
+}
+
 /**
  * The four broadcast entry points over the bot manager: wake =
  * `requestImmediateAgentRun(botId, { feedback: false })`; directive =
  * `CuriosityService.recordDirective(…, 'watcher')`; goal = `writeWatcherGoal`
  * on the bot's GOALS.md (same soul-dir resolution as `startBot`); question =
- * the shared `send_proactive_message` executor of the bot with
- * `chatId: 'operator'`, so the proactive throttle and Work → Sent to you apply.
+ * `deliverWatcherQuestion` (the shared proactive throttle as `__watcher__`, the
+ * bot's Telegram route, an audit row for Work → Sent to you; never the bot's
+ * executor, so never its karma or cooldown).
  */
 export function fleetBroadcastDelivery(
   config: Config,
@@ -963,13 +1122,20 @@ export function fleetBroadcastDelivery(
       });
     },
     question: async (botId, text) => {
-      const exec = manager.getToolRegistry?.().createExecutor?.(0, botId);
-      if (!exec) return { ok: false, detail: 'send_proactive_message is not available' };
-      const res = await exec('send_proactive_message', {
-        chatId: 'operator',
-        message: `${WATCHER_QUESTION_PREFIX}${text}`,
-      });
-      return { ok: res.success === true, detail: String(res.content ?? '') };
+      const throttle = manager.getToolRegistry?.().getProactiveThrottle?.();
+      if (!throttle) return { ok: false, detail: 'proactive messages are not available' };
+      const audit = manager.getToolAuditLog?.();
+      return deliverWatcherQuestion(
+        {
+          throttle,
+          operatorChatId: () => config.operator?.telegramChatId,
+          telegram: (id) => manager.getOperatorTelegramRoute?.(id),
+          ...(audit ? { audit: (e: ToolAuditEntry) => audit.append(e) } : {}),
+          logger,
+        },
+        botId,
+        text
+      );
     },
   };
 }

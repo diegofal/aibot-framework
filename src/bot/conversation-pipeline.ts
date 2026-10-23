@@ -8,8 +8,9 @@ import { resolveAgentConfig, resolveMaxToolRounds, resolveTtsConfig } from '../c
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
+import type { RelayParty } from '../relay/types';
 import { unflushedMessageCount } from '../session';
-import type { ToolActor } from '../tools/operator-gate';
+import { type ToolActor, callerIdentity } from '../tools/operator-gate';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
 import { type ContextCompactor, truncateOversizedMessages } from './context-compaction';
@@ -80,6 +81,26 @@ export function requesterLookup(
     address: msg.sender.id,
     displayName: msg.sender.firstName ?? msg.sender.username ?? msg.sender.id,
   };
+}
+
+/**
+ * The turn is the operator's on a surface that verified it, the same rule as
+ * `callerIdentity` (src/tools/operator-gate.ts): the dashboard thread
+ * (`actor: 'operator'`) or the operator in a private Telegram chat. Never in
+ * a group, never an operator claimed on web / REST, never a cron run. Gates
+ * the watcher's "## Your current state" in the conversation prompt.
+ */
+export function isOperatorTurn(
+  requester: RelayParty | undefined,
+  scope: { isGroup: boolean; actor?: ToolActor }
+): boolean {
+  return (
+    callerIdentity({
+      _isGroup: scope.isGroup,
+      ...(scope.actor ? { _actor: scope.actor } : {}),
+      ...(requester ? { _requester: requester } : {}),
+    }).kind === 'operator'
+  );
 }
 
 export class ConversationPipeline {
@@ -414,6 +435,7 @@ export class ConversationPipeline {
         previousSession,
         relayContext,
         speaker: requester,
+        operatorTurn: isOperatorTurn(requester, executorScope),
       });
 
       // In groups, prefix messages with sender name
@@ -1129,6 +1151,7 @@ export class ConversationPipeline {
         previousSession,
         relayContext,
         speaker: requester,
+        operatorTurn: isOperatorTurn(requester, executorScope),
       });
 
       // In groups, prefix messages with sender name

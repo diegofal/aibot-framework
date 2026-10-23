@@ -467,3 +467,54 @@ describe('relayout', () => {
       expect(Math.hypot(...(n.pos ?? [2, 0, 0]))).toBeLessThanOrEqual(1);
   });
 });
+
+describe('birth: privacy of what it reads (operator-sourced)', () => {
+  const sourced = (n: { meta?: Record<string, string> } | undefined) =>
+    n?.meta?.operatorSourced === 'true';
+
+  test('people from the contact directories are operator-sourced', async () => {
+    const { graph } = await born();
+    const people = graph.list().filter((n) => n.kind === 'person');
+    expect(people.length).toBeGreaterThan(0);
+    for (const n of people) expect(sourced(n)).toBe(true);
+  });
+
+  test('goals from GOALS.md are operator-sourced', async () => {
+    const { graph } = await born();
+    const goals = graph.list().filter((n) => n.kind === 'goal');
+    expect(goals.length).toBeGreaterThan(0);
+    for (const n of goals) expect(sourced(n)).toBe(true);
+  });
+
+  test('memory facts and their category topics are operator-sourced', async () => {
+    const { graph } = await born();
+    const memory = graph.list().filter((n) => n.meta?.stage === 'birth:memory');
+    expect(memory.some((n) => n.kind === 'fact')).toBe(true);
+    expect(memory.some((n) => n.kind === 'topic')).toBe(true);
+    for (const n of memory) expect(sourced(n)).toBe(true);
+  });
+
+  test('knowledge-map items are operator-sourced (cycles the operator steers)', async () => {
+    const { graph } = await born();
+    const knowledge = graph.list().filter((n) => n.meta?.stage === 'birth:knowledge');
+    expect(knowledge.length).toBeGreaterThan(0);
+    for (const n of knowledge) expect(sourced(n)).toBe(true);
+  });
+
+  test('the bots themselves (fleet entities) are not', async () => {
+    const { graph } = await born();
+    const bots = graph.list().filter((n) => n.kind === 'entity');
+    expect(bots).toHaveLength(2);
+    for (const n of bots) expect(sourced(n)).toBe(false);
+  });
+
+  test('resync marks what it adds the same way', async () => {
+    const { d, graph } = await born();
+    write(
+      join(root, 'souls', 'b2', 'GOALS.md'),
+      '# Goals\n\n## Active\n\n- [ ] Call the new supplier\n  - id: g-33333333\n  - status: pending\n  - priority: low\n\n## Completed\n'
+    );
+    await runResync(d);
+    expect(sourced(graph.findByKey('goal:b2:g-33333333'))).toBe(true);
+  });
+});

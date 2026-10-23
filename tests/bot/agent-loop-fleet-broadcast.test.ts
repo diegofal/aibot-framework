@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AgentLoop } from '../../src/bot/agent-loop';
+import { AgentLoop, broadcastsConsumedBy, curiositySurpriseEvent } from '../../src/bot/agent-loop';
 import type { WatcherBroadcastSource, WatcherSelfStateSource } from '../../src/bot/types';
 import { GlobalAgentLoopConfigSchema } from '../../src/config';
 
@@ -207,6 +207,40 @@ describe('agent loop: fleet broadcasts', () => {
   });
 });
 
+describe('agent loop: broadcasts are consumed only by a cycle that acted on the answer', () => {
+  test('a planner that fails leaves them pending', async () => {
+    const { source, shown } = fakeSource(items);
+    const { loop } = makeLoop(plan(), { source });
+    const llm = (loop as any).ctx.llmClients.get('bot1');
+    llm.generate = mock(() => Promise.reject(new Error('planner down')));
+    await loop.runOne('bot1');
+    expect(shown).toEqual([]);
+    expect(source.pendingFor('bot1').map((b) => b.id)).toEqual(['b-11111111', 'b-22222222']);
+  });
+
+  test('an idle cycle leaves them pending (the row still says the planner saw them)', async () => {
+    const { source, shown } = fakeSource(items);
+    const { loop } = makeLoop(
+      JSON.stringify({ reasoning: 'nothing to do', plan: [], priority: 'none' }),
+      { source }
+    );
+    await loop.runOne('bot1');
+    expect(shown).toEqual([]);
+    expect(source.pendingFor('bot1')).toHaveLength(2);
+    const [row] = cycleRows();
+    expect(row.status).toBe('idle');
+    expect(row.broadcastIds).toEqual(['b-11111111', 'b-22222222']);
+  });
+
+  test('only a completed, non-explore cycle consumes them', () => {
+    expect(broadcastsConsumedBy('completed', false)).toBe(true);
+    expect(broadcastsConsumedBy('completed', true)).toBe(false);
+    for (const status of ['idle', 'skipped', 'error'] as const) {
+      expect(broadcastsConsumedBy(status, false)).toBe(false);
+    }
+  });
+});
+
 describe('agent loop: your current state (watcher phase 4)', () => {
   for (const mode of ['periodic', 'continuous']) {
     test(`${mode}: the planner sees the watcher's view of the bot`, async () => {
@@ -238,5 +272,27 @@ describe('agent loop: your current state (watcher phase 4)', () => {
     await loop.runOne('bot1');
     expect(systems.some((s) => s.includes('## Your current state'))).toBe(false);
     expect(cycleRows()).toHaveLength(1);
+  });
+});
+
+describe('agent loop: curiosity surprises reach the activity stream (the watcher senses them)', () => {
+  test('one curiosity:surprise event per cycle with surprises, clipped', () => {
+    const long = 'x'.repeat(400);
+    const ev = curiositySurpriseEvent('bot1', ['a', 'b', 'c', 'd', long], 'c-1', 1000);
+    expect(ev).toMatchObject({ type: 'curiosity:surprise', botId: 'bot1', timestamp: 1000 });
+    const data = ev?.data as { surprises: string[]; summary: string; cycleId: string };
+    expect(data.surprises).toEqual(['a', 'b', 'c']);
+    expect(data.summary).toBe('a');
+    expect(data.cycleId).toBe('c-1');
+    const clipped = curiositySurpriseEvent('bot1', [long], undefined, 1)?.data as {
+      surprises: string[];
+    };
+    expect(clipped.surprises[0].length).toBeLessThanOrEqual(200);
+  });
+
+  test('none without surprises', () => {
+    expect(curiositySurpriseEvent('bot1', [], 'c-1', 1)).toBeUndefined();
+    expect(curiositySurpriseEvent('bot1', undefined, 'c-1', 1)).toBeUndefined();
+    expect(curiositySurpriseEvent('bot1', ['  '], 'c-1', 1)).toBeUndefined();
   });
 });

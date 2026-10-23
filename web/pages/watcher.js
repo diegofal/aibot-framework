@@ -18,6 +18,7 @@ import {
   SPAWN_PACE,
   applyWatcherEvent,
   birthDate,
+  canStartReplay,
   createWatcherModel,
   isWatcherOff,
   legendHtml,
@@ -59,6 +60,7 @@ export function destroyWatcher() {
   generation++;
   if (!page) return;
   page.stopped = true;
+  page.listeners?.abort();
   page.socket?.close();
   page.ball?.dispose();
   clearInterval(page.clock);
@@ -415,11 +417,13 @@ async function fetchDay(date) {
 }
 
 async function startReplay({ date, birthOnly, label }) {
-  if (!page?.ball || page.replay) return;
+  if (!canStartReplay(page)) return;
   if (!date) {
     showToast(birthOnly ? 'The watcher has not been born yet.' : 'Pick a day to replay.');
     return;
   }
+  const mine = page;
+  mine.replayLoading = true;
   let rows;
   try {
     rows = await fetchDay(date);
@@ -427,8 +431,10 @@ async function startReplay({ date, birthOnly, label }) {
   } catch (err) {
     showToast(`Could not load the log of ${date}: ${err.message}`, { tone: 'danger' });
     return;
+  } finally {
+    mine.replayLoading = false;
   }
-  if (!page) return;
+  if (!page || page !== mine || page.replay) return;
   if (birthOnly) rows = rows.filter((r) => r.phase === 'birth');
   const steps = replayQueue(rows, SPAWN_PACE);
   if (!steps.length) {
@@ -489,46 +495,55 @@ function endReplay() {
 
 /* ── Wiring ──────────────────────────────────────────────────────── */
 
-function wire(el) {
-  el.addEventListener('click', (e) => {
-    if (!page) return;
-    const action = e.target.closest('[data-action]')?.dataset.action;
-    switch (action) {
-      case 'watcher-start':
-        return setRunning('start');
-      case 'watcher-stop':
-        return setRunning('stop');
-      case 'watcher-clear-filter':
-        return clearFilter();
-      case 'watcher-pause':
-        page.paused = !page.paused;
-        if (!page.paused) {
-          page.pending = 0;
-          drawLog();
+/** One delegated click listener per render, removed by `destroyWatcher` (`page.listeners`). */
+function wire(el, signal) {
+  el.addEventListener(
+    'click',
+    (e) => {
+      if (!page) return;
+      const action = e.target.closest('[data-action]')?.dataset.action;
+      switch (action) {
+        case 'watcher-start':
+          return setRunning('start');
+        case 'watcher-stop':
+          return setRunning('stop');
+        case 'watcher-clear-filter':
+          return clearFilter();
+        case 'watcher-pause':
+          page.paused = !page.paused;
+          if (!page.paused) {
+            page.pending = 0;
+            drawLog();
+          }
+          return drawLogHead();
+        case 'watcher-replay-birth':
+          return startReplay({
+            date: birthDate(page.model.state),
+            birthOnly: true,
+            label: 'birth',
+          });
+        case 'watcher-replay-day': {
+          const date = $('#watcher-replay-date')?.value || '';
+          return startReplay({ date, birthOnly: false, label: date });
         }
-        return drawLogHead();
-      case 'watcher-replay-birth':
-        return startReplay({ date: birthDate(page.model.state), birthOnly: true, label: 'birth' });
-      case 'watcher-replay-day': {
-        const date = $('#watcher-replay-date')?.value || '';
-        return startReplay({ date, birthOnly: false, label: date });
+        case 'watcher-replay-stop':
+          return endReplay();
+        case 'watcher-introspect':
+          return askIntrospection();
+        default:
+          break;
       }
-      case 'watcher-replay-stop':
-        return endReplay();
-      case 'watcher-introspect':
-        return askIntrospection();
-      default:
-        break;
-    }
-    const signal = e.target.closest('[data-watcher-signal]');
-    if (signal) {
-      return sendSignal(signal.dataset.signalId, signal.dataset.watcherSignal);
-    }
-    const neuronLink = e.target.closest('[data-watcher-neuron]');
-    if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
-    const li = e.target.closest('li.watcher-row');
-    if (li && !page.replay && li.dataset.neurons) selectRow(li);
-  });
+      const signal = e.target.closest('[data-watcher-signal]');
+      if (signal) {
+        return sendSignal(signal.dataset.signalId, signal.dataset.watcherSignal);
+      }
+      const neuronLink = e.target.closest('[data-watcher-neuron]');
+      if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
+      const li = e.target.closest('li.watcher-row');
+      if (li && !page.replay && li.dataset.neurons) selectRow(li);
+    },
+    { signal }
+  );
 }
 
 async function mountTheBall() {
@@ -615,6 +630,8 @@ export async function renderWatcher(el) {
     self: self && !self.error ? self : null,
     introspecting: false,
     slowClock: null,
+    listeners: new AbortController(),
+    replayLoading: false,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -627,7 +644,7 @@ export async function renderWatcher(el) {
   drawInsights();
   drawBroadcasts();
   drawSelf();
-  wire(el);
+  wire(el, page.listeners.signal);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();
   }, SLOW_CLOCK_MS);

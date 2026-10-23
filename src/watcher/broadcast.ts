@@ -11,7 +11,10 @@
  * restart never resets them: at most `maxPerBotPerDay` (3) per bot per UTC
  * day, and never two of the same kind for the same insight. The record is
  * written before delivery is awaited, so concurrent sends cannot both pass
- * the cap; a failed delivery still counts. Never throws.
+ * the cap; a failed delivery still counts toward the daily cap, but is not a
+ * duplicate: only a delivered (or still in flight) broadcast blocks another
+ * of the same kind for the same insight, so a failed one may be retried.
+ * Never throws.
  *
  * The planner sees what was delivered and not shown yet (`pendingFor`, 24 h)
  * in its "## Fleet broadcast" section; the cycle row names what it served
@@ -178,7 +181,10 @@ export class Broadcaster {
     const kind = input.kind;
     if (!text && kind !== 'wake') return { status: 'invalid' };
     for (const b of this.byId.values()) {
-      if (b.insightId === insightId && b.kind === kind) return { status: 'duplicate' };
+      if (b.insightId !== insightId || b.kind !== kind) continue;
+      // A failed delivery may be retried; a delivered or in-flight one may not.
+      if (b.deliveryError !== undefined && !b.deliveredAt) continue;
+      return { status: 'duplicate' };
     }
     if (this.countToday(botId) >= this.cap) {
       this.deps.log?.say(

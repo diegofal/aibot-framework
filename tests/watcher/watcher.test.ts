@@ -166,7 +166,9 @@ describe('Watcher', () => {
     expect(watcher.buffer.size()).toBe(1);
   });
 
-  test('the operator is recognised by config.operator.telegramChatId', async () => {
+  // Telegram never emits a human_inbound (the operator's private chat arrives on
+  // operator_message): one claiming the operator's chat id is not the operator.
+  test('a human_inbound is never the operator, even on the operator chat id', async () => {
     const { watcher, hooks } = make();
     await watcher.start();
     await watcher.idle();
@@ -184,8 +186,12 @@ describe('Watcher', () => {
       timestamp: t,
       text: 'Pay the Acme invoice',
     });
-    const texts = watcher.buffer.items().map((i) => (i.event as { text?: string }).text);
-    expect(texts).toEqual(['Pay the Acme invoice', 'acme invoice']);
+    const items = watcher.buffer.items();
+    expect(items.map((i) => (i.event as { text?: string }).text)).toEqual([
+      'acme invoice',
+      'acme invoice',
+    ]);
+    expect(items.every((i) => i.fromOperator === undefined)).toBe(true);
     await watcher.stop();
   });
 
@@ -620,14 +626,17 @@ describe('createFleetWatcher broadcasts wiring (phase 3)', () => {
           calls.push(`directive:${botId}:${text}:${source}`);
         },
       }),
+      // A question goes out through the shared throttle and the bot's route, never its executor.
       getToolRegistry: () => ({
         setFleetMemory: () => {},
-        createExecutor:
-          (chatId: number, botId: string) =>
-          async (name: string, args: Record<string, unknown>) => {
-            calls.push(`exec:${chatId}:${botId}:${name}:${args.chatId}:${args.message}`);
-            return { success: true, content: 'Message sent to the operator (chat 42)' };
+        getProactiveThrottle: () => ({ check: () => ({ allowed: true }), record: () => {} }),
+      }),
+      getOperatorTelegramRoute: (botId: string) => ({
+        api: {
+          sendMessage: async (chatId: number, text: string) => {
+            calls.push(`telegram:${botId}:${chatId}:${text}`);
           },
+        },
       }),
       setWatcherBroadcasts: (source) => {
         published = source;
@@ -645,7 +654,7 @@ describe('createFleetWatcher broadcasts wiring (phase 3)', () => {
     expect(calls).toEqual([
       'wake:b1:false',
       'directive:b1:Check the lead:watcher',
-      'exec:0:b1:send_proactive_message:operator:Fleet watcher: Who owns Acme?',
+      'telegram:b1:42:Fleet watcher: Who owns Acme?',
     ]);
     const goals = require('node:fs').readFileSync(join(root, 'souls', 'b1', 'GOALS.md'), 'utf-8');
     expect(goals).toContain('Merge the lead lists');
@@ -698,6 +707,8 @@ describe('Watcher self-model (phase 4)', () => {
       timestamp: t,
       text: 'please look at the boiler',
     });
+    // Sensing runs right after the publish call (a batch on the next macrotask).
+    await new Promise((r) => setImmediate(r));
     t += 2 * 3_600_000;
     const i = watcher.interoception();
     expect(i.fleetKarmaAvg).toBe(60);
@@ -800,6 +811,8 @@ describe('Watcher self-model (phase 4)', () => {
     await on.watcher.idle();
     expect(on.watcher.sampleTick()).toBe(true);
     expect(on.watcher.sampleTick()).toBe(false);
+    // stop() aborts a sample still in flight: let this one land first.
+    await on.watcher.introspect('sample');
     await on.watcher.stop();
     expect(on.watcher.introspection()[0]).toMatchObject({ subject: 'watcher', trigger: 'sample' });
 
@@ -860,5 +873,159 @@ describe('createFleetWatcher (phase 4)', () => {
     expect(deps.karmaScores?.()).toEqual([55]);
     expect(deps.runningCycle?.('b1')).toEqual({ cycleId: 'c-9' });
     expect(typeof deps.semaphore?.().limit).toBe('number');
+  });
+});
+
+describe('Watcher stop (shutdown never hangs on a model call)', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+
+  test('stop aborts an in-flight notice call and still compacts and persists', async () => {
+    const signals: AbortSignal[] = [];
+    const client = {
+      backend: 'claude-cli',
+      generate: async () => ({ text: '' }),
+      // Never resolves, never listens to the signal: the worst a client can do.
+      chat: (_m: unknown, opts?: { signal?: AbortSignal }) => {
+        if (opts?.signal) signals.push(opts.signal);
+        return new Promise(() => {});
+      },
+    } as unknown as LLMClient;
+    const { watcher, activityStream } = make(
+      { llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } } },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    activityStream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    await settle();
+    const pass = watcher.noticeNow();
+    await settle();
+    expect(signals).toHaveLength(1);
+    const started = Date.now();
+    const state = await watcher.stop();
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(signals[0].aborted).toBe(true);
+    expect(state.running).toBe(false);
+    expect(state.phase).toBe('sleep');
+    expect(existsSync(graphFiles(join(root, 'data', 'watcher')).graph)).toBe(true);
+    expect(watcher.log.recent(1)[0].op).toBe('sleep');
+    expect((await pass)?.status).not.toBe('noticed');
+  });
+
+  test('an aborted call does not count as a backend failure', async () => {
+    const failures: string[] = [];
+    const client = {
+      backend: 'claude-cli',
+      generate: async () => ({ text: '' }),
+      chat: () => new Promise(() => {}),
+    } as unknown as LLMClient;
+    const { watcher, activityStream } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        breaker: {
+          isOpen: () => false,
+          recordFailure: (b) => {
+            failures.push(b);
+            return {};
+          },
+          recordSuccess: () => {},
+        },
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await settle();
+    void watcher.noticeNow();
+    await settle();
+    await watcher.stop();
+    expect(failures).toEqual([]);
+  });
+
+  test('stop is bounded even when a pass hangs on something that cannot be aborted', async () => {
+    let itemId = '';
+    let hang = false;
+    let embedCalls = 0;
+    let callsAtBirth = 0;
+    const { client } = noticeClient(() =>
+      JSON.stringify({
+        keep: [
+          {
+            text: 'The boiler is serviced in May',
+            kind: 'fact',
+            confidence: 'high',
+            from: [itemId],
+          },
+        ],
+      })
+    );
+    const { watcher, activityStream } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        // After birth the embedder never answers, and it takes no signal.
+        embed: (): Promise<number[]> => {
+          embedCalls++;
+          return hang ? new Promise(() => {}) : Promise.resolve([1, 0]);
+        },
+        stopTimeoutMs: 50,
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    hang = true;
+    callsAtBirth = embedCalls;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    activityStream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    await settle();
+    itemId =
+      watcher.buffer.items().find((i) => (i.event as { type?: string }).type === 'worker:waiting')
+        ?.id ?? '';
+    void watcher.noticeNow();
+    await settle();
+    expect(embedCalls).toBeGreaterThan(callsAtBirth);
+    const started = Date.now();
+    const state = await watcher.stop();
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(state.running).toBe(false);
+    expect(existsSync(graphFiles(join(root, 'data', 'watcher')).graph)).toBe(true);
+  });
+});
+
+describe('Watcher start that fails', () => {
+  test('reports not running: state, fleetMemory, selfStateFor and a later start behave', async () => {
+    let broken = true;
+    const real = new EventEmitter();
+    const stream = {
+      on: (event: string, fn: (...a: unknown[]) => void) => {
+        if (broken) throw new Error('stream unavailable');
+        real.on(event, fn);
+        return stream;
+      },
+      off: (event: string, fn: (...a: unknown[]) => void) => {
+        real.off(event, fn);
+        return stream;
+      },
+    };
+    const { watcher } = make({ activityStream: stream as never });
+    const state = await watcher.start();
+    expect(state.running).toBe(false);
+    expect(state.phase).toBe('sleep');
+    expect(state.lastError).toContain('stream unavailable');
+    expect(watcher.state().running).toBe(false);
+    expect(watcher.fleetMemory()).toBeUndefined();
+    expect(watcher.selfStateFor('b1')).toBeUndefined();
+    await watcher.idle();
+    expect(watcher.noticing).toBe(false);
+    expect(watcher.integrating).toBe(false);
+
+    broken = false;
+    const again = await watcher.start();
+    expect(again.running).toBe(true);
+    await watcher.idle();
+    expect(watcher.fleetMemory()).toBeDefined();
+    await watcher.stop();
   });
 });

@@ -8,6 +8,11 @@
  * Privacy: memory is read from `MEMORY.md` and the top-level `memory/*.md`
  * files only. `memory/users/**` (people's private memory) and
  * `memory/archive/**` are never opened: the directory listing keeps files only.
+ * Everything read from operator-owned material — contacts (people), GOALS.md
+ * and tasks (goals), KNOWLEDGE.json (cycles the operator steers) and memory
+ * (facts and their category topics) — is marked `meta.operatorSourced`, so
+ * `fleet_memory_search` shows it only to the operator. Only the bots
+ * themselves (fleet entities) are not.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -57,6 +62,7 @@ import {
   type LinkStatus,
   type Neuron,
   type NeuronKind,
+  OPERATOR_SOURCED,
   type Vec3,
   WATCHER_DEFAULTS,
 } from './types';
@@ -321,6 +327,7 @@ function stagePeople(ctx: StageCtx): void {
           key: d.key,
           channels: d.channels.join(' + '),
           stage: `${ctx.mode}:people`,
+          [OPERATOR_SOURCED]: 'true',
           ...(d.operator ? { role: 'operator' } : {}),
         },
       });
@@ -406,6 +413,7 @@ function stageGoals(ctx: StageCtx): void {
           priority: g.priority,
           openTasks: String(open.length),
           stage: `${ctx.mode}:goals`,
+          [OPERATOR_SOURCED]: 'true',
           ...(g.id ? { goalId: g.id } : {}),
           ...(g.kind ? { kind: g.kind } : {}),
           ...(g.source ? { source: g.source } : {}),
@@ -476,7 +484,7 @@ function stageKnowledge(ctx: StageCtx): void {
         },
         createdBy: by,
         ...(opts.confidence ? { confidence: opts.confidence } : {}),
-        meta: { key, stage: 'birth:knowledge', ...(opts.meta ?? {}) },
+        meta: { key, stage: 'birth:knowledge', [OPERATOR_SOURCED]: 'true', ...(opts.meta ?? {}) },
       });
       const edgeIds: string[] = [];
       const target = opts.about ?? owner;
@@ -593,6 +601,7 @@ function stageMemory(ctx: StageCtx): void {
           key,
           source: f.source,
           stage: 'birth:memory',
+          [OPERATOR_SOURCED]: 'true',
           ...(f.category ? { category: f.category } : {}),
         },
       });
@@ -607,7 +616,7 @@ function stageMemory(ctx: StageCtx): void {
             text: clip(f.category),
             support: { bots: [bot.id], paths: [f.source] },
             createdBy: by,
-            meta: { key: tkey, stage: 'birth:memory' },
+            meta: { key: tkey, stage: 'birth:memory', [OPERATOR_SOURCED]: 'true' },
           });
           neuronIds.push(topic.id);
           if (owner)

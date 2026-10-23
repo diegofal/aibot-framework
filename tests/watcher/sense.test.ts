@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-function setup(opts: { isOperator?: boolean } = {}) {
+function setup(opts: { isOperator?: boolean; deferred?: boolean } = {}) {
   const now = () => t;
   const changes: GraphChange[] = [];
   const graph = new Graph(join(dir, 'g'), { now, onChange: (c) => changes.push(c) });
@@ -34,6 +34,8 @@ function setup(opts: { isOperator?: boolean } = {}) {
     config: () => WATCHER_DEFAULTS,
     botName: (id) => (id === 'b1' ? 'jarvis' : id),
     sender: () => ({ name: 'Ana', isOperator: opts.isOperator ?? false }),
+    // The behaviour tests sense in the publish call; `deferred` keeps the real batching.
+    ...(opts.deferred ? {} : { defer: (fn: () => void) => fn() }),
   });
   const stream = new EventEmitter();
   const hooks = new EventEmitter();
@@ -220,33 +222,13 @@ describe('inboundSender (who counts as the operator)', () => {
     metadata: { role: 'operator' },
   } as never;
 
-  test('the operator Telegram private chat is the operator', () => {
-    expect(inboundSender(ev(), { operatorChatId: 42 })).toEqual({
-      isOperator: true,
-      name: 'the operator',
-    });
-  });
-
-  test('a Telegram group message from the operator user id is not', () => {
-    expect(inboundSender(ev({ chatId: '-1001' }), { operatorChatId: 42 }).isOperator).toBe(false);
-  });
-
-  test('another Telegram chat is not the operator', () => {
-    expect(inboundSender(ev({ chatId: '7', userId: '7' }), { operatorChatId: 42 }).isOperator).toBe(
-      false
-    );
-  });
-
-  test('without a configured operator chat nobody on Telegram is the operator', () => {
-    expect(inboundSender(ev(), {}).isOperator).toBe(false);
-  });
-
-  for (const kind of ['rest', 'web', 'whatsapp', 'discord', 'dashboard']) {
-    test(`a contact with the operator role on ${kind} is not trusted`, () => {
-      const who = inboundSender(ev({ channelKind: kind, chatId: 'a@b.c', userId: 'a@b.c' }), {
-        operatorChatId: 42,
-        contact: operatorContact,
-      });
+  // Telegram never emits a `human_inbound` (handleConversation skips the hook;
+  // the operator's private chat arrives on `operator_message`), and on every
+  // other channel the sender id is client-supplied: a `human_inbound` is never
+  // the operator, whatever its chat or the contact's role.
+  for (const kind of ['telegram', 'rest', 'web', 'whatsapp', 'discord', 'dashboard']) {
+    test(`a human_inbound on ${kind} is never the operator, even from a contact with that role`, () => {
+      const who = inboundSender(ev({ channelKind: kind }), { contact: operatorContact });
       expect(who.isOperator).toBe(false);
       expect(who.name).toBe('Diego');
     });
@@ -254,11 +236,12 @@ describe('inboundSender (who counts as the operator)', () => {
 
   test('a known contact keeps its display name', () => {
     expect(
-      inboundSender(ev({ chatId: '7', userId: '7' }), {
-        operatorChatId: 42,
-        contact: { displayName: 'Ana' } as never,
-      })
+      inboundSender(ev({ chatId: '7', userId: '7' }), { contact: { displayName: 'Ana' } as never })
     ).toEqual({ isOperator: false, name: 'Ana' });
+  });
+
+  test('an unknown sender has no name and is not the operator', () => {
+    expect(inboundSender(ev(), {})).toEqual({ isOperator: false });
   });
 });
 
@@ -302,6 +285,48 @@ describe('Sense.onItem (phase 3: integrate accumulates what notice drains)', () 
     expect(
       sense.handle({ type: 'worker:waiting', botId: 'b1', timestamp: t } as never)
     ).not.toBeNull();
+    expect(buffer.size()).toBe(1);
+  });
+});
+
+describe('Sense: off the publisher call (hot path)', () => {
+  test('publishing only queues the event; it is scored in a batch after the publish returns', async () => {
+    const { stream, hooks, buffer, rows } = setup({ deferred: true });
+    stream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    hooks.emit(HUMAN_INBOUND_HOOK, {
+      botId: 'b1',
+      channelKind: 'web',
+      chatId: 'c1',
+      timestamp: t,
+      text: 'Where is the invoice',
+    });
+    stream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    expect(buffer.size()).toBe(0);
+    expect(rows).toHaveLength(0);
+    await new Promise((r) => setImmediate(r));
+    expect(buffer.items().map((i) => (i.event as { type?: string }).type ?? 'human')).toEqual([
+      'worker:waiting',
+      'human',
+      'llm:error',
+    ]);
+  });
+
+  test('flush() senses what is queued at once (stop and the read APIs use it)', () => {
+    const { stream, buffer, sense } = setup({ deferred: true });
+    stream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    expect(buffer.size()).toBe(0);
+    sense.flush();
+    expect(buffer.size()).toBe(1);
+    sense.flush();
+    expect(buffer.size()).toBe(1);
+  });
+
+  test('a detached sense still senses what was queued before detaching, once', async () => {
+    const { stream, buffer, sense } = setup({ deferred: true });
+    stream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    sense.detach();
+    stream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
     expect(buffer.size()).toBe(1);
   });
 });

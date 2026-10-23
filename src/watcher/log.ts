@@ -2,6 +2,8 @@
  * The watcher log: `<dir>/YYYY-MM-DD.jsonl`, one row per thing the watcher
  * does, in first-person English written by code. Every row also goes to the
  * pino logger and to `onRow` (the watcher re-emits it as `watcher:log`).
+ * In the main log, `sense` rows (one per salient event, the bulk) are at
+ * debug and every other phase at info, so the watcher never floods it.
  * Readers never throw; a failed write is a warning, never an exception.
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
@@ -11,7 +13,11 @@ import type { WatcherLogRow, WatcherPhase } from './types';
 const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
 
 export interface WatcherLogOptions {
-  logger?: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void };
+  logger?: {
+    info: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
+    debug?: (obj: object, msg: string) => void;
+  };
   now?: () => number;
   onRow?: (row: WatcherLogRow) => void;
 }
@@ -47,7 +53,8 @@ export class WatcherLog {
       this.opts.logger?.warn({ err }, 'WatcherLog: failed to append row');
     }
     const { text, ...rest } = full;
-    this.opts.logger?.info({ watcher: full.op, ...rest }, text);
+    if (full.phase === 'sense') this.opts.logger?.debug?.({ watcher: full.op, ...rest }, text);
+    else this.opts.logger?.info({ watcher: full.op, ...rest }, text);
     try {
       this.opts.onRow?.(full);
     } catch (err) {

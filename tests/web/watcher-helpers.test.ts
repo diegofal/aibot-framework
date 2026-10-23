@@ -6,6 +6,7 @@ import {
   NEURON_KINDS,
   applyWatcherEvent,
   birthDate,
+  canStartReplay,
   createWatcherModel,
   drainCount,
   edgeVisible,
@@ -641,5 +642,17 @@ describe('isWatcherOff', () => {
     expect(isWatcherOff(null)).toBe(false);
     expect(isWatcherOff(undefined)).toBe(false);
     expect(isWatcherOff('nope')).toBe(false);
+  });
+});
+
+describe('canStartReplay (no double start)', () => {
+  it('needs the ball, no replay running and none loading', () => {
+    const ball = {};
+    expect(canStartReplay({ ball, replay: null, replayLoading: false })).toBe(true);
+    expect(canStartReplay({ ball: null, replay: null })).toBe(false);
+    expect(canStartReplay({ ball, replay: { steps: [] } })).toBe(false);
+    // A second click while the first is still fetching the day's log.
+    expect(canStartReplay({ ball, replay: null, replayLoading: true })).toBe(false);
+    expect(canStartReplay(null)).toBe(false);
   });
 });

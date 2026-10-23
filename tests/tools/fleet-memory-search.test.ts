@@ -32,13 +32,16 @@ function add(text: string, bots = ['b1'], kind: 'fact' | 'topic' = 'fact') {
   return graph.addNeuron({ kind, text, support: { bots }, createdBy: 'watcher' });
 }
 
+/** A caller of bot b1 that is not the operator (the default visibility). */
+const asB1 = { _botId: 'b1' };
+
 describe('fleet_memory_search', () => {
   test('ranks by text when there are no embeddings, best first', async () => {
     add('The blue heron nests behind the old water tower');
     add('Water bills are paid on the first of the month');
     add('Nothing about birds here');
     const tool = createFleetMemorySearchTool(() => ({ graph }));
-    const res = await tool.execute({ query: 'where does the heron nest' }, logger);
+    const res = await tool.execute({ query: 'where does the heron nest', ...asB1 }, logger);
     expect(res.success).toBe(true);
     const heron = res.content.indexOf('blue heron');
     expect(heron).toBeGreaterThan(-1);
@@ -50,7 +53,7 @@ describe('fleet_memory_search', () => {
   test('says which bots know it and when, by name', async () => {
     add('The blue heron nests behind the old water tower', ['b1', 'b9']);
     const tool = createFleetMemorySearchTool(() => ({ graph }));
-    const res = await tool.execute({ query: 'heron nests' }, logger);
+    const res = await tool.execute({ query: 'heron nests', ...asB1 }, logger);
     expect(res.content).toContain('fact');
     expect(res.content).toContain('Jarvis, b9');
     expect(res.content).toContain('2026-10-23');
@@ -62,7 +65,7 @@ describe('fleet_memory_search', () => {
     graph.setEmbedding(a.id, [1, 0]);
     graph.setEmbedding(b.id, [0, 1]);
     const tool = createFleetMemorySearchTool(() => ({ graph, embed: async () => [0.1, 0.99] }));
-    const res = await tool.execute({ query: 'zzz' }, logger);
+    const res = await tool.execute({ query: 'zzz', ...asB1 }, logger);
     expect(res.content.indexOf('Beta thing')).toBeGreaterThan(-1);
     expect(res.content).not.toContain('Alpha thing');
   });
@@ -75,7 +78,7 @@ describe('fleet_memory_search', () => {
         throw new Error('ollama down');
       },
     }));
-    const res = await tool.execute({ query: 'heron nests' }, logger);
+    const res = await tool.execute({ query: 'heron nests', ...asB1 }, logger);
     expect(res.content).toContain('blue heron');
   });
 
@@ -83,7 +86,7 @@ describe('fleet_memory_search', () => {
     const n = add('The blue heron nests behind the old water tower');
     graph.archive(n.id);
     const tool = createFleetMemorySearchTool(() => ({ graph }));
-    const res = await tool.execute({ query: 'heron nests' }, logger);
+    const res = await tool.execute({ query: 'heron nests', ...asB1 }, logger);
     expect(res.content).not.toContain('blue heron');
     expect(res.content).toContain('Nothing in the fleet memory');
   });
@@ -91,7 +94,7 @@ describe('fleet_memory_search', () => {
   test('results are wrapped as external content', async () => {
     add('The blue heron nests behind the old water tower');
     const tool = createFleetMemorySearchTool(() => ({ graph }));
-    const res = await tool.execute({ query: 'heron' }, logger);
+    const res = await tool.execute({ query: 'heron', ...asB1 }, logger);
     expect(res.content.startsWith('<<<EXTERNAL_UNTRUSTED_CONTENT>>>')).toBe(true);
     expect(res.content.endsWith('<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>')).toBe(true);
   });
@@ -100,22 +103,22 @@ describe('fleet_memory_search', () => {
     for (let i = 0; i < 15; i++) add(`heron sighting number ${i}`);
     const tool = createFleetMemorySearchTool(() => ({ graph }));
     const count = (s: string) => (s.match(/^\d+\. /gm) ?? []).length;
-    expect(count((await tool.execute({ query: 'heron sighting', limit: 3 }, logger)).content)).toBe(
-      3
-    );
     expect(
-      count((await tool.execute({ query: 'heron sighting', limit: 50 }, logger)).content)
+      count((await tool.execute({ query: 'heron sighting', limit: 3, ...asB1 }, logger)).content)
+    ).toBe(3);
+    expect(
+      count((await tool.execute({ query: 'heron sighting', limit: 50, ...asB1 }, logger)).content)
     ).toBe(FLEET_MEMORY_MAX_RESULTS);
   });
 
   test('a missing query is an error', async () => {
     const tool = createFleetMemorySearchTool(() => ({ graph }));
-    expect((await tool.execute({ query: '  ' }, logger)).success).toBe(false);
+    expect((await tool.execute({ query: '  ', ...asB1 }, logger)).success).toBe(false);
   });
 
   test('without a watcher it says the fleet memory is not available', async () => {
     const tool = createFleetMemorySearchTool(() => undefined);
-    const res = await tool.execute({ query: 'heron' }, logger);
+    const res = await tool.execute({ query: 'heron', ...asB1 }, logger);
     expect(res.success).toBe(false);
     expect(res.content).toContain('not available');
   });
@@ -187,7 +190,80 @@ describe('fleet_memory_search: operator-sourced neurons (privacy)', () => {
   });
 
   test('everyone still gets the neurons with no operator-sourced support', async () => {
-    const res = await setupPrivate().execute({ ...query, _actor: 'self' }, logger);
+    const res = await setupPrivate().execute({ ...query, _actor: 'self', _botId: 'b1' }, logger);
     expect(res.content).toContain('school calendar changes');
+  });
+});
+
+describe('fleet_memory_search: what a non-operator caller may see (scope)', () => {
+  const setup = (opts: { isTenantBot?: (id: string) => boolean } = {}) => {
+    graph.addNeuron({
+      kind: 'entity',
+      text: 'Scout: finds suppliers',
+      support: { bots: ['b2'] },
+      createdBy: 'bot:b2',
+      meta: { key: 'bot:b2', name: 'Scout', botId: 'b2' },
+    });
+    graph.addNeuron({
+      kind: 'entity',
+      text: 'Tenant helper: suppliers for a customer',
+      support: { bots: ['t1'] },
+      createdBy: 'bot:t1',
+      meta: { key: 'bot:t1', name: 'Tenant helper', botId: 't1' },
+    });
+    add('Suppliers in Rosario ship on Tuesdays', ['b1']);
+    add('Suppliers in Cordoba ship on Fridays', ['b2']);
+    add('Suppliers are discussed fleet-wide', []);
+    return createFleetMemorySearchTool(() => ({ graph }), opts);
+  };
+  const run = async (args: Record<string, unknown>, opts = {}) =>
+    (await setup(opts).execute({ query: 'suppliers ship', limit: 10, ...args }, logger)).content;
+
+  test("the bot's own users see what that bot supports", async () => {
+    const out = await run({ _botId: 'b1', _requester: { isOperator: false, channelKind: 'web' } });
+    expect(out).toContain('Rosario');
+  });
+
+  test("they never see what only another bot supports, nor the watcher's own neurons", async () => {
+    const out = await run({ _botId: 'b1', _requester: { isOperator: false, channelKind: 'web' } });
+    expect(out).not.toContain('Cordoba');
+    expect(out).not.toContain('fleet-wide');
+  });
+
+  test("the bot's own runs (_actor self) follow the same rule", async () => {
+    const out = await run({ _botId: 'b1', _actor: 'self' });
+    expect(out).toContain('Rosario');
+    expect(out).not.toContain('Cordoba');
+  });
+
+  test('general fleet entities (the bots) are visible to everyone', async () => {
+    const out = await run({ _botId: 'b1', query: 'Scout suppliers' });
+    expect(out).toContain('Scout: finds suppliers');
+  });
+
+  test('a caller with no bot sees only fleet entities', async () => {
+    const out = await run({});
+    expect(out).toContain('Scout: finds suppliers');
+    expect(out).not.toContain('Rosario');
+  });
+
+  test('the operator sees everything', async () => {
+    const out = await run({ _actor: 'operator' });
+    for (const t of ['Rosario', 'Cordoba', 'fleet-wide']) expect(out).toContain(t);
+  });
+
+  test('a tenant bot is refused, whoever calls', async () => {
+    const tool = setup({ isTenantBot: (id) => id === 't1' });
+    for (const args of [{ _botId: 't1' }, { _botId: 't1', _actor: 'operator' }]) {
+      const res = await tool.execute({ query: 'suppliers', ...args }, logger);
+      expect(res.success).toBe(false);
+      expect(res.failureKind).toBe('policy');
+    }
+  });
+
+  test("a tenant bot's entity is not shown to other bots' non-operator callers", async () => {
+    const out = await run({ _botId: 'b1' }, { isTenantBot: (id: string) => id === 't1' });
+    expect(out).not.toContain('Tenant helper');
+    expect(out).toContain('Scout');
   });
 });

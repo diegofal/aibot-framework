@@ -7,11 +7,15 @@
  * the fleet circuit breaker) before every call, sends it at semaphore
  * priority `watcher`, writes one query-log entry under `__watcher__` with
  * model, tokens, cost and duration, counts it against the budget, feeds the
- * breaker, and never throws.
+ * breaker, and never throws. Every call gets its own AbortController, aborted
+ * when the watcher's stop signal (`InstrumentOptions.signal`) fires: the
+ * client receives it, and the call stops being waited on even if the client
+ * ignores it. An aborted call is not a backend failure (the breaker is not fed).
  */
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import { usageExtras } from '../bot/llm-query-log';
 import type { Config } from '../config';
+import { isAbort, raceAbort } from '../core/abort';
 import {
   ClaudeCliLLMClient,
   type LLMChatOptions,
@@ -110,7 +114,12 @@ export interface InstrumentOptions {
     recordSuccess(backend: string): void;
   };
   now?: () => number;
+  /** The watcher's stop signal, read per call; aborting it aborts every call in flight. */
+  signal?: () => AbortSignal | undefined;
 }
+
+/** The `error` of a call the watcher's stop aborted. */
+export const WATCHER_CALL_ABORTED = 'aborted: the watcher is stopping';
 
 export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): InstrumentedClient {
   const now = opts.now ?? Date.now;
@@ -140,15 +149,41 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
     model: tier.model,
     backend: tier.backend,
     async chat(messages, callOpts = {}) {
+      const stop = opts.signal?.();
+      if (stop?.aborted) {
+        return {
+          ok: false,
+          reason: 'error',
+          error: WATCHER_CALL_ABORTED,
+          model: tier.model,
+          durationMs: 0,
+        };
+      }
       const decision = opts.budget.reserve(opts.tier);
       if (!decision.ok) return { ok: false, reason: decision.reason };
       const started = Date.now();
+      // One controller per call, linked to the stop signal and the caller's own.
+      const ctrl = new AbortController();
+      const links: Array<[AbortSignal, () => void]> = [];
+      for (const s of [stop, callOpts.signal]) {
+        if (!s) continue;
+        const fn = () => ctrl.abort(s.reason);
+        if (s.aborted) fn();
+        else {
+          s.addEventListener('abort', fn, { once: true });
+          links.push([s, fn]);
+        }
+      }
       try {
-        const res = await tier.client.chat(messages, {
-          ...callOpts,
-          ...(tier.backend === 'ollama' ? { model: tier.model } : {}),
-          priority: 'watcher',
-        });
+        const res = await raceAbort(
+          tier.client.chat(messages, {
+            ...callOpts,
+            ...(tier.backend === 'ollama' ? { model: tier.model } : {}),
+            priority: 'watcher',
+            signal: ctrl.signal,
+          }),
+          ctrl.signal
+        );
         const durationMs = Date.now() - started;
         const usage = res.usage;
         const tokens = usage?.totalTokens ?? 0;
@@ -177,6 +212,23 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
         };
       } catch (err) {
         const durationMs = Date.now() - started;
+        if (ctrl.signal.aborted && isAbort(err, ctrl.signal)) {
+          log({
+            model: tier.model,
+            messageCount: messages.length,
+            durationMs,
+            success: false,
+            error: WATCHER_CALL_ABORTED,
+          });
+          opts.budget.record(opts.tier, {});
+          return {
+            ok: false,
+            reason: 'error',
+            error: WATCHER_CALL_ABORTED,
+            model: tier.model,
+            durationMs,
+          };
+        }
         const error = err instanceof Error ? err.message : String(err);
         log({
           model: tier.model,
@@ -188,6 +240,8 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
         opts.budget.record(opts.tier, {});
         safe(() => opts.breaker?.recordFailure(tier.backend, err));
         return { ok: false, reason: 'error', error, model: tier.model, durationMs };
+      } finally {
+        for (const [s, fn] of links) s.removeEventListener('abort', fn);
       }
     },
   };

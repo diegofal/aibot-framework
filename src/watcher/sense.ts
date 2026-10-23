@@ -8,7 +8,10 @@
  * before anything is stored. Operator messages from the operator surfaces
  * (private Telegram chat, dashboard thread) arrive on `operator_message` and
  * are kept verbatim, flagged `fromOperator`. A listener never throws into the
- * publisher.
+ * publisher, and never works in its call: the listeners only queue the event,
+ * and the queue is sensed in one batch on the next macrotask (`defer`), so a
+ * bot's `ActivityStream.publish` costs a push. `flush()` senses the queue at
+ * once (the watcher calls it before reading the buffer and on stop).
  */
 import { randomBytes } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
@@ -42,30 +45,19 @@ export interface SenderInfo {
 }
 
 /**
- * Who wrote a `human_inbound`. The operator only on a surface that verifies
- * the identity: the operator's private Telegram chat (`operator.telegramChatId`,
- * matched on the chat, so a group message from the operator's user id is not
- * it). Never from a directory contact's role (on REST, web, WhatsApp the
- * sender id is client-supplied) and never from `channelKind: 'dashboard'`: the
- * dashboard thread arrives on `operator_message`, and no channel adapter emits
- * a `human_inbound` with that kind, so one that claims it is not trusted.
+ * Who wrote a `human_inbound`: the contact's name, never the operator. The
+ * operator's surfaces (the private Telegram chat, the dashboard thread)
+ * arrive on `operator_message` instead; Telegram never emits a
+ * `human_inbound`, and on REST, web, WhatsApp and Discord the sender id is
+ * client-supplied, so neither a chat id nor a directory contact's role can
+ * make one the operator.
  */
 export function inboundSender(
-  event: HumanInboundEvent,
-  ctx: {
-    operatorChatId?: number | string;
-    contact?: { displayName?: string } | undefined;
-  }
+  _event: HumanInboundEvent,
+  ctx: { contact?: { displayName?: string } | undefined }
 ): SenderInfo {
-  const op = ctx.operatorChatId;
-  const isOperator =
-    event.channelKind === 'telegram' &&
-    op !== undefined &&
-    op !== null &&
-    String(op) !== '' &&
-    String(event.chatId) === String(op);
-  const name = ctx.contact?.displayName ?? (isOperator ? 'the operator' : undefined);
-  return { isOperator, ...(name ? { name } : {}) };
+  const name = ctx.contact?.displayName;
+  return { isOperator: false, ...(name ? { name } : {}) };
 }
 
 export interface SenseDeps {
@@ -79,6 +71,8 @@ export interface SenseDeps {
   sender?: (event: HumanInboundEvent) => SenderInfo;
   /** Every item kept in the buffer (integrate accumulates them: notice drains the buffer). */
   onItem?: (item: BufferItem) => void;
+  /** Schedules the batch that senses the queue (default `setImmediate`). */
+  defer?: (fn: () => void) => void;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -88,14 +82,18 @@ export class Sense {
   private windowStart: number | null = null;
   private windowCount = 0;
   private windowTop: { what: string; salience: number } | null = null;
+  private queue: Array<
+    { operator: false; e: SensedEvent } | { operator: true; e: OperatorMessageEvent }
+  > = [];
+  private scheduled = false;
 
   constructor(private readonly deps: SenseDeps) {}
 
   attach(stream: Listenable, hooks: Listenable): void {
     this.detach();
-    const onActivity = (e: SensedEvent) => this.safeHandle(e);
-    const onHuman = (e: SensedEvent) => this.safeHandle(e);
-    const onOperator = (e: OperatorMessageEvent) => this.safeHandleOperator(e);
+    const onActivity = (e: SensedEvent) => this.enqueue({ operator: false, e });
+    const onHuman = (e: SensedEvent) => this.enqueue({ operator: false, e });
+    const onOperator = (e: OperatorMessageEvent) => this.enqueue({ operator: true, e });
     stream.on('activity', onActivity);
     hooks.on(HUMAN_INBOUND_HOOK, onHuman);
     hooks.on(OPERATOR_MESSAGE_HOOK, onOperator);
@@ -221,6 +219,33 @@ export class Sense {
     this.windowCount = 0;
     this.windowTop = null;
     return row;
+  }
+
+  /** Sense every queued event now, in arrival order. Never throws. */
+  flush(): void {
+    this.scheduled = false;
+    while (this.queue.length > 0) {
+      const batch = this.queue;
+      this.queue = [];
+      for (const q of batch) {
+        if (q.operator) this.safeHandleOperator(q.e);
+        else this.safeHandle(q.e);
+      }
+    }
+  }
+
+  private enqueue(
+    item: { operator: false; e: SensedEvent } | { operator: true; e: OperatorMessageEvent }
+  ): void {
+    this.queue.push(item);
+    if (this.scheduled) return;
+    this.scheduled = true;
+    try {
+      (this.deps.defer ?? ((fn: () => void) => setImmediate(fn)))(() => this.flush());
+    } catch (err) {
+      this.scheduled = false;
+      this.deps.logger?.warn({ err }, 'Watcher sense: could not schedule sensing');
+    }
   }
 
   private safeHandleOperator(event: OperatorMessageEvent): void {

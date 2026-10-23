@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { textSimilarity as textSimilarityOf } from '../../src/hygiene/text-utils';
 import { cosineSimilarity } from '../../src/memory/search';
 import { Graph, type GraphChange } from '../../src/watcher/graph';
 import { graphFiles } from '../../src/watcher/paths';
@@ -126,6 +127,8 @@ describe('Graph', () => {
     g.addEdge({ from: a.id, to: b.id, rel: 'about', weight: 1, createdBy: 'watcher' });
     g.activate(a.id);
     g.setEmbedding(a.id, [1, 0, 0]);
+    // Activations reach disk in a batch (see "the sensing hot path" below).
+    g.flushActivations();
     const reloaded = graph();
     expect(reloaded.snapshot().neurons).toEqual(g.snapshot().neurons);
     expect(reloaded.snapshot().edges).toEqual(g.snapshot().edges);
@@ -150,12 +153,13 @@ describe('Graph', () => {
     expect(readFileSync(files.embeddings, 'utf-8').trim().split('\n')).toHaveLength(1);
   });
 
-  test('compacts on its own every compactEvery appends', () => {
+  test('compacts on its own every compactEvery appends (off the append path)', async () => {
     const g = graph({ compactEvery: 3 });
     g.addNeuron(fact('a'));
     g.addNeuron(fact('b'));
     expect(existsSync(graphFiles(dir).graph)).toBe(false);
     g.addNeuron(fact('c'));
+    await g.whenCompacted();
     expect(existsSync(graphFiles(dir).graph)).toBe(true);
   });
 
@@ -274,5 +278,152 @@ describe('Graph.patchMeta (phase 3)', () => {
 
   test('unknown id is undefined', () => {
     expect(graph().patchMeta('n-nope', { a: 'b' })).toBeUndefined();
+  });
+});
+
+describe('Graph: the sensing hot path', () => {
+  /** A graph.json with `count` neurons, each with words no other shares, loaded. */
+  function bigGraph(count: number, extra: Array<{ id: string; text: string }> = []) {
+    const at = new Date(t).toISOString();
+    const neurons = [
+      ...Array.from({ length: count }, (_, i) => ({
+        id: `n-${i}`,
+        text: `zz${i}a zz${i}b zz${i}c`,
+      })),
+      ...extra,
+    ].map((n) => ({
+      ...n,
+      kind: 'fact',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      createdAt: at,
+      lastActivatedAt: at,
+      activations: 0,
+    }));
+    writeFileSync(
+      graphFiles(dir).graph,
+      JSON.stringify({ version: 1, rev: 1, neurons, edges: [] })
+    );
+    return graph({ maxNeurons: count + extra.length + 10 });
+  }
+
+  test('findSimilarText on a 20k-neuron graph scores only the neurons that share a word', () => {
+    const g = bigGraph(20_000, [
+      { id: 'n-heron', text: 'the blue heron nests behind the tower' },
+      { id: 'n-heron2', text: 'blue heron sighting' },
+    ]);
+    const found = g.findSimilarText('the blue heron nests behind the tower', 0.5);
+    expect(found.map((n) => n.id)).toEqual(['n-heron']);
+    expect(g.lastTextScan.scored).toBeLessThanOrEqual(2);
+    g.findSimilarText('nothing matches these words', 0.5);
+    expect(g.lastTextScan.scored).toBe(0);
+  });
+
+  test('findSimilarText answers exactly what a full scan answers', () => {
+    const texts = [
+      'Invoices from Acme arrive monthly',
+      'invoices from acme arrive monthly!',
+      'Acme ships on Mondays',
+      'The weather is nice',
+      'acme',
+      'Ácme invoices',
+      '...',
+      '',
+      'monthly invoices arrive',
+    ];
+    const g = graph();
+    const ids = texts.map((text) => g.addNeuron(fact(text)).id);
+    g.archive(ids[2]);
+    g.activate(ids[2]);
+    g.archive(ids[3]);
+    const queries = [
+      'invoices from acme',
+      'Acme',
+      '!!!',
+      'weather nice',
+      'monthly',
+      'ships mondays',
+    ];
+    for (const q of queries) {
+      for (const threshold of [0.2, 0.5, 0.8]) {
+        const brute = g
+          .list()
+          .filter((n) => !n.archivedAt)
+          .map((n) => ({ n, s: textSimilarityOf(q, n.text) }))
+          .filter((x) => x.s >= threshold)
+          .sort((a, b) => b.s - a.s)
+          .map((x) => x.n.id);
+        expect(g.findSimilarText(q, threshold).map((n) => n.id)).toEqual(brute);
+      }
+    }
+  });
+
+  test('activations are written in one batch, not one append per call', () => {
+    const g = graph({ activationFlushMs: 60_000 });
+    const a = g.addNeuron(fact('a'));
+    const b = g.addNeuron(fact('b'));
+    const lines = () => readFileSync(graphFiles(dir).neurons, 'utf-8').split('\n').filter(Boolean);
+    const before = lines().length;
+    for (let i = 0; i < 5; i++) {
+      g.activate(a.id);
+      g.activate(b.id);
+    }
+    expect(g.get(a.id)?.activations).toBe(5);
+    expect(lines().length).toBe(before);
+    g.flushActivations();
+    expect(lines().length).toBe(before + 2);
+    const reloaded = graph();
+    expect(reloaded.get(a.id)?.activations).toBe(5);
+    expect(reloaded.get(b.id)?.activations).toBe(5);
+  });
+
+  test('pending activations flush on their own after a short timer', async () => {
+    const g = graph({ activationFlushMs: 10 });
+    const a = g.addNeuron(fact('a'));
+    g.activate(a.id);
+    await new Promise((r) => setTimeout(r, 40));
+    expect(graph().get(a.id)?.activations).toBe(1);
+  });
+
+  test('compact() includes the pending activations', () => {
+    const g = graph({ activationFlushMs: 60_000 });
+    const a = g.addNeuron(fact('a'));
+    g.activate(a.id);
+    g.compact();
+    expect(graph().get(a.id)?.activations).toBe(1);
+  });
+
+  test('automatic compaction runs off the append path and loses nothing written meanwhile', async () => {
+    const g = graph({ compactEvery: 3 });
+    g.addNeuron(fact('a'));
+    g.addNeuron(fact('b'));
+    g.addNeuron(fact('c'));
+    // The third append only schedules it.
+    expect(existsSync(graphFiles(dir).graph)).toBe(false);
+    const late = g.addNeuron(fact('d'));
+    g.setEmbedding(late.id, [1, 2]);
+    await g.whenCompacted();
+    expect(existsSync(graphFiles(dir).graph)).toBe(true);
+    const e = g.addNeuron(fact('e'));
+    const reloaded = graph();
+    expect(reloaded.snapshot().neurons).toEqual(g.snapshot().neurons);
+    expect(reloaded.get(e.id)?.text).toBe('e');
+    expect(reloaded.getEmbedding(late.id)).toEqual([1, 2]);
+  });
+
+  test('a compaction cut short (rotated files left behind) is recovered on load', async () => {
+    const g = graph({ compactEvery: 1_000_000 });
+    const a = g.addNeuron(fact('a'));
+    g.setEmbedding(a.id, [3, 4]);
+    const files = graphFiles(dir);
+    // What a crash between rotation and the snapshot rename leaves.
+    writeFileSync(`${files.neurons}.old`, readFileSync(files.neurons, 'utf-8'));
+    writeFileSync(`${files.embeddings}.old`, readFileSync(files.embeddings, 'utf-8'));
+    writeFileSync(files.neurons, '');
+    writeFileSync(files.embeddings, '');
+    const reloaded = graph();
+    expect(reloaded.get(a.id)?.text).toBe('a');
+    expect(reloaded.getEmbedding(a.id)).toEqual([3, 4]);
+    expect(existsSync(`${files.neurons}.old`)).toBe(false);
   });
 });

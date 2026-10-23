@@ -84,7 +84,7 @@ describe('SystemPromptBuilder', () => {
       fleetFocus: ['Two bots research Acme'],
     };
 
-    test('conversation mode carries it when the watcher is on', () => {
+    test('conversation mode carries it to the operator when the watcher is on', () => {
       const ctx = createMockCtx([]) as unknown as Record<string, unknown>;
       const asked: string[] = [];
       ctx.watcherSelfState = {
@@ -99,6 +99,7 @@ describe('SystemPromptBuilder', () => {
         botId: 'testbot',
         botConfig,
         isGroup: false,
+        operatorTurn: true,
       });
       expect(asked).toEqual(['testbot']);
       expect(prompt).toContain('## Your current state');
@@ -106,16 +107,54 @@ describe('SystemPromptBuilder', () => {
       expect(prompt).toContain('Map Acme');
     });
 
+    test('never for anyone but the operator: plan, goal and fleet focus stay out', () => {
+      const ctx = createMockCtx([]) as unknown as Record<string, unknown>;
+      const asked: string[] = [];
+      ctx.watcherSelfState = {
+        selfStateFor: (id: string) => {
+          asked.push(id);
+          return selfState;
+        },
+      };
+      const builder = new SystemPromptBuilder(ctx as never, createMockToolRegistry([]));
+      for (const operatorTurn of [undefined, false]) {
+        const prompt = builder.build({
+          mode: 'conversation',
+          botId: 'testbot',
+          botConfig,
+          isGroup: false,
+          ...(operatorTurn === undefined ? {} : { operatorTurn }),
+          speaker: { displayName: 'Bo', isOperator: false, channelKind: 'web', address: 'bo@x.io' },
+        });
+        expect(prompt).not.toContain('## Your current state');
+        expect(prompt).not.toContain('Map Acme');
+        expect(prompt).not.toContain('Two bots research Acme');
+      }
+      expect(asked).toEqual([]);
+    });
+
     test('absent without a watcher, outside conversation, or when the watcher throws', () => {
       const off = new SystemPromptBuilder(createMockCtx([]), createMockToolRegistry([]));
       expect(
-        off.build({ mode: 'conversation', botId: 'testbot', botConfig, isGroup: false })
+        off.build({
+          mode: 'conversation',
+          botId: 'testbot',
+          botConfig,
+          isGroup: false,
+          operatorTurn: true,
+        })
       ).not.toContain('## Your current state');
       const ctx = createMockCtx([]) as unknown as Record<string, unknown>;
       ctx.watcherSelfState = { selfStateFor: () => selfState };
       const collab = new SystemPromptBuilder(ctx as never, createMockToolRegistry([]));
       expect(
-        collab.build({ mode: 'collaboration', botId: 'testbot', botConfig, isGroup: false } as any)
+        collab.build({
+          mode: 'collaboration',
+          botId: 'testbot',
+          botConfig,
+          isGroup: false,
+          operatorTurn: true,
+        } as any)
       ).not.toContain('## Your current state');
       ctx.watcherSelfState = {
         selfStateFor: () => {
@@ -124,7 +163,13 @@ describe('SystemPromptBuilder', () => {
       };
       const broken = new SystemPromptBuilder(ctx as never, createMockToolRegistry([]));
       expect(
-        broken.build({ mode: 'conversation', botId: 'testbot', botConfig, isGroup: false })
+        broken.build({
+          mode: 'conversation',
+          botId: 'testbot',
+          botConfig,
+          isGroup: false,
+          operatorTurn: true,
+        })
       ).not.toContain('## Your current state');
     });
   });

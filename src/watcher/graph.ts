@@ -5,6 +5,19 @@
  * `compactEvery` appends. Emits nothing itself: every change goes to the
  * optional `onChange` listener, which the watcher turns into socket events.
  * Loading never throws; a failed write is a warning.
+ *
+ * Built for the sensing hot path (every activity event touches it):
+ * - `findSimilarText` scores only the neurons that share a word with the
+ *   query, through an inverted index (word → live neuron ids) and cached
+ *   word sets kept up to date on every write and archive; same answers as a
+ *   full `textSimilarity` scan (`lastTextScan` says how many were scored).
+ * - activations (`activate`, `setActivation`) change memory at once and reach
+ *   `neurons.jsonl` in one batched append every `activationFlushMs`
+ *   (`flushActivations`; `compact()` includes them).
+ * - automatic compaction is scheduled off the append path and writes
+ *   asynchronously: the append files are rotated to `*.old` first, so what is
+ *   appended meanwhile is kept; `load()` replays `*.old` and finishes a
+ *   compaction a crash cut short. `compact()` stays synchronous (stop, layout).
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -13,9 +26,11 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { textSimilarity } from '../hygiene/text-utils';
+import { writeFile } from 'node:fs/promises';
+import { normalizeTitle, textSimilarity } from '../hygiene/text-utils';
 import { cosineSimilarity } from '../memory/search';
 import { type GraphFiles, graphFiles } from './paths';
 import {
@@ -38,6 +53,8 @@ export interface GraphOptions {
   now?: () => number;
   maxNeurons?: number;
   compactEvery?: number;
+  /** How long activations wait in memory before one batched append (default 1 s). */
+  activationFlushMs?: number;
   onChange?: (change: GraphChange) => void;
   logger?: { warn: (obj: object, msg: string) => void };
 }
@@ -61,6 +78,19 @@ export interface GraphSnapshot {
 
 const DEFAULT_MAX = 20_000;
 const DEFAULT_COMPACT_EVERY = 1000;
+const DEFAULT_ACTIVATION_FLUSH_MS = 1000;
+/** The postings key of a neuron whose text has no words (`textSimilarity` of two such texts is 1). */
+const NO_WORDS = '';
+
+interface TextEntry {
+  norm: string;
+  words: Set<string>;
+}
+
+function textEntry(text: string): TextEntry {
+  const norm = normalizeTitle(text);
+  return { norm, words: new Set(norm.split(' ').filter(Boolean)) };
+}
 
 export class Graph {
   private neurons = new Map<string, Neuron>();
@@ -69,8 +99,21 @@ export class Graph {
   private byKey = new Map<string, string>();
   private edgeByKey = new Map<string, string>();
   private adjacency = new Map<string, Set<string>>();
+  /** Live neurons only: cached words and the inverted index over them. */
+  private textOf = new Map<string, TextEntry>();
+  private postings = new Map<string, Set<string>>();
+  /** First-seen order of every neuron (ties in `findSimilarText` keep it, like a full scan). */
+  private seq = new Map<string, number>();
+  private nextSeq = 0;
+  private live = 0;
+  private pendingActivations = new Set<string>();
+  private activationTimer: ReturnType<typeof setTimeout> | null = null;
+  private compactPending: Promise<void> | null = null;
+  private compactGen = 0;
   private rev = 0;
   private appends = 0;
+  /** How many neurons the last `findSimilarText` scored (the candidates sharing a word). */
+  lastTextScan = { scored: 0 };
   private readonly files: GraphFiles;
   private readonly now: () => number;
   onChange?: (change: GraphChange) => void;
@@ -92,6 +135,12 @@ export class Graph {
     this.byKey.clear();
     this.edgeByKey.clear();
     this.adjacency.clear();
+    this.textOf.clear();
+    this.postings.clear();
+    this.seq.clear();
+    this.nextSeq = 0;
+    this.live = 0;
+    this.pendingActivations.clear();
     try {
       if (existsSync(this.files.graph)) {
         const parsed = JSON.parse(
@@ -107,12 +156,21 @@ export class Graph {
         'Watcher graph: graph.json unreadable, starting from the append files'
       );
     }
-    for (const n of readLines<Neuron>(this.files.neurons)) if (validNeuron(n)) this.putNeuron(n);
-    for (const e of readLines<Edge>(this.files.edges)) if (validEdge(e)) this.putEdge(e);
-    for (const row of readLines<{ id: string; v: number[] }>(this.files.embeddings)) {
-      if (row && typeof row.id === 'string' && Array.isArray(row.v))
-        this.embeddings.set(row.id, row.v);
+    // A compaction in flight (or cut short) left its rotated files: replay them first.
+    const rotated = [this.files.neurons, this.files.edges, this.files.embeddings].map(oldFile);
+    for (const path of [rotated[0], this.files.neurons]) {
+      for (const n of readLines<Neuron>(path)) if (validNeuron(n)) this.putNeuron(n);
     }
+    for (const path of [rotated[1], this.files.edges]) {
+      for (const e of readLines<Edge>(path)) if (validEdge(e)) this.putEdge(e);
+    }
+    for (const path of [rotated[2], this.files.embeddings]) {
+      for (const row of readLines<{ id: string; v: number[] }>(path)) {
+        if (row && typeof row.id === 'string' && Array.isArray(row.v))
+          this.embeddings.set(row.id, row.v);
+      }
+    }
+    if (rotated.some((path) => existsSync(path))) this.compact();
   }
 
   get(id: string): Neuron | undefined {
@@ -133,9 +191,7 @@ export class Graph {
   }
 
   liveCount(): number {
-    let n = 0;
-    for (const x of this.neurons.values()) if (!x.archivedAt) n++;
-    return n;
+    return this.live;
   }
 
   edgeCount(): number {
@@ -193,26 +249,43 @@ export class Graph {
     return edge;
   }
 
-  /** One activation now. An archived neuron that fires again is live again. */
+  /** One activation now. An archived neuron that fires again is live again. Written in a batch. */
   activate(id: string): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n) return undefined;
     const { archivedAt: _gone, ...rest } = n;
     const next: Neuron = { ...rest, activations: n.activations + 1, lastActivatedAt: this.iso() };
-    this.writeNeuron(next, false);
+    this.queueActivation(next);
     if (n.archivedAt) this.emit({ type: 'neuron', neuron: next });
     this.emitActivation(next);
     return next;
   }
 
-  /** Set activations from history (birth), not a new firing. */
+  /** Set activations from history (birth), not a new firing. Written in a batch. */
   setActivation(id: string, activations: number, lastActivatedAt: string): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n) return undefined;
     const next: Neuron = { ...n, activations, lastActivatedAt };
-    this.writeNeuron(next, false);
+    this.queueActivation(next);
     this.emitActivation(next);
     return next;
+  }
+
+  /** Append every pending activation in one write. Never throws. */
+  flushActivations(): void {
+    if (this.activationTimer) clearTimeout(this.activationTimer);
+    this.activationTimer = null;
+    if (this.pendingActivations.size === 0) return;
+    const rows = [...this.pendingActivations]
+      .map((id) => this.neurons.get(id))
+      .filter((n): n is Neuron => !!n);
+    this.pendingActivations.clear();
+    this.appendRows(this.files.neurons, rows);
+  }
+
+  /** Resolves when the scheduled automatic compaction (if any) has finished. */
+  whenCompacted(): Promise<void> {
+    return this.compactPending ?? Promise.resolve();
   }
 
   /** Merge attributes into a neuron's `meta` (signals, prediction resolutions). Not a firing. */
@@ -271,13 +344,43 @@ export class Graph {
     return out;
   }
 
+  /**
+   * Live neurons whose text is at least `threshold` similar (`textSimilarity`),
+   * best first. Only the neurons sharing a word with `text` are scored.
+   */
   findSimilarText(text: string, threshold: number): Neuron[] {
+    if (threshold <= 0) return this.scanSimilarText(text, threshold);
+    const q = textEntry(text);
+    const counts = new Map<string, number>();
+    if (q.words.size === 0) {
+      for (const id of this.postings.get(NO_WORDS) ?? []) counts.set(id, 0);
+    } else {
+      for (const w of q.words) {
+        for (const id of this.postings.get(w) ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    }
+    this.lastTextScan = { scored: counts.size };
+    const scored: Array<{ n: Neuron; s: number; seq: number }> = [];
+    for (const [id, shared] of counts) {
+      const entry = this.textOf.get(id);
+      const n = this.neurons.get(id);
+      if (!entry || !n) continue;
+      const union = q.words.size + entry.words.size - shared;
+      const s = entry.norm === q.norm ? 1 : union === 0 ? 0 : shared / union;
+      if (s >= threshold) scored.push({ n, s, seq: this.seq.get(id) ?? 0 });
+    }
+    return scored.sort((a, b) => b.s - a.s || a.seq - b.seq).map((x) => x.n);
+  }
+
+  /** The full scan (`threshold <= 0` matches every live neuron). */
+  private scanSimilarText(text: string, threshold: number): Neuron[] {
     const scored: Array<{ n: Neuron; s: number }> = [];
     for (const n of this.neurons.values()) {
       if (n.archivedAt) continue;
       const s = textSimilarity(text, n.text);
       if (s >= threshold) scored.push({ n, s });
     }
+    this.lastTextScan = { scored: scored.length };
     return scored.sort((a, b) => b.s - a.s).map((x) => x.n);
   }
 
@@ -315,8 +418,14 @@ export class Graph {
     };
   }
 
-  /** Write `graph.json` and the embeddings, then empty the append files. */
+  /** Write `graph.json` and the embeddings, then empty the append files. Synchronous. */
   compact(): void {
+    // Everything pending is in memory, so in the snapshot; an async compaction
+    // in flight sees the bumped generation and discards its result.
+    this.compactGen++;
+    this.pendingActivations.clear();
+    if (this.activationTimer) clearTimeout(this.activationTimer);
+    this.activationTimer = null;
     try {
       mkdirSync(this.dir, { recursive: true });
       const { neurons, edges, rev } = this.snapshot();
@@ -328,9 +437,68 @@ export class Graph {
       atomicWrite(this.files.embeddings, emb ? `${emb}\n` : '');
       writeFileSync(this.files.neurons, '');
       writeFileSync(this.files.edges, '');
+      for (const f of [this.files.neurons, this.files.edges, this.files.embeddings]) {
+        removeIfExists(oldFile(f));
+      }
       this.appends = 0;
     } catch (err) {
       this.opts.logger?.warn({ err }, 'Watcher graph: compaction failed');
+    }
+  }
+
+  /** The automatic compaction, off the append path (next macrotask), one at a time. */
+  private scheduleCompact(): void {
+    if (this.compactPending) return;
+    this.compactPending = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        this.compactAsync()
+          .catch((err) => this.opts.logger?.warn({ err }, 'Watcher graph: compaction failed'))
+          .finally(() => {
+            this.compactPending = null;
+            resolve();
+          });
+      });
+    });
+  }
+
+  /**
+   * Rotate the append files to `*.old` (new appends go to fresh files),
+   * snapshot memory, write it asynchronously, then (synchronously) put the
+   * snapshot in place, keep the embeddings appended meanwhile and drop the
+   * rotated files. A synchronous `compact()` in between wins.
+   */
+  private async compactAsync(): Promise<void> {
+    this.flushActivations();
+    const files = [this.files.neurons, this.files.edges, this.files.embeddings];
+    if (files.some((f) => existsSync(oldFile(f)))) {
+      this.compact();
+      return;
+    }
+    const gen = ++this.compactGen;
+    mkdirSync(this.dir, { recursive: true });
+    for (const f of files) if (existsSync(f)) renameSync(f, oldFile(f));
+    this.appends = 0;
+    const { neurons, edges, rev } = this.snapshot();
+    const graphJson = JSON.stringify({ version: 1, rev, neurons, edges });
+    const emb = [...this.embeddings]
+      .filter(([id]) => this.neurons.has(id))
+      .map(([id, v]) => JSON.stringify({ id, v }))
+      .join('\n');
+    const graphTmp = `${this.files.graph}.tmp-${process.pid}-${gen}`;
+    const embTmp = `${this.files.embeddings}.tmp-${process.pid}-${gen}`;
+    try {
+      await writeFile(graphTmp, graphJson, 'utf-8');
+      await writeFile(embTmp, emb ? `${emb}\n` : '', 'utf-8');
+      if (gen !== this.compactGen) return;
+      if (existsSync(this.files.embeddings)) {
+        appendFileSync(embTmp, readFileSync(this.files.embeddings, 'utf-8'), 'utf-8');
+      }
+      renameSync(graphTmp, this.files.graph);
+      renameSync(embTmp, this.files.embeddings);
+      for (const f of files) removeIfExists(oldFile(f));
+    } finally {
+      removeIfExists(graphTmp);
+      removeIfExists(embTmp);
     }
   }
 
@@ -349,15 +517,61 @@ export class Graph {
 
   private writeNeuron(n: Neuron, notify = true): void {
     this.putNeuron(n);
+    this.pendingActivations.delete(n.id);
     this.append(this.files.neurons, n);
     this.rev++;
     if (notify) this.emit({ type: 'neuron', neuron: n });
   }
 
+  private queueActivation(n: Neuron): void {
+    this.putNeuron(n);
+    this.rev++;
+    this.pendingActivations.add(n.id);
+    if (this.activationTimer) return;
+    const timer = setTimeout(
+      () => this.flushActivations(),
+      this.opts.activationFlushMs ?? DEFAULT_ACTIVATION_FLUSH_MS
+    );
+    (timer as { unref?: () => void }).unref?.();
+    this.activationTimer = timer;
+  }
+
   private putNeuron(n: Neuron): void {
+    const prev = this.neurons.get(n.id);
     this.neurons.set(n.id, n);
+    if (!this.seq.has(n.id)) this.seq.set(n.id, this.nextSeq++);
     const key = n.meta?.key;
     if (key) this.byKey.set(key, n.id);
+    const wasLive = !!prev && !prev.archivedAt;
+    const isLive = !n.archivedAt;
+    this.live += (isLive ? 1 : 0) - (wasLive ? 1 : 0);
+    if (wasLive && isLive && prev?.text === n.text) return;
+    if (wasLive) this.unindexText(n.id);
+    if (isLive) this.indexText(n.id, n.text);
+  }
+
+  private indexText(id: string, text: string): void {
+    const entry = textEntry(text);
+    this.textOf.set(id, entry);
+    const keys = entry.words.size > 0 ? entry.words : [NO_WORDS];
+    for (const w of keys) {
+      const set = this.postings.get(w) ?? new Set<string>();
+      set.add(id);
+      this.postings.set(w, set);
+    }
+  }
+
+  private unindexText(id: string): void {
+    const entry = this.textOf.get(id);
+    if (!entry) return;
+    this.textOf.delete(id);
+    const keys = entry.words.size > 0 ? entry.words : [NO_WORDS];
+    for (const w of keys) {
+      const set = this.postings.get(w);
+      if (!set) continue;
+      set.delete(id);
+      if (set.size === 0) this.postings.delete(w);
+    }
   }
 
   private putEdge(e: Edge): void {
@@ -401,15 +615,33 @@ export class Graph {
   }
 
   private append(path: string, row: unknown): void {
+    this.appendRows(path, [row]);
+  }
+
+  private appendRows(path: string, rows: unknown[]): void {
+    if (rows.length === 0) return;
     try {
       mkdirSync(this.dir, { recursive: true });
-      appendFileSync(path, `${JSON.stringify(row)}\n`, 'utf-8');
+      appendFileSync(path, rows.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf-8');
     } catch (err) {
       this.opts.logger?.warn({ err, path }, 'Watcher graph: append failed');
       return;
     }
-    this.appends++;
-    if (this.appends >= (this.opts.compactEvery ?? DEFAULT_COMPACT_EVERY)) this.compact();
+    this.appends += rows.length;
+    if (this.appends >= (this.opts.compactEvery ?? DEFAULT_COMPACT_EVERY)) this.scheduleCompact();
+  }
+}
+
+/** Where an append file goes while a compaction runs. */
+function oldFile(path: string): string {
+  return `${path}.old`;
+}
+
+function removeIfExists(path: string): void {
+  try {
+    if (existsSync(path)) unlinkSync(path);
+  } catch {
+    // best-effort cleanup
   }
 }
 

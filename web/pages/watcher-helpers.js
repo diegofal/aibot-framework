@@ -516,6 +516,14 @@ export function drainCount(carry, dtMs, pacePerSec = SPAWN_PACE) {
 }
 
 /** The UTC day of birth (the log files are named by UTC date), or null. */
+/**
+ * May a replay start now? Needs the ball, no replay running, and none still
+ * fetching its day's log (a second click during the fetch used to start two).
+ */
+export function canStartReplay(page) {
+  return !!page?.ball && !page.replay && !page.replayLoading;
+}
+
 export function birthDate(state) {
   const b = state?.bornAt;
   if (typeof b !== 'string' || !Number.isFinite(Date.parse(b))) return null;

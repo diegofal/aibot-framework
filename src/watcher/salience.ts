@@ -57,7 +57,7 @@ export function scoreEvent(event: SensedEvent, ctx: SalienceContext): SalienceSc
       case 'worker:ended':
         if (data.status === 'blocked') add(0.4, 'worker blocked');
         break;
-      case 'agent:result':
+      case 'curiosity:surprise':
         if (hasSurprise(data)) add(0.3, 'surprise');
         break;
       case 'karma:change':

@@ -280,6 +280,8 @@ export function describeEvent(
       return `${bot} saved to memory`;
     case 'agent:result':
       return `${bot} finished a cycle`;
+    case 'curiosity:surprise':
+      return `${bot} was surprised: ${str(data.summary)}`;
     default:
       return `${event.type} in ${bot}`;
   }

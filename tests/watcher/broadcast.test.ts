@@ -166,6 +166,48 @@ describe('Broadcaster.send', () => {
     expect((await send(b, { kind: 'directive' })).status).toBe('delivered');
   });
 
+  test('a failed delivery is not a duplicate: the same insight and kind may be retried', async () => {
+    let ok = false;
+    const { b, make } = setup({
+      question: async () => ({ ok, detail: ok ? 'sent' : 'Proactive send throttled' }),
+    });
+    expect((await send(b, { kind: 'question' })).status).toBe('failed');
+    ok = true;
+    expect((await send(b, { kind: 'question' })).status).toBe('delivered');
+    // Delivered now: a third is a duplicate, also after a restart.
+    expect((await send(b, { kind: 'question' })).status).toBe('duplicate');
+    expect((await send(make(), { kind: 'question' })).status).toBe('duplicate');
+  });
+
+  test('a retry of a failed one still counts the failure toward the daily cap', async () => {
+    let ok = false;
+    const { b } = setup({ question: async () => ({ ok, detail: ok ? 'sent' : 'no' }) }, 2);
+    expect((await send(b, { kind: 'question' })).status).toBe('failed');
+    ok = true;
+    expect((await send(b, { kind: 'question' })).status).toBe('delivered');
+    expect((await send(b, { kind: 'wake', insightId: 'n-3' })).status).toBe('capped');
+  });
+
+  test('one still in flight is a duplicate (concurrent sends never both go out)', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const { b, calls } = setup({
+      question: async (bot, text) => {
+        calls.push(`question:${bot}:${text}`);
+        await gate;
+        return { ok: true, detail: 'ok' };
+      },
+    });
+    const first = send(b, { kind: 'question' });
+    const second = await send(b, { kind: 'question' });
+    release();
+    expect(second.status).toBe('duplicate');
+    expect((await first).status).toBe('delivered');
+    expect(calls.filter((c) => c.startsWith('question:'))).toHaveLength(1);
+  });
+
   test('invalid input is refused without calling anything', async () => {
     const { b, calls } = setup();
     expect((await send(b, { kind: 'shout' })).status).toBe('invalid');

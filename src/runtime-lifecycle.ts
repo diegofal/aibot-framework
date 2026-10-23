@@ -44,10 +44,24 @@ export interface ShutdownRuntimeDeps {
   logger: Logger;
   /** Upper bound for `abortAll`; default `SHUTDOWN_ABORT_BOUND_MS`. */
   abortBoundMs?: number;
+  /**
+   * The fleet watcher's `stop()` (bounded by itself): started first and run
+   * alongside the worker abort so the two bounds do not add up within the
+   * container's grace period; awaited before returning. Never throws out.
+   */
+  stopWatcher?: () => Promise<unknown>;
 }
 
-/** Abort every worker run (bounded, never throws), then stop the bots. */
+/** Stop the watcher alongside aborting every worker run (both bounded, never throw), then stop the bots. */
 export async function shutdownRuntime(deps: ShutdownRuntimeDeps): Promise<void> {
+  const watcherFailed = (err: unknown) =>
+    deps.logger.warn({ err }, 'Watcher failed to stop cleanly');
+  let watcher: Promise<unknown> = Promise.resolve();
+  try {
+    if (deps.stopWatcher) watcher = Promise.resolve(deps.stopWatcher()).catch(watcherFailed);
+  } catch (err) {
+    watcherFailed(err);
+  }
   const pool = deps.getWorkerPool();
   if (pool) {
     const bound = deps.abortBoundMs ?? SHUTDOWN_ABORT_BOUND_MS;
@@ -70,4 +84,5 @@ export async function shutdownRuntime(deps: ShutdownRuntimeDeps): Promise<void> 
     }
   }
   await deps.stopAll();
+  await watcher;
 }

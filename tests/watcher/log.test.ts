@@ -129,6 +129,34 @@ describe('WatcherLog', () => {
     expect((infos[0][0] as { watcher: string }).watcher).toBe('wake');
   });
 
+  test('sense rows go to the main log at debug, every other phase at info', () => {
+    const infos: string[] = [];
+    const debugs: string[] = [];
+    const log = new WatcherLog(dir, {
+      logger: {
+        info: (_o: unknown, msg: string) => infos.push(msg),
+        debug: (_o: unknown, msg: string) => debugs.push(msg),
+        warn: () => {},
+      },
+    });
+    log.say('sense', 'noticed', 'Noticed: a worker is waiting.');
+    log.say('sense', 'summary', '40 events in 5 minutes.');
+    log.say('notice', 'notice:pass', 'Noticed 2 events.');
+    log.say('integrate', 'integrate:pass', 'Two bots chase one lead.');
+    expect(debugs).toEqual(['Noticed: a worker is waiting.', '40 events in 5 minutes.']);
+    expect(infos).toEqual(['Noticed 2 events.', 'Two bots chase one lead.']);
+  });
+
+  test('a logger without debug drops sense rows instead of throwing', () => {
+    const infos: string[] = [];
+    const log = new WatcherLog(dir, {
+      logger: { info: (_o: unknown, msg: string) => infos.push(msg), warn: () => {} },
+    });
+    expect(() => log.say('sense', 'noticed', 'x')).not.toThrow();
+    expect(infos).toEqual([]);
+    expect(log.recent(1)[0].text).toBe('x');
+  });
+
   test('a failing write never throws', () => {
     writeFileSync(join(dir, 'file'), 'x');
     const log = new WatcherLog(join(dir, 'file', 'sub'), {

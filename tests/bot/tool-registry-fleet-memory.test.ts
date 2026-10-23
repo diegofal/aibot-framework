@@ -68,3 +68,37 @@ describe('ToolRegistry.setFleetMemory', () => {
     );
   });
 });
+
+describe('ToolRegistry.setFleetMemory: tenant bots', () => {
+  const tenantCtx = () =>
+    ({
+      config: {
+        bots: [{ id: 'b1' }, { id: 't1', tenantId: 'acme' }],
+        watcher: { enabled: true },
+        multiTenant: { enabled: true },
+      },
+      tools: [],
+      toolDefinitions: [],
+      logger: noopLogger,
+    }) as unknown as BotContext;
+
+  test('a tenant bot never gets fleet_memory_search; an admin bot does', () => {
+    const ctx = tenantCtx();
+    const reg = new ToolRegistry(ctx);
+    reg.setFleetMemory(source);
+    expect(names(reg.getDefinitionsForBot('t1'))).not.toContain('fleet_memory_search');
+    expect(names(reg.getCollaborationToolsForBot('t1').definitions)).not.toContain(
+      'fleet_memory_search'
+    );
+    expect(names(reg.getDefinitionsForBot('b1'))).toContain('fleet_memory_search');
+  });
+
+  test('the registered tool refuses a tenant bot even when called directly', async () => {
+    const ctx = tenantCtx();
+    const reg = new ToolRegistry(ctx);
+    reg.setFleetMemory(source);
+    const res = await ctx.tools[0].execute({ query: 'x', _botId: 't1' }, noopLogger);
+    expect(res.success).toBe(false);
+    expect(res.failureKind).toBe('policy');
+  });
+});

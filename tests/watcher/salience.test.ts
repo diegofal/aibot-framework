@@ -55,12 +55,16 @@ describe('scoreEvent table', () => {
     expect(scoreEvent(ev('worker:ended', { status: 'blocked' }), ctx()).salience).toBeCloseTo(0.4);
     expect(scoreEvent(ev('worker:ended', { status: 'done' }), ctx()).salience).toBe(0);
   });
-  test('agent:result with a surprise +0.3, without nothing', () => {
-    expect(scoreEvent(ev('agent:result', { surprises: ['x'] }), ctx()).reasons).toContain(
-      'surprise'
-    );
-    expect(scoreEvent(ev('agent:result', { surprises: ['x'] }), ctx()).salience).toBeCloseTo(0.3);
-    expect(scoreEvent(ev('agent:result', {}), ctx()).salience).toBe(0);
+  // The surprises come from the curiosity extractor, after the cycle's
+  // agent:result (which never carried them): `curiosity:surprise`.
+  test('curiosity:surprise with surprises +0.3, without nothing', () => {
+    const e = ev('curiosity:surprise', { surprises: ['x'] });
+    expect(scoreEvent(e, ctx()).reasons).toContain('surprise');
+    expect(scoreEvent(e, ctx()).salience).toBeCloseTo(0.3);
+    expect(scoreEvent(ev('curiosity:surprise', { surprises: [] }), ctx()).salience).toBe(0);
+  });
+  test('agent:result scores nothing on its own', () => {
+    expect(scoreEvent(ev('agent:result', { surprises: ['x'] }), ctx()).salience).toBe(0);
   });
   test('karma:change |delta|/10', () => {
     expect(scoreEvent(ev('karma:change', { delta: -3 }), ctx()).salience).toBeCloseTo(0.3);

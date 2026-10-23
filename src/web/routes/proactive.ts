@@ -18,7 +18,7 @@ import { Hono } from 'hono';
 import type { ToolAuditEntry } from '../../bot/tool-audit-log';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
-import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
+import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tenant-scoping';
 import { resolveOperatorTarget } from '../../tools/send-proactive-message';
 import {
   type ProactiveSend,
@@ -37,6 +37,9 @@ export interface ProactiveRouteDeps {
   avatarUrlFor?: (botId: string) => string | null;
   now?: () => number;
 }
+
+/** The tool-audit bot id of the watcher's question broadcasts (`deliverWatcherQuestion`). */
+export const WATCHER_AUDIT_ID = '__watcher__';
 
 export const DEFAULT_PROACTIVE_LIMIT = 50;
 export const MAX_PROACTIVE_LIMIT = 200;
@@ -75,7 +78,10 @@ export function proactiveRoutes(deps: ProactiveRouteDeps) {
     const isOperator = (raw: string) =>
       resolveOperatorTarget(raw, deps.config.operator).kind === 'operator';
 
-    const bots = scopeBots(deps.config.bots, getTenantId(c));
+    const tenantId = getTenantId(c);
+    const bots: Array<{ id: string; name?: string }> = scopeBots(deps.config.bots, tenantId);
+    // The fleet watcher's questions to the operator (`__watcher__` in the tool audit): admin only.
+    if (isAdminOrSingleTenant(tenantId)) bots.push({ id: WATCHER_AUDIT_ID, name: 'Fleet watcher' });
     const all: Array<ProactiveSend & { botName: string }> = [];
     for (const bot of bots) {
       let entries: ToolAuditEntry[];
