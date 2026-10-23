@@ -196,6 +196,42 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Hours: refuse directive/goal broadcasts from operator-sourced insights to bots with public channels, or rewrite them without the operator material.
 
+### Watcher broadcast records left open by a process exit stay in flight forever
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/broadcast.ts` (`Broadcaster.send`, the record written before `deliver`) |
+| **Decided by** | lead, watcher review round 4 |
+
+**What was deferred.** `send` writes the broadcast record before delivering and closes it after. If the process exits during delivery the record stays open, and every later read treats it as in flight: it blocks another broadcast for the same insight and kind, and it counts toward that bot's daily cap.
+
+**Why it was the right call then.** The round fixed the integrate state that a cancel during a send left unconsumed; this needs a process exit mid-delivery and costs at most one blocked insight and one slot of a day's cap.
+
+**What it costs while it stands.** One insight that is never broadcast again in that kind, and one fewer broadcast for the bot on the day it happened.
+
+**The trigger.** The first broadcast record found open after a restart, or a bot that keeps hitting its daily cap with fewer delivered broadcasts than the cap.
+
+**Estimated cost to pay.** Under an hour: when reading, treat an open record older than 1 h as failed, or close open records as failed on stop.
+
+### Watcher retries a deferred question on every integrate pass
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/watcher.ts` (question delivery, the `deferred` result of the throttle gate) |
+| **Decided by** | lead, watcher review round 4 |
+
+**What was deferred.** A question the fleet throttle refuses comes back `deferred`, and the next integrate pass proposes it again without looking at when the throttle would allow it. While the fleet's daily cap is exhausted every pass writes another held row to the broadcasts and to Work → Sent to you.
+
+**Why it was the right call then.** Deferral itself was the round-3 fix (a refused question was being lost); pacing the retry is a separate change and the held rows are noise, not lost or wrong deliveries.
+
+**What it costs while it stands.** Broadcasts and Sent to you fill with held copies of the same question on days the cap runs out.
+
+**The trigger.** A day the fleet's proactive cap is exhausted while the watcher has a question pending.
+
+**Estimated cost to pay.** About an hour: skip a re-proposal while a deferred record for the same insight and kind is newer than the throttle's retry time.
+
 ## Paid
 
 ### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")

@@ -469,6 +469,29 @@ export class Integrator {
       .map((p) => this.prediction(p, ctx, bots))
       .filter((n): n is Neuron => !!n);
 
+    // What the pass wrote is in the graph: consume what it read and persist
+    // before broadcasting, so a cancel during a send only loses the remaining
+    // broadcasts and a restart never re-integrates (and duplicates) the same items.
+    if (isCancelled()) return { status: 'cancelled' };
+    const known = new Set([
+      ...shown.keys(),
+      ...insightByIndex.filter((n): n is Neuron => !!n).map((n) => n.id),
+      ...contradictions.map((n) => n.id),
+      ...preds.map((n) => n.id),
+    ]);
+    const nowIso = new Date(this.deps.now()).toISOString();
+    this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
+    this.st.attendingAt = nowIso;
+    this.st.lastRunAt = nowIso;
+    const readIds = new Set(readItems.map((i) => i.id));
+    const readNeuronIds = new Set(readNeurons);
+    this.st.pending = {
+      items: this.st.pending.items.filter((i) => !readIds.has(i.id)),
+      neurons: this.st.pending.neurons.filter((id) => !readNeuronIds.has(id)),
+      salience: Math.max(0, this.st.pending.salience - readSalience),
+    };
+    this.persist();
+
     const broadcasts: BroadcastResult[] = [];
     const botIds = new Set(bots.map((b) => b.id));
     for (const b of out.broadcasts) {
@@ -493,24 +516,6 @@ export class Integrator {
     }
 
     if (isCancelled()) return { status: 'cancelled' };
-    const known = new Set([
-      ...shown.keys(),
-      ...insightByIndex.filter((n): n is Neuron => !!n).map((n) => n.id),
-      ...contradictions.map((n) => n.id),
-      ...preds.map((n) => n.id),
-    ]);
-    const nowIso = new Date(this.deps.now()).toISOString();
-    this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
-    this.st.attendingAt = nowIso;
-    this.st.lastRunAt = nowIso;
-    const readIds = new Set(readItems.map((i) => i.id));
-    const readNeuronIds = new Set(readNeurons);
-    this.st.pending = {
-      items: this.st.pending.items.filter((i) => !readIds.has(i.id)),
-      neurons: this.st.pending.neurons.filter((id) => !readNeuronIds.has(id)),
-      salience: Math.max(0, this.st.pending.salience - readSalience),
-    };
-    this.persist();
 
     const shownVariables = new Set(Object.keys(interoception ?? {}));
     const drivenBy = uniq(out.drivenBy.filter((k) => shownVariables.has(k)));

@@ -321,6 +321,46 @@ describe('Integrator.run', () => {
     return s.integrator.run();
   }
 
+  test('a cancel during a slow broadcast keeps what the pass wrote consumed: a restart does not re-integrate it', async () => {
+    const gate: { release?: () => void; calls: number } = { calls: 0 };
+    let cancelled = false;
+    const slow = {
+      send: () => {
+        gate.calls++;
+        return new Promise((resolve) => {
+          gate.release = () => resolve({ status: 'delivered' });
+        });
+      },
+    };
+    const s = setup({ reply: full, deps: { broadcaster: slow } });
+    s.integrator.observe(item(cycleDone('b1', t - 60_000), 1.5));
+    s.integrator.observeNotice({
+      status: 'noticed',
+      created: [s.n.leadA, s.n.leadB],
+      recognised: [],
+    });
+    const pass = s.integrator.run({ isCancelled: () => cancelled });
+    for (let i = 0; i < 100 && gate.calls === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(gate.calls).toBe(1);
+    cancelled = true;
+    gate.release?.();
+    expect((await pass).status).toBe('cancelled');
+    expect(gate.calls).toBe(1);
+
+    const count = (kind: string) => s.graph.list().filter((x) => x.kind === kind).length;
+    expect(count('prediction')).toBe(1);
+    expect(count('contradiction')).toBe(1);
+
+    // Restart: a fresh integrator reads the persisted state.
+    t += INTEGRATE_MIN_GAP_MS;
+    const again = s.make();
+    expect(again.state().pending).toMatchObject({ items: [], neurons: [] });
+    expect(again.due()).toBe(false);
+    await again.run();
+    expect(count('prediction')).toBe(1);
+    expect(count('contradiction')).toBe(1);
+  });
+
   test('writes neurons, edges, broadcasts and a pass row with cost', async () => {
     const s = setup({ reply: full });
     const out = await ran(s);
