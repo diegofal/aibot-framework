@@ -74,6 +74,8 @@ export interface AgentHomeDeps {
   isRunning?: (botId: string) => boolean;
   /** Pending ask_permission requests for a bot. */
   pendingPermissions?: (botId: string) => number;
+  /** The running cycle of a bot (BotManager.getRunningCycle). */
+  runningCycle?: (botId: string) => RunningCycle | undefined;
 }
 
 export type TimelineKind = 'llm' | 'tool' | 'production' | 'ask' | 'cycle' | 'karma';
@@ -109,7 +111,17 @@ export interface AgentPresence {
   pendingAsks: number;
   /** Live task-worker runs (C20), newest first; [] when none or untracked. */
   workers: LiveWorker[];
+  /** The running agent-loop cycle (`AgentLoop.runningCycle`, watcher phase 4); null between cycles. */
+  cycle: RunningCycle | null;
   generatedAt: string;
+}
+
+/** What `AgentLoop.runningCycle` reports: plan once planned, goal once resolved. */
+export interface RunningCycle {
+  cycleId: string;
+  plan?: string;
+  goalId?: string;
+  goalTitle?: string;
 }
 
 /** One fleet-grid card (session S3): the presence slice plus what the card shows. */
@@ -255,7 +267,18 @@ export function buildPresence(
     lastError,
     pendingAsks,
     workers: safe(() => deps.workers?.(bot.id) ?? [], []),
+    cycle: safe(() => runningCycleOf(deps.runningCycle?.(bot.id)), null),
     generatedAt: new Date(now).toISOString(),
+  };
+}
+
+function runningCycleOf(c: RunningCycle | undefined): RunningCycle | null {
+  if (!c || typeof c.cycleId !== 'string') return null;
+  return {
+    cycleId: c.cycleId,
+    ...(typeof c.plan === 'string' ? { plan: c.plan } : {}),
+    ...(typeof c.goalId === 'string' ? { goalId: c.goalId } : {}),
+    ...(typeof c.goalTitle === 'string' ? { goalTitle: c.goalTitle } : {}),
   };
 }
 

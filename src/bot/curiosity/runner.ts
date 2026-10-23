@@ -393,6 +393,8 @@ export interface FinishArgs {
 export interface FinishResult {
   extracted: boolean;
   dispatch?: Dispatch;
+  /** What the extractor found surprising this cycle (the loop publishes it: `curiosity:surprise`). */
+  surprises?: string[];
 }
 
 const WRITE_TOOLS = new Set(['file_write', 'file_edit']);
@@ -480,7 +482,11 @@ async function finishLocked(deps: RunnerDeps, args: FinishArgs): Promise<FinishR
     extraction.topic,
     now
   );
-  return { extracted: true, dispatch };
+  return {
+    extracted: true,
+    dispatch,
+    ...(extraction.surprises?.length ? { surprises: extraction.surprises } : {}),
+  };
 }
 
 /** Score for an insight held without an editor pass (cadence closed). */

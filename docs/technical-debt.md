@@ -178,6 +178,60 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Hours: bind public identity to a verified widget session (`userHash`) before matching.
 
+### Watcher broadcasts can carry operator-sourced insight text to a bot
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/integrate.ts` → `src/watcher/broadcast.ts` (directive / goal kinds) |
+| **Decided by** | lead, watcher phase 3 (the privacy rule covers `fleet_memory_search` only) |
+
+**What was deferred.** `fleet_memory_search` hides `meta.operatorSourced` neurons from everyone but the verified operator, and everything an integrate pass creates is marked operator-sourced when the model saw operator material. A directive or goal broadcast written from such an insight still reaches the target bot's planner (and its GOALS.md), and that bot may then talk about it with non-operator users. Since review round 1, birth marks what it reads from operator-owned material (memory, goals, contacts, knowledge) operator-sourced, so more insights carry the flag; the broadcast path still ignores it.
+
+**Why it was the right call then.** The bots are the operator's own; the decision in scope was cross-bot recall by other people.
+
+**What it costs while it stands.** An operator fact can surface, paraphrased, through a bot that has public users.
+
+**The trigger.** The first watcher broadcast to a bot with public REST / widget / WhatsApp users.
+
+**Estimated cost to pay.** Hours: refuse directive/goal broadcasts from operator-sourced insights to bots with public channels, or rewrite them without the operator material.
+
+### Watcher broadcast records left open by a process exit stay in flight forever
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/broadcast.ts` (`Broadcaster.send`, the record written before `deliver`) |
+| **Decided by** | lead, watcher review round 4 |
+
+**What was deferred.** `send` writes the broadcast record before delivering and closes it after. If the process exits during delivery the record stays open, and every later read treats it as in flight: it blocks another broadcast for the same insight and kind, and it counts toward that bot's daily cap.
+
+**Why it was the right call then.** The round fixed the integrate state that a cancel during a send left unconsumed; this needs a process exit mid-delivery and costs at most one blocked insight and one slot of a day's cap.
+
+**What it costs while it stands.** One insight that is never broadcast again in that kind, and one fewer broadcast for the bot on the day it happened.
+
+**The trigger.** The first broadcast record found open after a restart, or a bot that keeps hitting its daily cap with fewer delivered broadcasts than the cap.
+
+**Estimated cost to pay.** Under an hour: when reading, treat an open record older than 1 h as failed, or close open records as failed on stop.
+
+### Watcher retries a deferred question on every integrate pass
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/watcher.ts` (question delivery, the `deferred` result of the throttle gate) |
+| **Decided by** | lead, watcher review round 4 |
+
+**What was deferred.** A question the fleet throttle refuses comes back `deferred`, and the next integrate pass proposes it again without looking at when the throttle would allow it. While the fleet's daily cap is exhausted every pass writes another held row to the broadcasts and to Work → Sent to you.
+
+**Why it was the right call then.** Deferral itself was the round-3 fix (a refused question was being lost); pacing the retry is a separate change and the held rows are noise, not lost or wrong deliveries.
+
+**What it costs while it stands.** Broadcasts and Sent to you fill with held copies of the same question on days the cap runs out.
+
+**The trigger.** A day the fleet's proactive cap is exhausted while the watcher has a question pending.
+
+**Estimated cost to pay.** About an hour: skip a re-proposal while a deferred record for the same insight and kind is newer than the throttle's retry time.
+
 ## Paid
 
 ### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")

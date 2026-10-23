@@ -863,6 +863,46 @@ export const WorkersConfigSchema = z
   })
   .default({});
 
+/**
+ * The fleet watcher (docs/plans/watcher-implementation-plan.md). Off by default;
+ * `src/watcher/types.ts` WATCHER_DEFAULTS mirrors these defaults. `notice` is
+ * phase 2 and `integrate` phase 3: phase 1 reads them but makes no LLM call.
+ */
+export const WatcherConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    notice: z
+      .object({
+        enabled: z.boolean().default(false),
+        backend: z.enum(['claude-cli', 'ollama']).default('claude-cli'),
+        model: z.string().default('claude-haiku-5-5'),
+        everyMs: z.number().int().min(10_000).default(300_000),
+        salienceBar: z.number().min(0).default(0.4),
+        maxPerDay: z.number().int().min(0).default(288),
+      })
+      .default({}),
+    integrate: z
+      .object({
+        enabled: z.boolean().default(false),
+        model: z.string().default('claude-opus-5-5'),
+        salienceBar: z.number().min(0).default(2.0),
+        heartbeatMs: z.number().int().min(60_000).default(3_600_000),
+        maxPerDay: z.number().int().min(0).default(24),
+        maxTokensPerDay: z.number().int().min(0).default(600_000),
+      })
+      .default({}),
+    graph: z
+      .object({
+        archiveAfterDays: z.number().min(1).default(30),
+        relatedThreshold: z.number().min(0).max(1).default(0.82),
+        maxNeurons: z.number().int().min(10).default(20_000),
+      })
+      .default({}),
+    birth: z.object({ historyDays: z.number().int().min(1).max(365).default(30) }).default({}),
+    log: z.object({ senseSummaryEveryMs: z.number().int().min(1_000).default(60_000) }).default({}),
+  })
+  .default({});
+
 export const ClaudeCliConfigSchema = z
   .object({
     /**
@@ -1366,6 +1406,7 @@ const ConfigSchema = z.object({
   web: WebConfigSchema.default({}),
   agentLoop: GlobalAgentLoopConfigSchema,
   workers: WorkersConfigSchema,
+  watcher: WatcherConfigSchema,
   integrations: IntegrationsConfigSchema,
   browserTools: BrowserToolsConfigSchema.default({}),
   dynamicTools: DynamicToolsConfigSchema,

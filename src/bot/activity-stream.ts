@@ -20,6 +20,8 @@ export type ActivityEventType =
   | 'agent:phase'
   | 'agent:idle'
   | 'agent:result'
+  /** The curiosity extractor's surprises for a cycle (after `agent:result`); the watcher scores them. */
+  | 'curiosity:surprise'
   | 'memory:flush'
   | 'memory:rag'
   | 'collab:start'

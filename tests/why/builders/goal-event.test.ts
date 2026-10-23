@@ -196,3 +196,20 @@ describe('goalEventToWhy: task-store rows', () => {
     expect(why.outcome).toBe('Draft → Draft v2');
   });
 });
+
+describe('goal events written by the fleet watcher (phase 3)', () => {
+  it('the watcher actor and its recorded reason', () => {
+    expect(goalActorToWhy('watcher')).toBe('watcher');
+    const why = goalEventToWhy(
+      input({ op: 'add', actor: 'watcher', cycleId: null, reason: 'Two bots chase the same lead' })
+    );
+    expect(why.by).toBe('watcher');
+    expect(why.reason).toEqual({ text: 'Two bots chase the same lead', source: 'Fleet watcher' });
+    expect(WhySchema.safeParse(why).success).toBe(true);
+  });
+
+  it('a watcher goal event without a reason is reported missing', () => {
+    const why = goalEventToWhy(input({ op: 'add', actor: 'watcher', cycleId: null }));
+    expect(why.missing).toContain('No reason was recorded');
+  });
+});

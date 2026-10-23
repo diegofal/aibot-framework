@@ -238,3 +238,22 @@ describe('runPlannerWithRetry', () => {
     expect(mockClient.generate).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('parsePlannerResult: serves_broadcast (watcher phase 3)', () => {
+  test('keeps a non-empty serves_broadcast, trimmed', () => {
+    const raw = JSON.stringify({
+      reasoning: 'Acting on the watcher',
+      plan: ['step'],
+      priority: 'medium',
+      serves_broadcast: ' b-11111111 ',
+    });
+    expect(parsePlannerResult(raw, mockLogger)?.serves_broadcast).toBe('b-11111111');
+  });
+
+  test('drops an empty or non-string serves_broadcast', () => {
+    for (const v of ['', '  ', 3]) {
+      const raw = JSON.stringify({ reasoning: 'r', plan: ['s'], serves_broadcast: v });
+      expect(parsePlannerResult(raw, mockLogger)).not.toHaveProperty('serves_broadcast');
+    }
+  });
+});

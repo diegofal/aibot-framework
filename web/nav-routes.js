@@ -76,6 +76,7 @@ export const AREAS = [
       { id: 'hygiene', label: 'Hygiene', href: '#/insights/stats/hygiene' },
       { id: 'karma', label: 'Karma', href: '#/insights/karma' },
       { id: 'activity', label: 'Activity', href: '#/insights/activity' },
+      { id: 'watcher', label: 'Watcher', href: '#/watcher', admin: true },
     ],
   },
   {
@@ -259,6 +260,7 @@ export const ROUTES = [
   { pattern: /^#\/insights\/karma$/, handler: 'karma', area: 'insights', args: none },
   { pattern: /^#\/insights\/activity(?:\?|$)/, handler: 'activity', area: 'insights', args: none },
   { pattern: /^#\/insights$/, handler: 'stats', area: 'insights', args: none },
+  { pattern: /^#\/watcher$/, handler: 'watcher', area: 'insights', args: none },
 
   {
     pattern: /^#\/settings\/baas\/templates\/([^/]+)$/,

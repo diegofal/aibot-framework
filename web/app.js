@@ -68,6 +68,7 @@ import {
   renderStatsUsage,
 } from './pages/stats.js';
 import { renderToolDetail, renderTools } from './pages/tools.js';
+import { destroyWatcher, renderWatcher } from './pages/watcher.js';
 import { destroyWork, renderWork } from './pages/work.js';
 import { wireOpenWorker } from './pages/worker-sheet.js';
 import { destroyWorkers, renderWorkers } from './pages/workers.js';
@@ -227,6 +228,7 @@ const handlers = {
   karma: page(() => renderKarma(content)),
   botKarma: page((id) => renderBotKarma(content, id)),
   activity: page(() => renderActivity(content), destroyActivity),
+  watcher: page(() => renderWatcher(content), destroyWatcher),
   loop: page(() => renderDashboard(content), destroyDashboard),
   feedback: page(() => renderFeedback(content)),
   botFeedback: page((id) => renderBotFeedback(content, id)),

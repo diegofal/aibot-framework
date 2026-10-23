@@ -1,0 +1,276 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  INTROSPECTION_LOG_ROWS,
+  IntrospectionSampler,
+  WATCHER_INTROSPECTION_QUESTION,
+  buildWatcherIntrospectionPrompt,
+  introspectionFile,
+  readIntrospection,
+  runIntrospection,
+  scoreWatcherIntrospection,
+} from '../../src/watcher/introspection';
+import type { WatcherCallResult } from '../../src/watcher/llm';
+import type { Attention } from '../../src/watcher/self-model';
+import type { WatcherLogRow } from '../../src/watcher/types';
+
+let dir: string;
+let t: number;
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'watcher-introspect-'));
+  t = Date.parse('2026-10-23T10:00:00Z');
+});
+afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+const att: Attention = {
+  phase: 'sense',
+  items: [
+    {
+      id: 'b-00000001',
+      botId: 'b1',
+      what: 'web_fetch failed in Jarvis',
+      salience: 2,
+      reasons: ['error'],
+      touched: [],
+    },
+  ],
+  focusNeuronIds: ['n-aaaaaaaa'],
+  focus: [{ id: 'n-aaaaaaaa', kind: 'insight', text: 'Jarvis and Scout both research Acme leads' }],
+};
+
+function row(seq: number, text: string, phase: WatcherLogRow['phase'] = 'sense'): WatcherLogRow {
+  return { ts: new Date(t - seq * 1000).toISOString(), seq, phase, op: 'sense:summary', text };
+}
+
+function client(text: string) {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    chat: async (messages: Array<{ content: string }>): Promise<WatcherCallResult> => {
+      prompts.push(messages.map((m) => m.content).join('\n'));
+      return {
+        ok: true,
+        text,
+        model: 'claude-haiku-5-5',
+        backend: 'claude-cli',
+        tokens: 300,
+        costUsd: 0.001,
+        durationMs: 900,
+      };
+    },
+  };
+}
+
+const good = JSON.stringify({
+  phase: 'sense',
+  tool: null,
+  goal: 'n-aaaaaaaa',
+  cause: 'Jarvis and Scout both research Acme leads',
+});
+
+describe('buildWatcherIntrospectionPrompt', () => {
+  test('asks the question over the last log rows only, never the state', () => {
+    const rows = Array.from({ length: 30 }, (_, i) => row(i + 1, `line ${i + 1}`));
+    const p = buildWatcherIntrospectionPrompt(rows);
+    expect(p.user).toContain(WATCHER_INTROSPECTION_QUESTION);
+    expect(p.user.match(/^- /gm)?.length).toBe(INTROSPECTION_LOG_ROWS);
+    expect(p.user).not.toContain('n-aaaaaaaa');
+  });
+
+  test('says so when there is no log yet', () => {
+    expect(buildWatcherIntrospectionPrompt([]).user).toContain('(nothing yet)');
+  });
+});
+
+describe('scoreWatcherIntrospection', () => {
+  test('a fixed answer scored against a fixed attention', () => {
+    const s = scoreWatcherIntrospection(JSON.parse(good), att, true);
+    expect(s.fields).toEqual({ phase: 'match', tool: 'match', goal: 'match', cause: 'match' });
+    expect(s.score).toBe(1);
+    expect(s.truth.phase).toBe('sense');
+  });
+
+  test('the best goal candidate wins; a wrong phase misses', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'notice', tool: null, goal: 'web_fetch failed in Jarvis', cause: null },
+      { ...att, focus: [], focusNeuronIds: [] },
+      true
+    );
+    expect(s.fields.phase).toBe('miss');
+    expect(s.fields.goal).toBe('match');
+    expect(s.fields.cause).toBe('miss');
+  });
+
+  test('with nothing attended goal and cause are unknown', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'idle', tool: null, goal: null, cause: null },
+      { phase: 'sleep', items: [], focus: [], focusNeuronIds: [] },
+      false
+    );
+    expect(s.fields).toEqual({ phase: 'match', tool: 'match', goal: 'unknown', cause: 'unknown' });
+    expect(s.score).toBe(1);
+  });
+
+  test('an unparsable answer scores 0', () => {
+    expect(scoreWatcherIntrospection(null, att, true).score).toBe(0);
+  });
+});
+
+describe('runIntrospection', () => {
+  test('appends one scored row with subject watcher and the cost', async () => {
+    const c = client(good);
+    const out = await runIntrospection({
+      client: c,
+      attention: () => att,
+      running: true,
+      logRows: () => [row(1, 'I noticed web_fetch failing in Jarvis.')],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out.status).toBe('scored');
+    const rows = readFileSync(introspectionFile(dir), 'utf-8').trim().split('\n');
+    expect(rows).toHaveLength(1);
+    const rec = JSON.parse(rows[0] as string);
+    expect(rec).toMatchObject({
+      subject: 'watcher',
+      trigger: 'manual',
+      score: 1,
+      parsed: true,
+      model: 'claude-haiku-5-5',
+      tokens: 300,
+      costUsd: 0.001,
+      focusNeuronIds: ['n-aaaaaaaa'],
+    });
+    expect(rec.answer).toBe(good);
+    expect(c.prompts[0]).toContain('I noticed web_fetch failing in Jarvis.');
+  });
+
+  test('an unparsable answer is still a measurement (score 0)', async () => {
+    const out = await runIntrospection({
+      client: client('I am fine, thanks'),
+      attention: () => att,
+      running: true,
+      logRows: () => [],
+      dir,
+      now: () => t,
+      trigger: 'sample',
+    });
+    expect(out.status === 'scored' && out.record.score).toBe(0);
+    expect(readIntrospection(dir)).toHaveLength(1);
+  });
+
+  test('a refused call (budget or breaker) writes nothing', async () => {
+    const out = await runIntrospection({
+      client: { chat: async () => ({ ok: false, reason: 'breaker' }) as WatcherCallResult },
+      attention: () => att,
+      running: true,
+      logRows: () => [],
+      dir,
+      now: () => t,
+      trigger: 'sample',
+    });
+    expect(out).toEqual({ status: 'refused', reason: 'breaker' });
+    expect(existsSync(introspectionFile(dir))).toBe(false);
+  });
+
+  test('a failed call writes nothing and reports the error', async () => {
+    const failed: WatcherCallResult = {
+      ok: false,
+      reason: 'error',
+      error: 'boom',
+      model: 'm',
+      durationMs: 1,
+    };
+    const out = await runIntrospection({
+      client: { chat: async () => failed },
+      attention: () => att,
+      running: true,
+      logRows: () => [],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out).toEqual({ status: 'failed', error: 'boom' });
+    expect(existsSync(introspectionFile(dir))).toBe(false);
+  });
+
+  test('a client that throws is a failure, never an exception', async () => {
+    const out = await runIntrospection({
+      client: {
+        chat: async () => {
+          throw new Error('down');
+        },
+      },
+      attention: () => att,
+      running: true,
+      logRows: () => [],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out).toEqual({ status: 'failed', error: 'down' });
+  });
+});
+
+describe('readIntrospection', () => {
+  test('newest first, malformed lines skipped, capped', () => {
+    writeFileSync(
+      introspectionFile(dir),
+      [
+        JSON.stringify({ ts: '2026-10-22T00:00:00Z', subject: 'watcher', score: 0.5 }),
+        'not json',
+        JSON.stringify({ ts: '2026-10-23T00:00:00Z', subject: 'bot:b1', score: 0 }),
+      ].join('\n')
+    );
+    const rows = readIntrospection(dir);
+    expect(rows.map((r) => r.subject)).toEqual(['bot:b1', 'watcher']);
+    expect(readIntrospection(dir, 1)).toHaveLength(1);
+  });
+
+  test('a missing file is an empty list', () => {
+    expect(readIntrospection(join(dir, 'nope'))).toEqual([]);
+  });
+});
+
+describe('IntrospectionSampler', () => {
+  test('schedules 3 random times in the rest of the day, each due once', () => {
+    let r = 0;
+    const randoms = [0.1, 0.5, 0.9];
+    const s = new IntrospectionSampler({ dir, now: () => t, random: () => randoms[r++ % 3] ?? 0 });
+    const plan = s.plan();
+    expect(plan.at).toHaveLength(3);
+    const dayEnd = Date.parse('2026-10-24T00:00:00Z');
+    for (const at of plan.at) {
+      expect(at).toBeGreaterThanOrEqual(t);
+      expect(at).toBeLessThan(dayEnd);
+    }
+    expect(s.due()).toBe(false);
+    t = (plan.at[0] as number) + 1;
+    expect(s.due()).toBe(true);
+    s.markDone();
+    expect(s.due()).toBe(false);
+  });
+
+  test('missed samples after a restart fire once, not as a burst', () => {
+    const s = new IntrospectionSampler({ dir, now: () => t, random: () => 0.2 });
+    s.plan();
+    t = Date.parse('2026-10-23T23:59:00Z');
+    const again = new IntrospectionSampler({ dir, now: () => t, random: () => 0.2 });
+    expect(again.due()).toBe(true);
+    again.markDone();
+    expect(again.due()).toBe(false);
+  });
+
+  test('a new day gets a new plan', () => {
+    const s = new IntrospectionSampler({ dir, now: () => t, random: () => 0.5 });
+    const first = s.plan();
+    t = Date.parse('2026-10-24T01:00:00Z');
+    const next = s.plan();
+    expect(next.date).toBe('2026-10-24');
+    expect(next.at).not.toEqual(first.at);
+    expect(next.done).toBe(0);
+  });
+});

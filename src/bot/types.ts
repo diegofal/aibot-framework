@@ -104,6 +104,18 @@ export interface BotContext {
    * pool is wired; `isEnabledFor(botId)` gates every use.
    */
   workerPool?: import('../workers/types').WorkerPoolApi;
+  /**
+   * The fleet watcher's broadcasts (src/watcher/broadcast.ts), set by
+   * `BotManager.setWatcherBroadcasts` once the watcher exists. Absent = no
+   * "## Fleet broadcast" planner block.
+   */
+  watcherBroadcasts?: WatcherBroadcastSource;
+  /**
+   * The fleet watcher's view of a bot right now (phase 4), set by
+   * `BotManager.setWatcherSelfState`. Absent = no "## Your current state"
+   * block in the planners or the conversation prompt.
+   */
+  watcherSelfState?: WatcherSelfStateSource;
 
   // Helper methods
   getActiveModel(botId: string): string;
@@ -111,4 +123,18 @@ export interface BotContext {
   getSoulLoader(botId: string): SoulLoader;
   getBotLogger(botId: string): Logger;
   resolveBotId(targetBotId: string): string | undefined;
+}
+
+/** What the agent loop reads of the fleet watcher's broadcasts (`Broadcaster`). */
+export interface WatcherBroadcastSource {
+  /** Delivered to the bot, not yet shown to a planner, recent. */
+  pendingFor(
+    botId: string
+  ): Array<{ id: string; kind: 'wake' | 'directive' | 'goal' | 'question'; text: string }>;
+  markShown(ids: string[], cycleId?: string): void;
+}
+
+/** What the planners and the conversation prompt read of the watcher's self-model (`Watcher.selfStateFor`). */
+export interface WatcherSelfStateSource {
+  selfStateFor(botId: string): import('./agent-loop-prompts').SelfStateInput | undefined;
 }

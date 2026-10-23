@@ -267,6 +267,8 @@ describe('curiosity runner', () => {
     const r = await finishCuriosityCycle(deps(llm), finishArgs(cycle));
     expect(r.extracted).toBe(true);
     expect(r.dispatch).toBeUndefined();
+    // The extractor's surprises go back to the loop (the watcher senses them).
+    expect(r.surprises).toEqual(['a small reranker beat a big embedding']);
     const store = svc.storeFor('b')!;
     const map = store.loadMap();
     expect(map.topics[0].name).toBe('Retrieval reranking');

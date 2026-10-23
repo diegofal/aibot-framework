@@ -156,7 +156,7 @@ export interface KnowledgeMap {
 
 // ── Navigator ───────────────────────────────────────────────────────────
 
-export type DirectiveSource = 'ask_human' | 'feedback' | 'message';
+export type DirectiveSource = 'ask_human' | 'feedback' | 'message' | 'watcher';
 
 export interface Directive {
   id: string;

@@ -135,3 +135,51 @@ describe('resolveWorkerPool', () => {
     expect(resolveWorkerPool({})).toBeUndefined();
   });
 });
+
+describe('shutdownRuntime: the watcher stops alongside the workers', () => {
+  test('a slow watcher stop never delays the worker abort, and is awaited before returning', async () => {
+    const order: string[] = [];
+    let releaseWatcher: () => void = () => {};
+    const watcherDone = new Promise<void>((r) => {
+      releaseWatcher = r;
+    });
+    const pool = {
+      abortAll: async () => {
+        order.push('abortAll');
+        releaseWatcher();
+      },
+    };
+    await shutdownRuntime({
+      getWorkerPool: () => pool as never,
+      stopAll: async () => {
+        order.push('stopAll');
+      },
+      stopWatcher: async () => {
+        order.push('watcher:start');
+        await watcherDone;
+        order.push('watcher:done');
+      },
+      logger: { warn: () => {}, error: () => {}, info: () => {} } as never,
+    });
+    expect(order.indexOf('watcher:start')).toBeLessThan(order.indexOf('abortAll'));
+    expect(order).toContain('watcher:done');
+    expect(order.at(-1)).not.toBe('watcher:start');
+  });
+
+  test('a watcher stop that throws is logged, the bots still stop', async () => {
+    const warns: unknown[] = [];
+    let stopped = false;
+    await shutdownRuntime({
+      getWorkerPool: () => undefined,
+      stopAll: async () => {
+        stopped = true;
+      },
+      stopWatcher: async () => {
+        throw new Error('boom');
+      },
+      logger: { warn: (o: unknown) => warns.push(o), error: () => {}, info: () => {} } as never,
+    });
+    expect(stopped).toBe(true);
+    expect(warns).toHaveLength(1);
+  });
+});

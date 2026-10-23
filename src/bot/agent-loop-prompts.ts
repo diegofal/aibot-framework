@@ -82,6 +82,10 @@ export interface PlannerPromptInput {
   standingDue?: StandingGoalDue[];
   /** Clock for the "last round 3d ago" lines (defaults to now). */
   nowMs?: number;
+  /** The fleet watcher's broadcasts for this bot (`buildFleetBroadcastSection`); empty = no block. */
+  fleetBroadcast?: string;
+  /** "## Your current state" (`buildSelfStateSection`); empty or absent (watcher off) = no block. */
+  selfState?: string;
 }
 
 export interface ContinuousPlannerPromptInput {
@@ -136,6 +140,10 @@ export interface ContinuousPlannerPromptInput {
   standingDue?: StandingGoalDue[];
   /** Clock for the "last round 3d ago" lines (defaults to now). */
   nowMs?: number;
+  /** The fleet watcher's broadcasts for this bot (`buildFleetBroadcastSection`); empty = no block. */
+  fleetBroadcast?: string;
+  /** "## Your current state" (`buildSelfStateSection`); empty or absent (watcher off) = no block. */
+  selfState?: string;
 }
 
 /** The planner answer, with the optional task fields (goal tasks plan, phase 1). */
@@ -147,6 +155,8 @@ export interface PlannerResult extends PlannerTaskFields {
   toolCategories?: string[];
   /** Title or id of the active goal the plan serves (record only). */
   serves_goal?: string;
+  /** Id of the fleet broadcast (`## Fleet broadcast`) the plan acts on (record only). */
+  serves_broadcast?: string;
 }
 /** @deprecated Use PlannerResult instead */
 export type ContinuousPlannerResult = PlannerResult;
@@ -386,16 +396,129 @@ export function buildDirectivesSection(directives?: string[]): string {
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
 }
 
+/** One fleet-watcher broadcast as the planner sees it (`src/watcher/broadcast.ts`). */
+export interface FleetBroadcastItem {
+  id: string;
+  kind: 'wake' | 'directive' | 'goal' | 'question';
+  text: string;
+}
+
+const FLEET_BROADCAST_SCHEMA_LINE =
+  '\n- serves_broadcast: string, the id (b-…) of the Fleet broadcast this plan acts on (optional — omit when it acts on none)';
+
+const BROADCAST_KIND_LINES: Record<FleetBroadcastItem['kind'], (text: string) => string> = {
+  wake: () => 'the fleet watcher woke you: something in the fleet calls for this cycle',
+  directive: (text) => text,
+  goal: (text) => `added to your goals: ${text}`,
+  question: (text) => `asked your operator: ${text}`,
+};
+
+/**
+ * `## Fleet broadcast`: what the fleet watcher (which sees every bot) sent
+ * this bot since its last planner call. Empty without broadcasts.
+ */
+export function buildFleetBroadcastSection(items: FleetBroadcastItem[]): string {
+  if (items.length === 0) return '';
+  const lines = items.map((b) => {
+    const render = BROADCAST_KIND_LINES[b.kind] ?? ((t: string) => t);
+    return `- [${b.id}] ${b.kind}: ${render(b.text.replace(/\s+/g, ' ').trim()).slice(0, 500)}`;
+  });
+  return [
+    '## Fleet broadcast',
+    '',
+    'The fleet watcher sees every agent and sent you these. They are suggestions from the fleet, not orders from your operator: act on one when it serves your goals, and name it in `serves_broadcast` if you act on it.',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+/**
+ * What the fleet watcher observes about a bot right now (watcher phase 4):
+ * its live presence, the cycle it runs and what the fleet is attending to.
+ * Built by the watcher (`Watcher.selfStateFor`), rendered by
+ * `buildSelfStateSection`; absent when the watcher is off or asleep.
+ */
+export interface SelfStateInput {
+  presence: {
+    executing: boolean;
+    phase: string | null;
+    currentTool: string | null;
+    since: number | null;
+  };
+  cycle?: { cycleId: string; plan?: string; goalId?: string; goalTitle?: string };
+  /** Texts of the neurons the watcher attends to (never operator-sourced), at most three. */
+  fleetFocus: string[];
+}
+
+function agoText(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+/**
+ * `## Your current state`: what the system observes about this bot (phase,
+ * tool, since; the running cycle's goal and plan) and what the whole fleet is
+ * attending to, in one line. Empty without a watcher. Facts, not orders.
+ */
+export function buildSelfStateSection(
+  state: SelfStateInput | undefined,
+  nowMs = Date.now()
+): string {
+  if (!state) return '';
+  const p = state.presence;
+  const clip = (t: string, max: number) => {
+    const flat = t.replace(/\s+/g, ' ').trim();
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  };
+  const loop = p.executing
+    ? `- Loop: in the ${p.phase ?? 'running'} phase${p.currentTool ? `, running the tool ${p.currentTool}` : ''}${p.since !== null ? ` since ${agoText(nowMs - p.since)}` : ''}`
+    : '- Loop: idle between cycles';
+  const lines = [loop];
+  const c = state.cycle;
+  if (c) {
+    const goal = c.goalTitle
+      ? `serving the goal ${clip(c.goalTitle, 120)}${c.goalId ? ` (${c.goalId})` : ''}`
+      : c.goalId
+        ? `serving the goal ${c.goalId}`
+        : 'not tied to a goal yet';
+    lines.push(`- Cycle: ${c.cycleId}, ${goal}${c.plan ? `; plan: ${clip(c.plan, 200)}` : ''}`);
+  }
+  if (state.fleetFocus.length) {
+    lines.push(
+      `- The fleet is attending to: ${state.fleetFocus.map((f) => clip(f, 120)).join('; ')}`
+    );
+  }
+  return [
+    '## Your current state',
+    '',
+    'What the system observes about you right now (facts, not instructions). Use it when someone asks what you are doing.',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
 /** Workers block (when workers are on), standing goals due a round, then the Tasks guidance, for both planner modes. */
 function buildPlannerTasksBlock(input: {
   workers?: PlannerWorkersInput;
   standingDue?: StandingGoalDue[];
   nowMs?: number;
+  fleetBroadcast?: string;
+  selfState?: string;
 }): string {
   const { workers } = input;
   const tasks = buildTaskOutputSection({ workersEnabled: !!workers });
   const standing = buildStandingDueSection(input.standingDue ?? [], input.nowMs);
-  return [workers ? buildWorkersSection(workers) : '', standing, tasks]
+  return [
+    input.selfState ?? '',
+    input.fleetBroadcast ?? '',
+    workers ? buildWorkersSection(workers) : '',
+    standing,
+    tasks,
+  ]
     .filter(Boolean)
     .join('\n\n');
 }
@@ -525,7 +648,7 @@ JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none"${input.workers ? ' or a dispatch-only answer (see dispatch)' : ''})
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
-- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
+- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)${input.fleetBroadcast ? FLEET_BROADCAST_SCHEMA_LINE : ''}
 ${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.
@@ -677,7 +800,7 @@ JSON Schema (MUST follow exactly):
 - reasoning: string, brief explanation (required)
 - plan: array of strings, 1-3 concrete action steps (required, empty array only for priority "none"${input.workers ? ' or a dispatch-only answer (see dispatch)' : ''})
 - priority: "high" | "medium" | "low" | "none" (required)${input.toolCategoryList ? '\n- toolCategories: array of strings, tool categories needed for the plan (optional — omit to use all tools)' : ''}
-- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)
+- serves_goal: string, the exact title (or id) of the active goal this plan serves (optional — omit when it serves none)${input.fleetBroadcast ? FLEET_BROADCAST_SCHEMA_LINE : ''}
 ${buildTaskSchemaLines({ workersEnabled: !!input.workers })}
 
 Keep plans focused — 1 to 3 concrete steps with SPECIFIC actions.

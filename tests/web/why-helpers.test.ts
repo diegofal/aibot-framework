@@ -76,6 +76,12 @@ describe('whyPanel', () => {
     expect(html).toContain('Reconstructed from what was held at the time.');
   });
 
+  it('names every actor in words, the watcher included', () => {
+    const html = whyPanel({ what: 'A neuron', by: 'watcher' });
+    expect(html).toContain('<span class="why-key">By</span><span>the watcher</span>');
+    expect(html).toContain('by the watcher');
+  });
+
   it('leaves out empty rows', () => {
     expect(keys(whyPanel({ what: 'Just this' }))).toEqual(['What']);
   });

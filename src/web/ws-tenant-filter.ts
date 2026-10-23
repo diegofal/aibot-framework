@@ -25,6 +25,7 @@ import type { ActivityEvent } from '../bot/activity-stream';
 import type { BotConfig } from '../config';
 import { safeCompare } from '../crypto-utils';
 import { isBotAccessible } from '../tenant/tenant-scoping';
+import type { WatcherEvent, WatcherLogRow, WatcherState } from '../watcher/types';
 
 export interface WsAuth {
   /** The client's tenant; `null` = admin or single-tenant mode. */
@@ -83,7 +84,8 @@ export function canSeeActivityEvent(
 
 export type DashboardSocketData =
   | { type: 'activity'; auth: WsAuth; botFilter: string | undefined }
-  | { type: 'logs'; auth: WsAuth };
+  | { type: 'logs'; auth: WsAuth }
+  | { type: 'watcher'; auth: WsAuth };
 
 export type UpgradePlan =
   | { kind: 'upgrade'; data: DashboardSocketData }
@@ -102,6 +104,14 @@ export function planDashboardSocketUpgrade(
       return { kind: 'reject', status: 403, body: 'Admin access required' };
     }
     return { kind: 'upgrade', data: { type: 'logs', auth } };
+  }
+
+  // The watcher sees the whole fleet: admin (or single-tenant) only.
+  if (url.pathname === '/ws/watcher') {
+    if (deps.multiTenant && !auth.isAdmin) {
+      return { kind: 'reject', status: 403, body: 'Admin access required' };
+    }
+    return { kind: 'upgrade', data: { type: 'watcher', auth } };
   }
 
   const botFilter = url.searchParams.get('botId') || undefined;
@@ -159,5 +169,49 @@ export class ActivitySocketHub<W extends ActivitySocket = ActivitySocket> {
       canSeeActivityEvent(ws.data.auth, e, bots, ws.data.botFilter)
     );
     ws.send(JSON.stringify({ type: 'history', events: visible }));
+  }
+}
+
+export interface WatcherSocket {
+  send(data: string): unknown;
+}
+
+/**
+ * The `/ws/watcher` clients (admin only, checked at upgrade): every watcher
+ * event goes out as `{ type: 'watcher', event }`; on connect the client gets
+ * `{ type: 'history', state, log }`.
+ */
+export class WatcherSocketHub<W extends WatcherSocket = WatcherSocket> {
+  private readonly clients = new Set<W>();
+
+  constructor(private readonly onSendError?: (err: unknown) => void) {}
+
+  get size(): number {
+    return this.clients.size;
+  }
+
+  add(ws: W): void {
+    this.clients.add(ws);
+  }
+
+  remove(ws: W): void {
+    this.clients.delete(ws);
+  }
+
+  broadcast(event: WatcherEvent): void {
+    if (this.clients.size === 0) return;
+    const payload = JSON.stringify({ type: 'watcher', event });
+    for (const ws of this.clients) {
+      try {
+        ws.send(payload);
+      } catch (err) {
+        this.onSendError?.(err);
+        this.clients.delete(ws);
+      }
+    }
+  }
+
+  sendHistory(ws: W, state: WatcherState, log: readonly WatcherLogRow[]): void {
+    ws.send(JSON.stringify({ type: 'history', state, log }));
   }
 }

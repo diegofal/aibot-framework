@@ -21,6 +21,7 @@ import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
 import { countDispatchedRuns, isDispatchOnlyCycle } from '../workers/dispatch-cycle';
 import type { PlannerTaskFields } from '../workers/types';
+import type { ActivityEvent } from './activity-stream';
 import {
   type AdaptiveParams,
   computeAdaptiveAdjustments,
@@ -38,7 +39,9 @@ import {
   buildContinuousPlannerPrompt,
   buildExecutorPrompt,
   buildFeedbackProcessorPrompt,
+  buildFleetBroadcastSection,
   buildPlannerPrompt,
+  buildSelfStateSection,
 } from './agent-loop-prompts';
 import {
   type CycleDispatch,
@@ -145,6 +148,54 @@ interface CycleAttribution {
   exploring?: boolean;
   /** The planner's task answer and what it was offered (for the cycle row). */
   plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
+  /** Fleet-watcher broadcasts put in this cycle's planner prompt (not consumed yet). */
+  broadcastsOffered?: string[];
+  /** Fleet-watcher broadcasts the planner answered with in its prompt (for the cycle row). */
+  broadcastIds?: string[];
+  /** The shown broadcast the planner said its plan acts on (`serves_broadcast`). */
+  servesBroadcast?: string;
+}
+
+/**
+ * Whether a cycle consumes the fleet broadcasts its planner saw (marks them
+ * shown): only a completed cycle that is not a curiosity explore cycle. A
+ * failed, skipped or idle cycle, or an explore one, leaves them pending for
+ * the next planner.
+ */
+export function broadcastsConsumedBy(
+  status: 'completed' | 'idle' | 'skipped' | 'error',
+  exploring: boolean
+): boolean {
+  return status === 'completed' && !exploring;
+}
+
+/** At most this many surprises, each clipped, ride a `curiosity:surprise` event. */
+const SURPRISE_EVENT_MAX = 3;
+const SURPRISE_EVENT_CHARS = 200;
+
+/**
+ * The activity event for a cycle's curiosity surprises (the extractor runs
+ * after `agent:result` is published, so they get their own event; the fleet
+ * watcher scores it as a surprise). Undefined without surprises.
+ */
+export function curiositySurpriseEvent(
+  botId: string,
+  surprises: string[] | undefined,
+  cycleId: string | undefined,
+  nowMs: number
+): ActivityEvent | undefined {
+  const kept = (surprises ?? [])
+    .map((x) => String(x ?? '').trim())
+    .filter(Boolean)
+    .slice(0, SURPRISE_EVENT_MAX)
+    .map((x) => (x.length > SURPRISE_EVENT_CHARS ? `${x.slice(0, SURPRISE_EVENT_CHARS - 1)}…` : x));
+  if (kept.length === 0) return undefined;
+  return {
+    type: 'curiosity:surprise',
+    botId,
+    timestamp: nowMs,
+    data: { surprises: kept, summary: kept[0], ...(cycleId ? { cycleId } : {}) },
+  };
 }
 
 /** The optional task fields of a planner answer. */
@@ -523,6 +574,58 @@ export class AgentLoop {
       this.ctx.logger.warn({ err, botId }, 'Standing goals block: could not compute due goals');
       return [];
     }
+  }
+
+  /**
+   * The fleet watcher's broadcasts for this bot's planner (`## Fleet broadcast`),
+   * noted on the cycle's attribution as offered. They become the row's
+   * `broadcastIds` once the planner answers (`noteServesBroadcast`) and are
+   * marked shown only when the cycle completes (`broadcastsConsumedBy`, in
+   * `recordCycle`). Undefined without a watcher or broadcasts; never throws (a
+   * failure drops the block).
+   */
+  private plannerFleetBroadcast(botId: string): string | undefined {
+    const source = this.ctx.watcherBroadcasts;
+    if (!source) return undefined;
+    try {
+      const items = source.pendingFor(botId);
+      if (items.length === 0) return undefined;
+      const ids = items.map((i) => i.id);
+      const a = this.cycleAttribution.get(botId);
+      if (a) a.broadcastsOffered = ids;
+      return buildFleetBroadcastSection(items);
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Fleet broadcast block: could not read broadcasts');
+      return undefined;
+    }
+  }
+
+  /**
+   * "## Your current state" for this bot's planner, from the watcher's
+   * self-model (`deps.watcherSelfState`). Undefined without a watcher; never
+   * throws (a failure drops the block).
+   */
+  private plannerSelfState(botId: string): string | undefined {
+    const source = this.ctx.watcherSelfState;
+    if (!source) return undefined;
+    try {
+      return buildSelfStateSection(source.selfStateFor(botId)) || undefined;
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Self-state block: could not read the watcher');
+      return undefined;
+    }
+  }
+
+  /**
+   * The planner answered: the broadcasts it was offered are the row's
+   * `broadcastIds`, and `serves_broadcast` is recorded only when it names one.
+   */
+  private noteServesBroadcast(botId: string, ref: string | undefined): void {
+    const a = this.cycleAttribution.get(botId);
+    if (!a) return;
+    if (a.broadcastsOffered?.length) a.broadcastIds = a.broadcastsOffered;
+    if (!ref || !a.broadcastIds?.includes(ref)) return;
+    a.servesBroadcast = ref;
   }
 
   /** The planner answered with the Workers block built at `builtAt`: its ended runs are seen. */
@@ -1108,12 +1211,33 @@ export class AgentLoop {
         ...(attribution.newTasks?.length ? { newTasks: attribution.newTasks } : {}),
         ...(attribution.dispatched?.length ? { dispatched: attribution.dispatched } : {}),
         ...(attribution.plannerTasks ? { plannerTasks: attribution.plannerTasks } : {}),
+        ...(attribution.broadcastIds?.length ? { broadcastIds: attribution.broadcastIds } : {}),
+        ...(attribution.servesBroadcast ? { servesBroadcast: attribution.servesBroadcast } : {}),
       });
       if (status === 'completed' && goal.goalId) {
         this.startCycleGoal(botId, goal.goalId, attribution.cycleId);
       }
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Agent cycle log: failed to record cycle');
+    }
+    this.consumeBroadcasts(botId, attribution, result);
+  }
+
+  /** Mark the broadcasts the planner answered with as shown, when the cycle consumed them. */
+  private consumeBroadcasts(
+    botId: string,
+    attribution: CycleAttribution,
+    result: AgentLoopResult | undefined
+  ): void {
+    const ids = attribution.broadcastIds;
+    const source = this.ctx.watcherBroadcasts;
+    if (!ids?.length || !source || !result) return;
+    const status = result.status === 'completed' && result.isIdle ? 'idle' : result.status;
+    if (!broadcastsConsumedBy(status, attribution.exploring === true)) return;
+    try {
+      source.markShown(ids, attribution.cycleId);
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Fleet broadcast: could not mark broadcasts shown');
     }
   }
 
@@ -1535,7 +1659,7 @@ export class AgentLoop {
       if (detail.curiosity) {
         const { cycle, deps, deliverable, identity } = detail.curiosity;
         const attribution = this.cycleAttribution.get(botId);
-        await raceTimeout(
+        const finished = await raceTimeout(
           finishCuriosityCycle(deps, {
             botId,
             botName: botConfig.name,
@@ -1552,6 +1676,13 @@ export class AgentLoop {
           CURIOSITY_FINISH_TIMEOUT_MS,
           { extracted: false }
         );
+        const surprise = curiositySurpriseEvent(
+          botId,
+          finished.surprises,
+          attribution?.cycleId,
+          Date.now()
+        );
+        if (surprise) this.ctx.activityStream?.publish(surprise);
       }
 
       // Record agent loop usage for tenant metering
@@ -2215,6 +2346,8 @@ export class AgentLoop {
     const plannerWorkers = this.plannerWorkersInput(botId);
     const plannerNowMs = Date.now();
     const standingDue = this.plannerStandingDue(botId, botConfig, goals, plannerNowMs);
+    const fleetBroadcast = this.plannerFleetBroadcast(botId);
+    const selfState = this.plannerSelfState(botId);
     let plannerTaskFields: PlannerTaskFields = {};
 
     if (isContinuous) {
@@ -2259,6 +2392,8 @@ export class AgentLoop {
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
         standingDue,
+        fleetBroadcast,
+        selfState,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
@@ -2337,6 +2472,7 @@ export class AgentLoop {
       selectedToolCategories = continuousResult.toolCategories;
       plannerTokenUsage = continuousResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: continuousResult.serves_goal });
+      this.noteServesBroadcast(botId, continuousResult.serves_broadcast);
       plannerTaskFields = taskFieldsOf(continuousResult);
       this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, continuousResult);
@@ -2381,6 +2517,8 @@ export class AgentLoop {
         environmentContext: plannerEnvContext,
         workers: plannerWorkers,
         standingDue,
+        fleetBroadcast,
+        selfState,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
@@ -2458,6 +2596,7 @@ export class AgentLoop {
       selectedToolCategories = plannerResult.toolCategories;
       plannerTokenUsage = plannerResult.usage;
       this.resolveRunningGoal(botId, goals, { planner: plannerResult.serves_goal });
+      this.noteServesBroadcast(botId, plannerResult.serves_broadcast);
       plannerTaskFields = taskFieldsOf(plannerResult);
       this.notePlannerTasks(botId, plannerTaskFields, !!plannerWorkers);
       this.markWorkersSeen(botId, plannerWorkers, plannerResult);

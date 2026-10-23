@@ -70,6 +70,10 @@ export interface AgentCycleEntry {
    * the planner did not answer. Lets "why was nothing dispatched?" be read.
    */
   plannerTasks?: PlannerTaskFields & { workersOffered: boolean; openTasks: number };
+  /** Fleet-watcher broadcasts the planner was shown (`## Fleet broadcast`). */
+  broadcastIds?: string[];
+  /** The shown broadcast the plan acts on (planner `serves_broadcast`); the watcher counts it served when the cycle completed. */
+  servesBroadcast?: string;
 }
 
 /** Cap for `reason` and `reflection` on a cycle row. */

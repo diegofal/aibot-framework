@@ -7,6 +7,7 @@ import { type MemoryViewer, memoryScope } from '../memory/viewer';
 import { renderSpeakerSection } from '../relay/prompt';
 import type { RelayParty } from '../relay/types';
 import type { CustomizationService } from '../tenant/customization';
+import { buildSelfStateSection } from './agent-loop-prompts';
 import { ENVELOPE_PROMPT_NOTE } from './message-envelope';
 import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
@@ -43,6 +44,12 @@ export interface SystemPromptOptions {
    * rendered as "## Who you are talking with" right after the date.
    */
   speaker?: RelayParty;
+  /**
+   * The turn is the operator's on a surface that verified it (`isOperatorTurn`
+   * in conversation-pipeline.ts). Only then does conversation mode carry the
+   * watcher's "## Your current state" (plan, goal, fleet focus).
+   */
+  operatorTurn?: boolean;
 }
 
 export class SystemPromptBuilder {
@@ -161,6 +168,19 @@ export class SystemPromptBuilder {
 
     if (mode === 'conversation' && options.relayContext) {
       prompt += `\n\n${options.relayContext}`;
+    }
+
+    // What the fleet watcher observes about this bot now (only with the watcher
+    // on, and only for the operator: it names the running plan, goal and the
+    // fleet's focus).
+    if (mode === 'conversation' && options.operatorTurn === true && this.ctx.watcherSelfState) {
+      let selfState = '';
+      try {
+        selfState = buildSelfStateSection(this.ctx.watcherSelfState.selfStateFor(botId));
+      } catch {
+        selfState = '';
+      }
+      if (selfState) prompt += `\n\n${selfState}`;
     }
 
     // Memory search reinforcement (always when memory tools exist)

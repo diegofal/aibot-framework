@@ -74,6 +74,8 @@ export type GoalActor =
   | 'reflection'
   | 'lint'
   | 'wizard'
+  /** The fleet watcher's goal broadcasts (src/watcher/broadcast.ts). */
+  | 'watcher'
   /** Housekeeping with no decision behind it (the task-store migration). */
   | 'system'
   | 'unknown';

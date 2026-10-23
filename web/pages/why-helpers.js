@@ -34,6 +34,7 @@ const ACTOR_TEXT = {
   cron: 'a scheduled job',
   peer: 'another agent',
   system: 'the system',
+  watcher: 'the watcher',
 };
 
 /** The folded line keeps a short head: goal titles are often whole briefs. */

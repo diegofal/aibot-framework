@@ -29,6 +29,7 @@ export const NOISE_EVENTS = new Set([
   'compaction',
   'agent:idle',
   'agent:phase',
+  'curiosity:surprise',
 ]);
 
 /** Lower sorts first: what needs eyes, then what is alive, then what sleeps. */

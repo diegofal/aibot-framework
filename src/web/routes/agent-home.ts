@@ -39,6 +39,7 @@ import {
   FLEET_PRESENCE_TTL_MS,
   HOME_CACHE_TTL_MS,
   type HomeKarmaSource,
+  type RunningCycle,
   buildAgentHome,
   buildFleetPresence,
   buildPresence,
@@ -156,7 +157,11 @@ export function parseGoalEdits(body: unknown): GoalEdits | string {
 
 export interface AgentHomeRouteDeps {
   config: Config;
-  botManager: StatsBotManager & { isRunning?(botId: string): boolean };
+  botManager: StatsBotManager & {
+    isRunning?(botId: string): boolean;
+    /** The running agent-loop cycle (watcher phase 4: `cycle` on the presence payload). */
+    getRunningCycle?(botId: string): RunningCycle | undefined;
+  };
   logger: Logger;
   karmaService?: HomeKarmaSource;
   presence?: PresenceTracker;
@@ -185,6 +190,7 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     workers: deps.presence ? (id) => deps.presence?.workers(id) ?? [] : undefined,
     isRunning: (id) => deps.botManager.isRunning?.(id) ?? false,
     pendingPermissions: deps.pendingPermissions,
+    runningCycle: (id) => deps.botManager.getRunningCycle?.(id),
   } as AgentHomeDeps;
 
   const findBot = (c: import('hono').Context) => {

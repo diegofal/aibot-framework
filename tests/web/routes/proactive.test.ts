@@ -203,3 +203,63 @@ describe('GET /api/proactive', () => {
     expect(msgs.map((m) => m.botId)).toEqual(['b3', 'b2']);
   });
 });
+
+describe('GET /api/proactive: the fleet watcher', () => {
+  function watcherApp(tenantId?: string) {
+    const reads: string[] = [];
+    const config = {
+      operator: { telegramChatId: 1 },
+      bots: [{ id: 'b1', name: 'Bot One', tenantId: 't1' }] as BotConfig[],
+    } as Config;
+    const app = new Hono();
+    if (tenantId) {
+      app.use('*', async (c, next) => {
+        c.set('tenant', { tenantId, apiKey: 'k', plan: 'pro' });
+        return next();
+      });
+    }
+    app.route(
+      '/api/proactive',
+      proactiveRoutes({
+        config,
+        logger: noopLogger,
+        now: () => NOW,
+        readToolAudit: (botId) => {
+          reads.push(botId);
+          return botId === '__watcher__'
+            ? [
+                entry('__watcher__', '2026-10-11T14:00:00.000Z', {
+                  args: {
+                    chatId: 'operator',
+                    message: 'Fleet watcher: who owns Acme?',
+                    aboutBot: 'b1',
+                  },
+                }),
+              ]
+            : [];
+        },
+      })
+    );
+    return { app, reads };
+  }
+
+  it('the admin sees the questions it asked, as the fleet watcher', async () => {
+    const { app } = watcherApp();
+    const { body } = await get(app, '/api/proactive');
+    const msgs = body.messages as Array<Record<string, unknown>>;
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatchObject({
+      botId: '__watcher__',
+      botName: 'Fleet watcher',
+      toOperator: true,
+    });
+    expect(WhySchema.safeParse(msgs[0].why).success).toBe(true);
+  });
+
+  it('a tenant never reads them', async () => {
+    const { app, reads } = watcherApp('t1');
+    const { body } = await get(app, '/api/proactive');
+    expect(reads).not.toContain('__watcher__');
+    expect(body.messages).toEqual([]);
+  });
+});
