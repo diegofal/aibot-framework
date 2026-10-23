@@ -89,3 +89,34 @@ describe('identity name: only the top identity block', () => {
     expect(parseIdentityName('## People\n- name: Diego\n\n## Identity\nname: Finny\n')).toBeNull();
   });
 });
+
+describe('identity name: block level and generated-soul headings', () => {
+  test('### sub-sections under ## Identity stay inside the block', () => {
+    expect(parseIdentityName('## Identity\n### Basics\n- name: Atlas\n')).toBe('Atlas');
+    expect(
+      parseIdentityName('# Me\n\n## Identity\n### Voice\ncalm\n### Basics\nname: Atlas\n')
+    ).toBe('Atlas');
+  });
+
+  test('generated souls: ## Profile / ## Core / ## Basics / ## Perfil are identity blocks', () => {
+    expect(parseIdentityName('# Atlas\n\n## Profile\n- name: Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('# Atlas\n\n## Core\n- **Name:** Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('## Basics\nname: Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('## Perfil\n- nombre: x\n- name: Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('## 🪪 Bot identity\nname: Atlas\n')).toBe('Atlas');
+  });
+
+  test('a ## heading at the same level closes the identity block', () => {
+    expect(
+      parseIdentityName('## Identity\n### Basics\nemoji: x\n## People I serve\n- name: Diego\n')
+    ).toBeNull();
+  });
+
+  test('people / contacts / operator sections are still rejected', () => {
+    expect(parseIdentityName('## People I serve\n- name: Diego\n')).toBeNull();
+    expect(parseIdentityName('## Contacts\n- name: Diego\n')).toBeNull();
+    expect(parseIdentityName('## Operator\n- name: Diego\n')).toBeNull();
+    expect(parseIdentityName('## Operator profile\n- name: Diego\n')).toBeNull();
+    expect(parseIdentityName('## Identity\n### Operator\n- name: Diego\n')).toBeNull();
+  });
+});

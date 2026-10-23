@@ -31,7 +31,7 @@ import type { ContactEntry, UserDirectory } from '../bot/user-directory';
 import type { Config } from '../config';
 import { readTasksSnapshot } from '../goals/task-store';
 import type { Logger } from '../logger';
-import { SoulLoader, stripMarkdownEmphasis } from '../soul';
+import { SoulLoader, parseIdentityField, parseIdentityName } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { type AgentCycleRecord, readAgentCycles } from '../stats/readers/agent-cycles';
 import { parseGoals } from '../tools/goals';
@@ -261,10 +261,12 @@ function stageFleet(ctx: StageCtx): void {
     if (ctx.graph.findByKey(key)) continue;
     const soulDir = soulDirOf(ctx.config, bot);
     const loader = loaderFor(ctx, soulDir);
-    const identity = parseKeyValues(loader.readIdentity());
-    const name = identity.name ?? bot.name ?? bot.id;
+    // Same block rule as the relay's `readIdentityName`, so both agree on the name.
+    const identityRaw = loader.readIdentity();
+    const name = parseIdentityName(identityRaw) ?? bot.name ?? bot.id;
+    const vibe = parseIdentityField(identityRaw, 'vibe');
     const purpose =
-      bot.description || identity.vibe || firstCoreDrive(loader.readMotivations()) || undefined;
+      bot.description || vibe || firstCoreDrive(loader.readMotivations()) || undefined;
     const channel = describeChannel(ctx.channelState?.(bot.id), bot.enabled !== false);
     const activeGoals = parseGoals(loader.readGoals()).active.length;
     const traits = readTraits(ctx.config, bot.id);
@@ -1031,18 +1033,6 @@ function describeChannel(status: ChannelStatus | undefined, enabled: boolean): s
       ? 'dashboard only'
       : `telegram ${status.state}`;
   return enabled ? base : `${base}, disabled`;
-}
-
-function parseKeyValues(raw: string | null): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of (raw ?? '').split('\n')) {
-    // `**Name:** X` / `- **vibe**: X`: emphasis around the key and the value goes.
-    const m = /^[-*_>\s]*(\w+)(?:\*\*|__)?\s*:(.+)$/.exec(line);
-    if (!m || out[m[1].toLowerCase()]) continue;
-    const value = stripMarkdownEmphasis(m[2]);
-    if (value) out[m[1].toLowerCase()] = value;
-  }
-  return out;
 }
 
 function firstCoreDrive(raw: string | null): string | undefined {

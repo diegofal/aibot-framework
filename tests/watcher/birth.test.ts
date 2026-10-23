@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ContactEntry } from '../../src/bot/user-directory';
 import type { Config } from '../../src/config';
+import { parseIdentityName } from '../../src/soul';
 import {
   type BirthDeps,
   beginBirth,
@@ -605,6 +606,29 @@ describe('birth: bot names written in markdown', () => {
     expect(n?.text.startsWith('MyFirstMillion Bot')).toBe(true);
     expect(n?.text).not.toContain('*');
     expect(n?.text).not.toContain('`');
+  });
+
+  test('a name: under "## People I serve" is not the bot (same rule as the relay)', async () => {
+    const { d, graph } = deps();
+    const identity = '# Identity\n\nemoji: x\n\n## People I serve\n- name: Diego\n- vibe: loud\n';
+    writeFileSync(join(root, 'souls', 'b2', 'IDENTITY.md'), identity);
+    await continueBirth(d, beginBirth(d));
+    const n = graph.findByKey('bot:b2');
+    expect(parseIdentityName(identity)).toBeNull();
+    expect(n?.meta?.name).toBe('b2');
+    expect(n?.text).not.toContain('Diego');
+    expect(n?.text).not.toContain('loud');
+  });
+
+  test('"__Name__:" under "## Identity" → "### Basics" is the bot, as for the relay', async () => {
+    const { d, graph } = deps();
+    const identity = '## Identity\n### Basics\n- __Name__: Atlas\n- vibe: steady\n';
+    writeFileSync(join(root, 'souls', 'b2', 'IDENTITY.md'), identity);
+    await continueBirth(d, beginBirth(d));
+    const n = graph.findByKey('bot:b2');
+    expect(parseIdentityName(identity)).toBe('Atlas');
+    expect(n?.meta?.name).toBe('Atlas');
+    expect(n?.text).toBe('Atlas: steady');
   });
 });
 

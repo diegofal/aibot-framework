@@ -116,22 +116,53 @@ export function stripMarkdownEmphasis(value: string): string {
  * The `name:` field of an IDENTITY.md text, also when written in markdown
  * (`**Name:** X`, `- **name**: X`, a backticked value); null without one.
  * Only the top identity block counts: lines before the first `##` section, or
- * inside leading `## Identity` (`Identidad`, `Who I am`) sections. A `name:`
- * bullet under any other section ("## People I serve\n- name: Diego") is
- * someone else's name, and so is everything after it.
+ * inside leading identity sections (`Identity`, `Identidad`, `Who I am`,
+ * `Profile`, `Perfil`, `Core`, `Basics`). Deeper headings under an identity
+ * section (`## Identity` → `### Basics`) stay inside it; a heading at the same
+ * level or above closes it. A `name:` bullet under any other section
+ * (`## People I serve`, `## Contacts`, `## Operator`) is someone else's name,
+ * and so is everything after it.
  */
 export function parseIdentityName(raw: string | null | undefined): string | null {
-  if (!raw) return null;
+  return parseIdentityField(raw, 'name');
+}
+
+const IDENTITY_HEADING =
+  /\b(?:identity|identidad|who\s+i\s+am|who\s+am\s+i)\b|^[^\p{L}]*(?:my\s+|mi\s+)?(?:profile|perfil|core|basics)\b/iu;
+const OTHER_PEOPLE_HEADING =
+  /\b(?:operator|operador|people|personas|contacts?|contactos?|users?|usuarios?|clients?|clientes?|team|equipo|serve|family|familia)\b/i;
+
+/** Whether a section heading opens (or continues) the bot's own identity block. */
+export function isIdentityHeading(text: string): boolean {
+  return IDENTITY_HEADING.test(text) && !OTHER_PEOPLE_HEADING.test(text);
+}
+
+/**
+ * A `key:` field (a plain word: `name`, `vibe`) of the top identity block of an
+ * IDENTITY.md text, with the block rule and markdown handling of
+ * {@link parseIdentityName}; null without one.
+ */
+export function parseIdentityField(raw: string | null | undefined, key: string): string | null {
+  if (!raw || !/^\w+$/.test(key)) return null;
+  const keyRe = new RegExp(`^[\\s>*_-]*(?:\\*\\*|__)?${key}(?:\\*\\*|__)?\\s*:(.+)$`, 'i');
+  // Level of the identity heading we are inside; 0 = before any ## section.
+  let blockLevel = 0;
   for (const line of raw.split('\n')) {
-    const section = /^\s*##+\s*(.*)$/.exec(line);
+    const section = /^\s*(#{2,})\s*(.*)$/.exec(line);
     if (section) {
-      if (/\b(?:identity|identidad|who\s+i\s+am|who\s+am\s+i)\b/i.test(section[1])) continue;
+      const level = section[1].length;
+      const text = section[2];
+      if (blockLevel > 0 && level > blockLevel && !OTHER_PEOPLE_HEADING.test(text)) continue;
+      if (isIdentityHeading(text)) {
+        if (blockLevel === 0 || level < blockLevel) blockLevel = level;
+        continue;
+      }
       return null;
     }
-    const match = line.match(/^[\s>*_-]*(?:\*\*|__)?name(?:\*\*|__)?\s*:(.+)$/i);
+    const match = keyRe.exec(line);
     if (!match) continue;
-    const name = stripMarkdownEmphasis(match[1]);
-    if (name) return name;
+    const value = stripMarkdownEmphasis(match[1]);
+    if (value) return value;
   }
   return null;
 }
