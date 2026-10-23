@@ -269,6 +269,8 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 
 const LINK_NOTES = {
   'no-embeddings': 'no embeddings: neurons sit on shells by kind, without related links',
+  partial:
+    'partly linked: an embedding error stopped the run; the rest get linked at the next start or maintenance',
   pending: 'linking what it knows…',
 };
 

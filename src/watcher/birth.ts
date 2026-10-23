@@ -45,6 +45,7 @@ import {
   narrateLateLink,
   narrateLearned,
   narrateLinkFailed,
+  narrateLinkStopped,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -71,8 +72,14 @@ import {
 
 const DAY_MS = 86_400_000;
 const EMBED_BATCH = 32;
-/** The one embed before a backfill: an embedder that is down shows it within this. */
-export const EMBED_PROBE_TIMEOUT_MS = 5000;
+/**
+ * Budget of the one embed before a backfill. The first call may load the
+ * model (a cold Ollama load takes 6–10 s on CPU, and it unloads again after
+ * `keep_alive`), so a late answer within this is an embedder that is up. A
+ * connection error (ECONNREFUSED, ENOTFOUND) rejects at once and never waits
+ * for it.
+ */
+export const EMBED_PROBE_TIMEOUT_MS = 60_000;
 const RELATED_PER_NEURON = 5;
 const TEXT_MAX = 300;
 
@@ -784,15 +791,27 @@ async function stageLink(ctx: StageCtx): Promise<void> {
   if (res.cancelled) return;
   if (res.failure && res.status === 'no-embeddings') {
     ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(res.failure));
+  } else if (res.failure) {
+    ctx.log.say(
+      'birth',
+      'birth:link',
+      narrateLinkStopped({ embedded: res.embedded, total: res.pending, failure: res.failure })
+    );
   }
   finish(res.status);
 }
 
 export interface LinkResult {
-  /** `ok` once any live neuron has a vector. */
+  /**
+   * `ok` once any live neuron has a vector and the call ended without an
+   * embedding error; `partial` when the graph has vectors but the call stopped
+   * at one; `no-embeddings` when no live neuron has a vector.
+   */
   status: LinkStatus;
   /** Neurons embedded by this call. */
   embedded: number;
+  /** Live neurons without a vector when the call started. */
+  pending: number;
   /** `related` edges this call added. */
   edges: number;
   /**
@@ -817,9 +836,16 @@ export async function linkUnembedded(
 ): Promise<LinkResult> {
   const graph = deps.graph;
   const embed = deps.embed;
-  const result: LinkResult = { status: 'no-embeddings', embedded: 0, edges: 0 };
+  const pending = graph.list().filter((n) => !n.archivedAt && !graph.getEmbedding(n.id));
+  const result: LinkResult = {
+    status: 'no-embeddings',
+    embedded: 0,
+    edges: 0,
+    pending: pending.length,
+  };
   const done = () => {
-    result.status = graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings';
+    result.status =
+      graph.embeddedIds().length === 0 ? 'no-embeddings' : result.failure ? 'partial' : 'ok';
     return result;
   };
   if (!embed) return done();
@@ -830,31 +856,42 @@ export async function linkUnembedded(
     (deps.config.soul as { search?: { concurrency?: number } } | undefined)?.search?.concurrency ??
       3
   );
-  const pending = graph.list().filter((n) => !n.archivedAt && !graph.getEmbedding(n.id));
   for (let i = 0; i < pending.length; i += EMBED_BATCH) {
     if (deps.isCancelled?.()) return { ...result, cancelled: true };
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
     let batchEmbedded = 0;
-    await mapLimit(batch, concurrency, async (n) => {
-      // A cancelled run neither starts another embedding nor stores one that
-      // settled after the stop: its writes belong to no live run.
-      if (deps.isCancelled?.()) return;
-      // An embedder that failed and has embedded nothing in this batch is down:
-      // do not queue the rest of the batch behind its connect timeout.
-      if (failure && batchEmbedded === 0) return;
-      try {
-        const vec = await embed(`${n.kind}: ${n.text}`);
+    let queue = batch;
+    while (queue.length > 0) {
+      const heldBack: Neuron[] = [];
+      await mapLimit(queue, concurrency, async (n) => {
+        // A cancelled run neither starts another embedding nor stores one that
+        // settled after the stop: its writes belong to no live run.
         if (deps.isCancelled?.()) return;
-        if (Array.isArray(vec) && vec.length > 0) {
-          graph.setEmbedding(n.id, vec);
-          result.embedded++;
-          batchEmbedded++;
+        // An embedder that failed and has embedded nothing in this batch yet
+        // looks down: hold the rest back instead of queueing it behind its
+        // connect timeout, until the embeds in flight settle.
+        if (failure && batchEmbedded === 0) {
+          heldBack.push(n);
+          return;
         }
-      } catch (err) {
-        failure ??= err;
-      }
-    });
+        try {
+          const vec = await embed(`${n.kind}: ${n.text}`);
+          if (deps.isCancelled?.()) return;
+          if (Array.isArray(vec) && vec.length > 0) {
+            graph.setEmbedding(n.id, vec);
+            result.embedded++;
+            batchEmbedded++;
+          }
+        } catch (err) {
+          failure ??= err;
+        }
+      });
+      // Settled with zero successes: the embedder is down. Otherwise an embed
+      // in flight succeeded after the early error: the held-back ones run too.
+      if (batchEmbedded === 0 || deps.isCancelled?.()) break;
+      queue = heldBack;
+    }
     if (deps.isCancelled?.()) return { ...result, cancelled: true };
     if (failure) result.failure ??= failure instanceof Error ? failure.message : String(failure);
     // Every embed of the batch failed: stop here (whatever vectors the graph
@@ -904,13 +941,14 @@ export async function linkMissing(
   // call, not a connect timeout per neuron.
   const probeFailure = await probeEmbedder(embed, opts.probeTimeoutMs ?? EMBED_PROBE_TIMEOUT_MS);
   if (deps.isCancelled?.()) {
-    return { status: 'no-embeddings', embedded: 0, edges: 0, cancelled: true };
+    return { status: 'no-embeddings', embedded: 0, edges: 0, pending, cancelled: true };
   }
   const res: LinkResult = probeFailure
     ? {
-        status: deps.graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings',
+        status: deps.graph.embeddedIds().length > 0 ? 'partial' : 'no-embeddings',
         embedded: 0,
         edges: 0,
+        pending,
         failure: probeFailure,
       }
     : await linkUnembedded(deps);
@@ -941,9 +979,18 @@ export async function linkMissing(
       narrateLinkFailed({ pending, reason: res.failure ?? 'the embedder returned no vectors' })
     );
   }
+  // `ok` once a run ends without an error; `partial` when it embedded some and
+  // stopped (the next start or maintenance continues). A run that embedded
+  // nothing leaves the recorded status as it was.
   const record = readBirthRecord(deps.dir);
-  if (record && res.status === 'ok' && record.linkStatus !== 'ok') {
-    writeBirthRecord(deps, { ...record, linkStatus: 'ok' });
+  const next: LinkStatus | undefined =
+    res.status === 'ok'
+      ? 'ok'
+      : res.status === 'partial' && res.embedded > 0
+        ? 'partial'
+        : undefined;
+  if (record && next && record.linkStatus !== next) {
+    writeBirthRecord(deps, { ...record, linkStatus: next });
   }
   return res;
 }

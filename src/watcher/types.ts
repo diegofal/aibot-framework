@@ -120,7 +120,8 @@ export interface BufferItem {
   fromOperator?: true;
 }
 
-export type LinkStatus = 'ok' | 'no-embeddings' | 'pending';
+/** `partial`: some neurons embedded, then an embedding error stopped the run; start/maintenance continue it. */
+export type LinkStatus = 'ok' | 'partial' | 'no-embeddings' | 'pending';
 
 export interface WatcherState {
   running: boolean;

@@ -128,6 +128,15 @@ export function narrateLinkFailed(input: { pending: number; reason: string }): s
   return `Could not embed the ${plural(input.pending, 'neuron', 'neurons')} without a vector (${input.reason}). I will try again at the next maintenance.`;
 }
 
+/** Birth's link stage embedded some neurons and then stopped at an embedding error. */
+export function narrateLinkStopped(input: {
+  embedded: number;
+  total: number;
+  failure: string;
+}): string {
+  return `Stopped at an embedding error after ${num(input.embedded)} of ${plural(input.total, 'neuron', 'neurons')} (${input.failure}). The rest get embedded at the next start or maintenance.`;
+}
+
 export function narrateNoEmbeddings(reason: string): string {
   return `Could not embed what I know (${reason}). Placing neurons by kind, without related edges.`;
 }

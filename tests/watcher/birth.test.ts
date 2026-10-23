@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, jest, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -393,6 +393,22 @@ describe('birth', () => {
     expect(rows.find((r) => r.op === 'birth:link')?.text).toContain('ollama down');
   });
 
+  test('an embedder that dies mid-way: a row says where it stopped and birth ends partial', async () => {
+    let calls = 0;
+    const embed = async () => {
+      calls++;
+      if (calls > 3) throw new Error('connect ECONNREFUSED 127.0.0.1:11434');
+      return [1, 0, 0];
+    };
+    const { record, rows, graph } = await born({ embed });
+    const total = graph.list().filter((n) => !n.archivedAt).length;
+    expect(graph.embeddedIds().length).toBe(3);
+    expect(record.linkStatus).toBe('partial');
+    const row = rows.filter((r) => r.op === 'birth:link').at(-1);
+    expect(row?.text).toContain(`after 3 of ${total}`);
+    expect(row?.text).toContain('ECONNREFUSED');
+  });
+
   test('resumes from a half-done birth.json', async () => {
     const { d, rows } = deps();
     write(
@@ -685,7 +701,8 @@ describe('linking: an embedder that is down', () => {
     expect(res.failure).toContain('ECONNREFUSED');
     // concurrency 2: the two embeds in flight, never the rest of the batch nor the next batches
     expect(calls).toBeLessThanOrEqual(2);
-    expect(res.status).toBe('ok');
+    // The graph has vectors but this run stopped at an error: partial (was 'ok', which hid the stop).
+    expect(res.status).toBe('partial');
   });
 
   test('linkUnembedded keeps the first real error when a later batch fails after some embedded', async () => {
@@ -744,6 +761,94 @@ describe('linking: an embedder that is down', () => {
     expect(res?.failure).toMatch(/did not answer within 20 ms/);
     expect(rows.at(-1)?.op).toBe('maintain:link');
     expect(rows.at(-1)?.text).toContain('did not answer within 20 ms');
+  });
+
+  test('a cold model load: a probe that answers after 8 s is up and the backfill proceeds', async () => {
+    const { d, graph } = await born();
+    addPending(graph, 4);
+    let calls = 0;
+    const embed = () => {
+      calls++;
+      if (calls === 1) return new Promise<number[]>((r) => setTimeout(() => r([1, 0, 0]), 8000));
+      return Promise.resolve([1, 0, 0]);
+    };
+    jest.useFakeTimers();
+    try {
+      let settled = false;
+      const p = linkMissing({ ...d, embed }).finally(() => {
+        settled = true;
+      });
+      for (let i = 0; i < 30 && !settled; i++) {
+        await Promise.resolve();
+        await Promise.resolve();
+        jest.advanceTimersByTime(1000);
+      }
+      const res = await p;
+      expect(res?.failure).toBeUndefined();
+      expect(res?.embedded).toBeGreaterThan(0);
+      expect(calls).toBeGreaterThan(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('a refused connection skips the backfill at once, without waiting for the probe budget', async () => {
+    const { d } = await born();
+    let calls = 0;
+    const started = Date.now();
+    const res = await linkMissing({
+      ...d,
+      embed: async () => {
+        calls++;
+        throw refused();
+      },
+    });
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(calls).toBe(1);
+    expect(res?.embedded).toBe(0);
+    expect(res?.failure).toContain('ECONNREFUSED');
+  });
+
+  test('one early rejection inside a batch never skips neurons the embedder then embeds', async () => {
+    const { d, graph } = await born();
+    // Keep only 32 pending neurons: one full batch.
+    for (const n of graph.list()) graph.setEmbedding(n.id, [0, 0, 1]);
+    addPending(graph, 32);
+    let calls = 0;
+    const config = { ...d.config, soul: { search: { concurrency: 3 } } } as Config;
+    const res = await linkUnembedded({
+      ...d,
+      config,
+      embed: async () => {
+        calls++;
+        if (calls === 1) throw refused();
+        await new Promise((r) => setTimeout(r, 2));
+        return [1, 0, 0];
+      },
+    });
+    expect(calls).toBe(32);
+    expect(res.embedded).toBe(31);
+    expect(res.failure).toContain('ECONNREFUSED');
+  });
+
+  test('linkMissing that stops at an error after embedding some marks birth.json partial', async () => {
+    const { d, graph } = await born();
+    addPending(graph, 10);
+    let calls = 0;
+    const res = await linkMissing({
+      ...d,
+      embed: async () => {
+        calls++;
+        if (calls > 4) throw refused();
+        return [1, 0, 0];
+      },
+    });
+    expect(res?.embedded).toBeGreaterThan(0);
+    expect(res?.failure).toContain('ECONNREFUSED');
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('partial');
+    const ok = await linkMissing({ ...d, embed: async () => [1, 0, 0] });
+    expect(ok?.failure).toBeUndefined();
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('ok');
   });
 
   test('linkMissing that embedded says it relaid out', async () => {

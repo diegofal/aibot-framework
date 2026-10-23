@@ -10,6 +10,7 @@ import {
   narrateLateLink,
   narrateLearned,
   narrateLinkFailed,
+  narrateLinkStopped,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -141,6 +142,11 @@ describe('narration', () => {
       'Could not embed the 300 neurons without a vector (connect ECONNREFUSED). I will try again at the next maintenance.'
     );
     expect(text).not.toContain('Placing');
+  });
+  test('narrateLinkStopped says how far it got and that the rest follows', () => {
+    expect(narrateLinkStopped({ embedded: 3, total: 1200, failure: 'connect ECONNREFUSED' })).toBe(
+      'Stopped at an embedding error after 3 of 1,200 neurons (connect ECONNREFUSED). The rest get embedded at the next start or maintenance.'
+    );
   });
   test('narrateNoEmbeddings', () => {
     expect(narrateNoEmbeddings('no embedding model configured')).toBe(

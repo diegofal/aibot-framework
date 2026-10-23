@@ -313,6 +313,12 @@ describe('stateHtml', () => {
     );
   });
 
+  it('explains a partial link in the amber note', () => {
+    const html = stateHtml(runningState({ linkStatus: 'partial' }), NOW);
+    expect(html).toContain('<div class="watcher-note">');
+    expect(html).toContain('partly linked');
+  });
+
   it('escapes the last error', () => {
     const html = stateHtml(runningState({ lastError: '<img src=x>' }), NOW);
     expect(html).toContain('&lt;img src=x&gt;');
