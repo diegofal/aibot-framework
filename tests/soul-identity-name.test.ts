@@ -3,7 +3,7 @@
  * used e.g. in the relay header. Synthetic data only.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SoulLoader, parseIdentityName, stripMarkdownEmphasis } from '../src/soul';
@@ -118,5 +118,56 @@ describe('identity name: block level and generated-soul headings', () => {
     expect(parseIdentityName('## Operator\n- name: Diego\n')).toBeNull();
     expect(parseIdentityName('## Operator profile\n- name: Diego\n')).toBeNull();
     expect(parseIdentityName('## Identity\n### Operator\n- name: Diego\n')).toBeNull();
+  });
+});
+
+describe('identity: one parser for the prompt, the relay and writeIdentity', () => {
+  const MIXED = '## Identity\n**Name:** Luna\n\n## People I serve\nname: Diego\n';
+
+  test('the system prompt names the bot from the identity block, not the People section', () => {
+    const l = loader(MIXED);
+    expect(l.readIdentityName()).toBe('Luna');
+    const prompt = l.composeSystemPrompt() ?? '';
+    expect(prompt).toContain('Your name is Luna.');
+    expect(prompt).not.toContain('Diego');
+  });
+
+  test('writeIdentity updates the bold line in the identity block, never the People line', () => {
+    const l = loader(MIXED);
+    l.writeIdentity({ name: 'Nova' });
+    const raw = readFileSync(join(l.getDir(), 'IDENTITY.md'), 'utf-8');
+    expect(raw).toBe('## Identity\n**Name:** Nova\n\n## People I serve\nname: Diego\n');
+    expect(l.readIdentityName()).toBe('Nova');
+  });
+
+  test('writeIdentity adds a missing field inside the identity block', () => {
+    const l = loader(MIXED);
+    l.writeIdentity({ emoji: '🦊' });
+    const raw = readFileSync(join(l.getDir(), 'IDENTITY.md'), 'utf-8');
+    expect(raw).toBe('## Identity\n**Name:** Luna\nemoji: 🦊\n\n## People I serve\nname: Diego\n');
+  });
+
+  test('writeIdentity on a flat or missing file writes key: value lines', () => {
+    const flat = loader('name: Jarvis\nemoji: x\n');
+    flat.writeIdentity({ vibe: 'calm', name: 'J' });
+    expect(readFileSync(join(flat.getDir(), 'IDENTITY.md'), 'utf-8')).toBe(
+      'name: J\nemoji: x\nvibe: calm\n'
+    );
+    const none = loader();
+    none.writeIdentity({ name: 'Atlas' });
+    expect(readFileSync(join(none.getDir(), 'IDENTITY.md'), 'utf-8')).toBe('name: Atlas\n');
+  });
+});
+
+describe('identity: level-1 headings', () => {
+  test('a # heading after the identity block closes it', () => {
+    expect(parseIdentityName('## Identity\n- emoji: 🦊\n\n# Operator\nname: Diego\n')).toBeNull();
+    expect(parseIdentityName('## Identity\n- emoji: 🦊\n\n# Notes\nname: Diego\n')).toBeNull();
+  });
+
+  test('a # title line at the top opens the file', () => {
+    expect(parseIdentityName('# Atlas\n\nname: Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('# Identity\nname: Atlas\n')).toBe('Atlas');
+    expect(parseIdentityName('# Operator\nname: Diego\n')).toBeNull();
   });
 });

@@ -119,9 +119,12 @@ export function stripMarkdownEmphasis(value: string): string {
  * inside leading identity sections (`Identity`, `Identidad`, `Who I am`,
  * `Profile`, `Perfil`, `Core`, `Basics`). Deeper headings under an identity
  * section (`## Identity` → `### Basics`) stay inside it; a heading at the same
- * level or above closes it. A `name:` bullet under any other section
- * (`## People I serve`, `## Contacts`, `## Operator`) is someone else's name,
- * and so is everything after it.
+ * level or above closes it. A `#` title as the first heading (`# Identity`,
+ * `# Atlas`) opens the file; any other level-1 heading (`# Operator`) closes
+ * the block. A `name:` bullet under any other section (`## People I serve`,
+ * `## Contacts`, `## Operator`) is someone else's name, and so is everything
+ * after it. The system prompt (`SoulLoader.parseIdentity`) and
+ * `SoulLoader.writeIdentity` use the same block rule.
  */
 export function parseIdentityName(raw: string | null | undefined): string | null {
   return parseIdentityField(raw, 'name');
@@ -143,28 +146,74 @@ export function isIdentityHeading(text: string): boolean {
  * {@link parseIdentityName}; null without one.
  */
 export function parseIdentityField(raw: string | null | undefined, key: string): string | null {
-  if (!raw || !/^\w+$/.test(key)) return null;
-  const keyRe = new RegExp(`^[\\s>*_-]*(?:\\*\\*|__)?${key}(?:\\*\\*|__)?\\s*:(.+)$`, 'i');
-  // Level of the identity heading we are inside; 0 = before any ## section.
+  if (!raw) return null;
+  const found = locateIdentityField(raw.split('\n'), key);
+  return found.value ?? null;
+}
+
+/**
+ * Where a `key:` field sits in the top identity block of IDENTITY.md lines:
+ * `line` (its index) and `value` (markdown stripped) when present, and `end`,
+ * the index of the line that closes the block (or `lines.length`). A `#`
+ * title as the first heading (`# Identity`, `# Atlas`) opens the file; any
+ * other level-1 heading closes the block. The one definition of the block,
+ * shared by {@link parseIdentityField} and `SoulLoader.writeIdentity`.
+ */
+/** `key:` at the start of a line, with list / quote / emphasis marks around the key; `tail` follows the colon. */
+function fieldKeyRe(key: string, tail: string): RegExp {
+  return new RegExp(`^[\\s>*_-]*(?:\\*\\*|__)?${key}(?:\\*\\*|__)?\\s*:${tail}`, 'i');
+}
+
+function locateIdentityField(
+  lines: string[],
+  key: string
+): { line?: number; value?: string; end: number } {
+  if (!/^\w+$/.test(key)) return { end: lines.length };
+  const keyRe = fieldKeyRe(key, '(.+)$');
+  // Level of the identity heading we are inside; 0 = before any section.
   let blockLevel = 0;
-  for (const line of raw.split('\n')) {
-    const section = /^\s*(#{2,})\s*(.*)$/.exec(line);
+  let seenHeading = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const section = /^\s*(#+)\s*(.*)$/.exec(line);
     if (section) {
       const level = section[1].length;
       const text = section[2];
+      const first = !seenHeading;
+      seenHeading = true;
+      if (level === 1) {
+        // A title line at the top (`# Identity`, `# <bot name>`) opens the file.
+        if (first && !OTHER_PEOPLE_HEADING.test(text)) continue;
+        return { end: i };
+      }
       if (blockLevel > 0 && level > blockLevel && !OTHER_PEOPLE_HEADING.test(text)) continue;
       if (isIdentityHeading(text)) {
         if (blockLevel === 0 || level < blockLevel) blockLevel = level;
         continue;
       }
-      return null;
+      return { end: i };
     }
     const match = keyRe.exec(line);
     if (!match) continue;
     const value = stripMarkdownEmphasis(match[1]);
-    if (value) return value;
+    if (value) return { line: i, value, end: lines.length };
   }
-  return null;
+  return { end: lines.length };
+}
+
+/**
+ * `line` with its field value replaced by `value`, keeping the key and the
+ * markdown around the value (`**Name:** Luna` → `**Name:** Nova`).
+ */
+function replaceFieldValue(line: string, key: string, value: string): string {
+  const colon = fieldKeyRe(key, '').exec(line);
+  if (!colon) return line;
+  const head = line.slice(0, colon.index + colon[0].length);
+  const rest = line.slice(head.length);
+  const lead = /^\s*(?:\*\*|__)?\s*/.exec(rest)?.[0] ?? '';
+  const marks = lead.trim();
+  const tail = marks && rest.trimEnd().endsWith(marks) && rest.trim() !== marks ? marks : '';
+  return `${head}${lead || ' '}${value}${tail}`;
 }
 
 export class SoulLoader {
@@ -343,32 +392,18 @@ export class SoulLoader {
   }
 
   /**
-   * Parse IDENTITY.md key: value lines into an identity block
+   * The identity sentence of the system prompt from IDENTITY.md's name /
+   * emoji / vibe, read with {@link parseIdentityField} (the same block rule as
+   * the relay and the watcher).
    */
   private parseIdentity(raw: string): string | null {
-    const fields: Record<string, string> = {};
-    for (const line of raw.split('\n')) {
-      const match = line.match(/^(\w+)\s*:\s*(.+)$/);
-      if (match) {
-        fields[match[1].toLowerCase()] = match[2].trim();
-      }
-    }
-
-    if (Object.keys(fields).length === 0) {
-      return null;
-    }
-
+    const name = parseIdentityField(raw, 'name');
+    const emoji = parseIdentityField(raw, 'emoji');
+    const vibe = parseIdentityField(raw, 'vibe');
     const parts: string[] = [];
-    if (fields.name) {
-      parts.push(`Your name is ${fields.name}.`);
-    }
-    if (fields.emoji) {
-      parts.push(`Your emoji is ${fields.emoji}.`);
-    }
-    if (fields.vibe) {
-      parts.push(`Your vibe: ${fields.vibe}.`);
-    }
-
+    if (name) parts.push(`Your name is ${name}.`);
+    if (emoji) parts.push(`Your emoji is ${emoji}.`);
+    if (vibe) parts.push(`Your vibe: ${vibe}.`);
     return parts.length > 0 ? parts.join(' ') : null;
   }
 
@@ -651,25 +686,23 @@ export class SoulLoader {
       backupSoulFile(identityPath, this.logger, this.maxVersions);
     }
 
-    // Read and parse existing fields
-    const existing: Record<string, string> = {};
+    // Each field is updated in place inside the identity block (the line
+    // parseIdentityField reads); a missing one is added at the end of the block.
     const raw = this.readFile('IDENTITY.md');
-    if (raw) {
-      for (const line of raw.split('\n')) {
-        const match = line.match(/^(\w+)\s*:\s*(.+)$/);
-        if (match) {
-          existing[match[1].toLowerCase()] = match[2].trim();
-        }
+    const lines = raw ? raw.replace(/\n$/, '').split('\n') : [];
+    for (const key of ['name', 'emoji', 'vibe'] as const) {
+      const value = fields[key];
+      if (value === undefined) continue;
+      const found = locateIdentityField(lines, key);
+      if (found.line !== undefined) {
+        lines[found.line] = replaceFieldValue(lines[found.line], key, value);
+        continue;
       }
+      // Before the blank lines that separate the block from the next section.
+      let at = found.end;
+      while (at > 0 && at < lines.length && lines[at - 1].trim() === '') at--;
+      lines.splice(at, 0, `${key}: ${value}`);
     }
-
-    // Merge changed fields
-    if (fields.name !== undefined) existing.name = fields.name;
-    if (fields.emoji !== undefined) existing.emoji = fields.emoji;
-    if (fields.vibe !== undefined) existing.vibe = fields.vibe;
-
-    // Write back as key: value lines
-    const lines = Object.entries(existing).map(([k, v]) => `${k}: ${v}`);
     writeFileSync(identityPath, `${lines.join('\n')}\n`, 'utf-8');
     this.logger.info({ fields: Object.keys(fields) }, 'Identity updated');
   }
