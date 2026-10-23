@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
+import { NO_SETTINGS_FLAGS, SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import { backupSoulFile } from '../soul';
 import type { Tool, ToolResult } from './types';
@@ -87,6 +87,24 @@ function buildClaudePrompt(absDir: string, focus: FocusArea, context?: string): 
  * Core execution logic — spawns Claude Code CLI to improve soul files.
  * Used by both the LLM tool and the /improve skill command.
  */
+/**
+ * argv (without the binary) of an improve session: its file tools, so no
+ * `--tools ""`, but `--setting-sources ""` (`NO_SETTINGS_FLAGS`) like every
+ * framework call. Pure.
+ */
+export function buildImproveCliArgs(prompt: string, model?: string): string[] {
+  const args = [
+    '-p',
+    prompt,
+    '--allowedTools',
+    'Read,Edit,Write,Glob,Grep',
+    SKIP_PERMISSIONS_FLAG,
+    ...NO_SETTINGS_FLAGS,
+  ];
+  if (model) args.push('--model', model);
+  return args;
+}
+
 export async function runImprove(opts: {
   claudePath: string;
   claudeModel?: string;
@@ -137,16 +155,7 @@ export async function runImprove(opts: {
   );
 
   try {
-    const claudeArgs = [
-      '-p',
-      prompt,
-      '--allowedTools',
-      'Read,Edit,Write,Glob,Grep',
-      SKIP_PERMISSIONS_FLAG,
-    ];
-    if (claudeModel) {
-      claudeArgs.push('--model', claudeModel);
-    }
+    const claudeArgs = buildImproveCliArgs(prompt, claudeModel);
 
     // Clear CLAUDECODE env to avoid nested session detection
     const env = { ...process.env };

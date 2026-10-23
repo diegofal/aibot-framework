@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
+import { NO_TOOLS_LEAN_FLAGS, SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import { localDateStr } from '../date-utils';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
@@ -119,6 +119,25 @@ export interface ConsolidateMemoryOptions {
   decayHalfLifeDays?: number;
 }
 
+/**
+ * argv of the consolidation call: text output, and the shared no-tools flags
+ * (`--tools ""` + `--setting-sources ""`, `NO_TOOLS_LEAN_FLAGS`) like every
+ * other no-tools call. Pure; `bin` is already resolved.
+ */
+export function buildConsolidationCliArgs(bin: string, prompt: string, model?: string): string[] {
+  const args = [
+    bin,
+    '-p',
+    prompt,
+    '--output-format',
+    'text',
+    SKIP_PERMISSIONS_FLAG,
+    ...NO_TOOLS_LEAN_FLAGS,
+  ];
+  if (model) args.push('--model', model);
+  return args;
+}
+
 async function generateConsolidation(
   prompt: string,
   opts: ConsolidateMemoryOptions
@@ -144,17 +163,11 @@ async function generateConsolidation(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const claudeArgs = [
+  const claudeArgs = buildConsolidationCliArgs(
     resolveClaudeBin(claudePath),
-    '-p',
     prompt,
-    '--output-format',
-    'text',
-    SKIP_PERMISSIONS_FLAG,
-  ];
-  if (opts.claudeModel) {
-    claudeArgs.push('--model', opts.claudeModel);
-  }
+    opts.claudeModel
+  );
 
   const proc = Bun.spawn(claudeArgs, {
     cwd: resolve('.'),

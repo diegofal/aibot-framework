@@ -244,7 +244,7 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Why it was the right call then.** The container runs exactly 2.1.289 and the saving is ~17× per call; probing the flags at runtime would add a spawn per boot for a case that does not exist today.
 
-**What it costs while it stands.** On an older CLI, or a Windows host using the npm `.cmd` shim, every planner, strategist, memory, watcher and (for `--setting-sources`) MCP tools call could fail with `unknown option` (the preflight line says so). Two direct spawns of the CLI outside `src/claude-cli.ts` (`src/bot/soul-quality-reviewer.ts`, `src/tools/improve.ts`) do not pass `--setting-sources ""`, so `settings.json` in `CLAUDE_CONFIG_DIR` still applies to those two only.
+**What it costs while it stands.** On an older CLI, or a Windows host using the npm `.cmd` shim, every planner, strategist, memory, watcher and (for `--setting-sources`) MCP tools call could fail with `unknown option` (the preflight line says so). The three direct spawns of the CLI outside `src/claude-cli.ts` carry the same flags and the same risk: `src/bot/soul-memory-consolidator.ts` (`buildConsolidationCliArgs`, `--tools ""` and `--setting-sources ""`), `src/bot/soul-quality-reviewer.ts` (`buildQualityReviewCliArgs`) and `src/tools/improve.ts` (`buildImproveCliArgs`), both `--setting-sources ""` only because they use the CLI's Read/Edit/Write tools.
 
 **The trigger.** Pinning a different `CLAUDE_CLI_VERSION`, or running the bots on Windows outside the container.
 
