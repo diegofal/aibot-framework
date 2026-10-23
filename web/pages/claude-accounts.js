@@ -3,8 +3,11 @@
  * fleet uses. Add, rename, test, log in again, switch, remove.
  * Login: the server runs `claude auth login`; the card shows the sign-in
  * link, you sign in and paste the code back.
+ * Opening the card re-tests every logged-in account whose reading is stale
+ * (never checked, a window reset since, or over 30 min old), one at a time,
+ * so Available never shows a week-old number as current.
  */
-import { accountsHtml, loginPanelHtml } from './claude-accounts-helpers.js';
+import { accountsHtml, limitsStale, loginPanelHtml } from './claude-accounts-helpers.js';
 import { api, escapeHtml } from './shared.js';
 
 export async function mountClaudeAccounts(card) {
@@ -36,6 +39,15 @@ export async function mountClaudeAccounts(card) {
     if (res.error) message = res.error;
     accounts = res.accounts || accounts;
     paint();
+  };
+
+  const runTest = async (slug) => {
+    tests[slug] = { pending: true };
+    paint();
+    tests[slug] = await api(`/api/claude-accounts/${encodeURIComponent(slug)}/test`, {
+      method: 'POST',
+    });
+    return refresh();
   };
 
   const startLogin = async (body, relogin) => {
@@ -90,14 +102,7 @@ export async function mountClaudeAccounts(card) {
         return paint();
       }
       const testSlug = t.getAttribute('data-ca-test');
-      if (testSlug) {
-        tests[testSlug] = { pending: true };
-        paint();
-        tests[testSlug] = await api(`/api/claude-accounts/${encodeURIComponent(testSlug)}/test`, {
-          method: 'POST',
-        });
-        return refresh();
-      }
+      if (testSlug) return runTest(testSlug);
       const relogin = t.getAttribute('data-ca-relogin');
       if (relogin) return startLogin({ slug: relogin }, true);
       const rename = t.getAttribute('data-ca-rename');
@@ -152,7 +157,19 @@ export async function mountClaudeAccounts(card) {
       card.querySelector('[data-ca-rename-save]')?.click();
   });
 
-  await refresh().catch((err) => {
+  try {
+    await refresh();
+  } catch (err) {
     card.innerHTML = `<div class="form-section-title">Claude accounts</div><p class="text-dim text-sm">Could not load accounts: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
-  });
+    return;
+  }
+  // Re-test stale readings in the background, one CLI call at a time.
+  const stale = accounts.filter((a) => a.loggedIn && limitsStale(a.limits)).map((a) => a.slug);
+  (async () => {
+    for (const slug of stale) {
+      if (!card.isConnected) return;
+      if (tests[slug]?.pending) continue;
+      await runTest(slug).catch(() => {});
+    }
+  })();
 }

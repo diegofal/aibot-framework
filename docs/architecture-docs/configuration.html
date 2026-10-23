@@ -1252,7 +1252,7 @@ const config = await loadConfig('./config/config.json');
               <td><code>circuitBreaker</code></td>
               <td>object</td>
               <td>(defaults)</td>
-              <td>Fleet-wide per-backend circuit breaker for CONTEXTUAL (429 / quota) errors on the planner path: <code>enabled</code> (<code>true</code>), <code>threshold</code> (<code>3</code>, 1&ndash;50 consecutive failures), <code>cooldownMs</code> (<code>1800000</code>, 30 min), <code>weeklyQuotaCooldownMs</code> (<code>21600000</code>, 6 h, used when the error text mentions a weekly usage limit). Bots whose planner backend is open skip their cycle with <code>skippedReason: 'circuit-open:&lt;backend&gt;'</code>.</td>
+              <td>Fleet-wide per-backend circuit breaker for CONTEXTUAL (429 / quota) errors on the planner path: <code>enabled</code> (<code>true</code>), <code>threshold</code> (<code>3</code>, 1&ndash;50 consecutive failures), <code>cooldownMs</code> (<code>1800000</code>, 30 min), <code>weeklyQuotaCooldownMs</code> (<code>21600000</code>, 6 h, used when the error text mentions a weekly usage limit, or the Claude CLI's weekly limit). Bots whose planner backend is open skip their cycle with <code>skippedReason: 'circuit-open:&lt;backend&gt;'</code>.</td>
             </tr>
             <tr>
               <td><code>curiosity</code></td>
