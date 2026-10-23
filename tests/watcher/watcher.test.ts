@@ -1454,6 +1454,49 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.stop();
   });
 
+  test('a stop during the maintenance backfill neither relays out nor persists positions', async () => {
+    let mode: 'down' | 'hang' = 'down';
+    let calls = 0;
+    let answer: ((v: number[]) => void) | undefined;
+    const { watcher, events } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        if (mode === 'down') return Promise.reject(new Error('ollama down'));
+        return new Promise<number[]>((r) => {
+          answer = r;
+        });
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    const positions = () =>
+      JSON.stringify(watcher.graph.list().map((n) => [n.id, watcher.graph.get(n.id)?.pos]));
+    const before = positions();
+    const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
+    const layoutsBefore = layouts();
+    mode = 'hang';
+    const seen = calls;
+    const maintenance = watcher.maintainNow();
+    expect(await until(() => calls > seen && !!answer)).toBe(true);
+    await watcher.stop();
+    answer?.([1, 0, 0]);
+    await maintenance;
+    expect(layouts()).toBe(layoutsBefore);
+    expect(positions()).toBe(before);
+    // nothing persisted either: a fresh load sees the same positions
+    const reloaded = make();
+    await reloaded.watcher.start();
+    await reloaded.watcher.idle();
+    expect(
+      JSON.stringify(
+        reloaded.watcher.graph.list().map((n) => [n.id, reloaded.watcher.graph.get(n.id)?.pos])
+      )
+    ).toBe(before);
+    await reloaded.watcher.stop();
+  });
+
   async function until(check: () => boolean, ms = 1000): Promise<boolean> {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {

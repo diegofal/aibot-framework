@@ -1046,13 +1046,17 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * Daily: archive what has not fired within `archiveAfterDays`, embed and link
    * live neurons without a vector (`linkMissing`), recompute the layout. Never
    * throws; skipped while birth is still running (its own link stage does it).
+   * A run that `stop()` cancelled during the backfill neither relays out nor
+   * persists positions.
    */
   async maintainNow(): Promise<void> {
     try {
       this.graph.archiveInactive(this.cfg().graph.archiveAfterDays * DAY_MS);
       let linked: LinkResult | undefined;
       if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
-        linked = await this.backfill(this.birthDeps());
+        const deps = this.birthDeps();
+        linked = await this.backfill(deps);
+        if (linked?.cancelled || deps.isCancelled?.()) return;
       }
       // linkMissing relays out when it embedded: one layout broadcast, not two.
       if (!linked?.relaidOut) relayout(this.graph);
