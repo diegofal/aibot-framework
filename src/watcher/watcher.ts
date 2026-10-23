@@ -32,6 +32,7 @@ import {
   type BirthDeps,
   beginBirth,
   continueBirth,
+  linkMissing,
   readBirthRecord,
   relayout,
   runResync,
@@ -660,7 +661,12 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
           })
         );
         this.setPhase('birth');
-        this.background = this.runBackground(deps, () => runResync(deps).then(() => undefined));
+        this.background = this.runBackground(deps, async () => {
+          await runResync(deps);
+          // A graph born `no-embeddings` (or neurons sensed since) gets its
+          // vectors now that an embedder may work, not only at the next daily pass.
+          if (!deps.isCancelled?.()) await linkMissing(deps);
+        });
       }
       this.sense.attach(this.deps.activityStream, this.deps.hooks);
       this.startTimers();
@@ -954,15 +960,22 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private startTimers(): void {
     const every = this.cfg().log.senseSummaryEveryMs;
     const summary = setInterval(() => this.sense.tick(), every);
-    const daily = setInterval(() => this.maintain(), DAY_MS);
+    const daily = setInterval(() => void this.maintainNow(), DAY_MS);
     for (const t of [summary, daily]) (t as { unref?: () => void }).unref?.();
     this.timers = [summary, daily];
   }
 
-  /** Daily: archive what has not fired within `archiveAfterDays`, recompute the layout. */
-  private maintain(): void {
+  /**
+   * Daily: archive what has not fired within `archiveAfterDays`, embed and link
+   * live neurons without a vector (`linkMissing`), recompute the layout. Never
+   * throws; skipped while birth is still running (its own link stage does it).
+   */
+  async maintainNow(): Promise<void> {
     try {
       this.graph.archiveInactive(this.cfg().graph.archiveAfterDays * DAY_MS);
+      if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
+        await linkMissing(this.birthDeps());
+      }
       relayout(this.graph);
     } catch (err) {
       this.logger.warn({ err }, 'Watcher: daily maintenance failed');

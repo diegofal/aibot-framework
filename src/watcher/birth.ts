@@ -42,6 +42,7 @@ import {
   narrateBorn,
   narrateGoals,
   narrateHistory,
+  narrateLateLink,
   narrateLearned,
   narrateLinking,
   narrateMetBot,
@@ -730,64 +731,142 @@ async function stageLink(ctx: StageCtx): Promise<void> {
     );
     return finish('no-embeddings');
   }
+  const res = await linkUnembedded(ctx, {
+    onBatch: (batch, edgeIds) =>
+      ctx.log.say(
+        'birth',
+        'birth:link',
+        narrateLinking({ neurons: ctx.graph.embeddedIds().length, edges: ctx.graph.edgeCount() }),
+        { neuronIds: batch.map((n) => n.id), ...(edgeIds.length ? { edgeIds } : {}) }
+      ),
+  });
+  if (res.cancelled) return;
+  if (res.failure && res.status === 'no-embeddings') {
+    ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(res.failure));
+  }
+  finish(res.status);
+}
+
+export interface LinkResult {
+  /** `ok` once any live neuron has a vector. */
+  status: LinkStatus;
+  /** Neurons embedded by this call. */
+  embedded: number;
+  /** `related` edges this call added. */
+  edges: number;
+  /** The first embedding error, when nothing could be embedded. */
+  failure?: string;
+  cancelled?: boolean;
+}
+
+/**
+ * Embed every live neuron that has no vector yet, in batches, and link each
+ * one to its nearest neighbours with `related` edges. Used by birth's link
+ * stage and by daily maintenance (`linkMissing`). Never relayouts and never
+ * logs by itself: `onBatch` is called after each batch that embedded.
+ */
+export async function linkUnembedded(
+  deps: BirthDeps,
+  opts: { onBatch?: (batch: Neuron[], edgeIds: string[]) => void } = {}
+): Promise<LinkResult> {
+  const graph = deps.graph;
+  const embed = deps.embed;
+  const result: LinkResult = { status: 'no-embeddings', embedded: 0, edges: 0 };
+  const done = () => {
+    result.status = graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings';
+    return result;
+  };
+  if (!embed) return done();
   const threshold =
-    ctx.config.watcher?.graph?.relatedThreshold ?? WATCHER_DEFAULTS.graph.relatedThreshold;
+    deps.config.watcher?.graph?.relatedThreshold ?? WATCHER_DEFAULTS.graph.relatedThreshold;
   const concurrency = Math.max(
     1,
-    (ctx.config.soul as { search?: { concurrency?: number } } | undefined)?.search?.concurrency ?? 3
+    (deps.config.soul as { search?: { concurrency?: number } } | undefined)?.search?.concurrency ??
+      3
   );
-  const pending = ctx.graph.list().filter((n) => !n.archivedAt && !ctx.graph.getEmbedding(n.id));
-  let embeddedAny = ctx.graph.embeddedIds().length > 0;
+  const pending = graph.list().filter((n) => !n.archivedAt && !graph.getEmbedding(n.id));
+  let embeddedAny = graph.embeddedIds().length > 0;
   for (let i = 0; i < pending.length; i += EMBED_BATCH) {
-    if (ctx.isCancelled?.()) return;
+    if (deps.isCancelled?.()) return { ...result, cancelled: true };
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
     await mapLimit(batch, concurrency, async (n) => {
       // A cancelled run neither starts another embedding nor stores one that
       // settled after the stop: its writes belong to no live run.
-      if (ctx.isCancelled?.()) return;
+      if (deps.isCancelled?.()) return;
       try {
-        const vec = await ctx.embed?.(`${n.kind}: ${n.text}`);
-        if (ctx.isCancelled?.()) return;
-        if (Array.isArray(vec) && vec.length > 0) ctx.graph.setEmbedding(n.id, vec);
+        const vec = await embed(`${n.kind}: ${n.text}`);
+        if (deps.isCancelled?.()) return;
+        if (Array.isArray(vec) && vec.length > 0) {
+          graph.setEmbedding(n.id, vec);
+          result.embedded++;
+        }
       } catch (err) {
         failure ??= err;
       }
     });
-    if (ctx.isCancelled?.()) return;
-    if (failure && !embeddedAny && ctx.graph.embeddedIds().length === 0) {
-      const msg = failure instanceof Error ? failure.message : String(failure);
-      ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(msg));
-      return finish('no-embeddings');
+    if (deps.isCancelled?.()) return { ...result, cancelled: true };
+    if (failure && !embeddedAny && graph.embeddedIds().length === 0) {
+      result.failure = failure instanceof Error ? failure.message : String(failure);
+      return done();
     }
     embeddedAny = true;
     const edgeIds: string[] = [];
     for (const n of batch) {
-      const vec = ctx.graph.getEmbedding(n.id);
+      const vec = graph.getEmbedding(n.id);
       if (!vec) continue;
-      const hits = ctx.graph
-        .findSimilarEmbedding(vec, threshold)
-        .filter((h) => h.neuron.id !== n.id);
+      const hits = graph.findSimilarEmbedding(vec, threshold).filter((h) => h.neuron.id !== n.id);
       for (const h of hits.slice(0, RELATED_PER_NEURON)) {
-        const before = ctx.graph.edgeCount();
-        const e = ctx.graph.addEdge({
+        const before = graph.edgeCount();
+        const e = graph.addEdge({
           from: n.id,
           to: h.neuron.id,
           rel: 'related',
           weight: Math.round(h.score * 1000) / 1000,
           createdBy: 'watcher',
         });
-        if (ctx.graph.edgeCount() > before) edgeIds.push(e.id);
+        if (graph.edgeCount() > before) edgeIds.push(e.id);
       }
     }
-    ctx.log.say(
+    result.edges += edgeIds.length;
+    opts.onBatch?.(batch, edgeIds);
+  }
+  return done();
+}
+
+/**
+ * Daily maintenance (and once at start): a graph born `no-embeddings`, or
+ * neurons added since without a vector, get embedded and linked once an
+ * embedder works. Undefined (and no row) when there is no embedder or every
+ * live neuron already has a vector; otherwise one `maintain:link` row, a
+ * relayout when something was embedded, and `birth.json` updated to `ok`.
+ */
+export async function linkMissing(deps: BirthDeps): Promise<LinkResult | undefined> {
+  if (!deps.embed) return undefined;
+  if (!deps.graph.list().some((n) => !n.archivedAt && !deps.graph.getEmbedding(n.id))) {
+    return undefined;
+  }
+  const res = await linkUnembedded(deps);
+  if (res.cancelled) return res;
+  if (res.embedded > 0) {
+    relayout(deps.graph);
+    deps.log.say(
       'birth',
-      'birth:link',
-      narrateLinking({ neurons: ctx.graph.embeddedIds().length, edges: ctx.graph.edgeCount() }),
-      { neuronIds: batch.map((n) => n.id), ...(edgeIds.length ? { edgeIds } : {}) }
+      'maintain:link',
+      narrateLateLink({ embedded: res.embedded, edges: res.edges })
+    );
+  } else {
+    deps.log.say(
+      'birth',
+      'maintain:link',
+      narrateNoEmbeddings(res.failure ?? 'the embedder returned no vectors')
     );
   }
-  finish(ctx.graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings');
+  const record = readBirthRecord(deps.dir);
+  if (record && res.status === 'ok' && record.linkStatus !== 'ok') {
+    writeBirthRecord(deps, { ...record, linkStatus: 'ok' });
+  }
+  return res;
 }
 
 function stageDone(ctx: StageCtx): void {

@@ -7,6 +7,7 @@ import {
   narrateGoals,
   narrateHistory,
   narrateIntrospection,
+  narrateLateLink,
   narrateLearned,
   narrateLinking,
   narrateMetBot,
@@ -120,6 +121,14 @@ describe('narration', () => {
   test('narrateLinking', () => {
     expect(narrateLinking({ neurons: 1240, edges: 3800 })).toBe(
       'Linking what I know: 1,240 neurons, 3,800 edges so far.'
+    );
+  });
+  test('narrateLateLink', () => {
+    expect(narrateLateLink({ embedded: 1, edges: 0 })).toBe(
+      'Embedded 1 neuron I had not embedded yet: 0 new related edges.'
+    );
+    expect(narrateLateLink({ embedded: 120, edges: 1 })).toBe(
+      'Embedded 120 neurons I had not embedded yet: 1 new related edge.'
     );
   });
   test('narrateNoEmbeddings', () => {

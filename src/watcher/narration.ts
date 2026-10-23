@@ -111,6 +111,11 @@ export function narrateLinking(input: { neurons: number; edges: number }): strin
   return `Linking what I know: ${plural(input.neurons, 'neuron', 'neurons')}, ${plural(input.edges, 'edge', 'edges')} so far.`;
 }
 
+/** Daily maintenance embedded neurons birth (or a later sense) left without a vector. */
+export function narrateLateLink(input: { embedded: number; edges: number }): string {
+  return `Embedded ${plural(input.embedded, 'neuron', 'neurons')} I had not embedded yet: ${plural(input.edges, 'new related edge', 'new related edges')}.`;
+}
+
 export function narrateNoEmbeddings(reason: string): string {
   return `Could not embed what I know (${reason}). Placing neurons by kind, without related edges.`;
 }

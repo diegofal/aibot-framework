@@ -1398,3 +1398,39 @@ describe('Watcher question broadcasts and the shared throttle (one pass)', () =>
     await watcher.stop();
   });
 });
+
+describe('Watcher: embedding what birth could not', () => {
+  test('a graph born no-embeddings is linked at the next start once an embedder works', async () => {
+    const first = make();
+    await first.watcher.start();
+    await first.watcher.idle();
+    expect(first.watcher.state().linkStatus).toBe('no-embeddings');
+    await first.watcher.stop();
+    t += 1000;
+    const second = make({ embed: async () => [1, 0, 0] });
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.watcher.state().linkStatus).toBe('ok');
+    expect(second.watcher.graph.embeddedIds().length).toBe(second.watcher.graph.liveCount());
+    expect(second.watcher.log.recent(50).filter((r) => r.op === 'maintain:link').length).toBe(1);
+    await second.watcher.stop();
+  });
+
+  test('daily maintenance embeds and links once the embedder comes back', async () => {
+    let up = false;
+    const { watcher } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    up = true;
+    await watcher.maintainNow();
+    expect(watcher.state().linkStatus).toBe('ok');
+    expect(watcher.graph.embeddedIds().length).toBe(watcher.graph.liveCount());
+    await watcher.stop();
+  });
+});

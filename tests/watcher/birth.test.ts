@@ -8,6 +8,8 @@ import {
   type BirthDeps,
   beginBirth,
   continueBirth,
+  linkMissing,
+  linkUnembedded,
   readBirthRecord,
   relayout,
   runResync,
@@ -516,5 +518,76 @@ describe('birth: privacy of what it reads (operator-sourced)', () => {
     );
     await runResync(d);
     expect(sourced(graph.findByKey('goal:b2:g-33333333'))).toBe(true);
+  });
+});
+
+describe('linking what birth could not embed', () => {
+  const embed = async (text: string) => (/acme/i.test(text) ? [1, 0.05, 0] : [0, 1, 0.1]);
+
+  test('linkUnembedded embeds every live neuron without a vector and adds related edges', async () => {
+    const { d, graph } = await born();
+    expect(graph.embeddedIds().length).toBe(0);
+    const res = await linkUnembedded({ ...d, embed });
+    expect(res.status).toBe('ok');
+    expect(res.embedded).toBe(graph.liveCount());
+    expect(graph.embeddedIds().length).toBe(graph.liveCount());
+    expect(res.edges).toBeGreaterThan(0);
+    expect(graph.snapshot().edges.some((e) => e.rel === 'related')).toBe(true);
+  });
+
+  test('linkUnembedded with a failing embedder and nothing embedded: no-embeddings with the reason', async () => {
+    const { d } = await born();
+    const res = await linkUnembedded({
+      ...d,
+      embed: async () => {
+        throw new Error('ollama down');
+      },
+    });
+    expect(res.status).toBe('no-embeddings');
+    expect(res.failure).toContain('ollama down');
+  });
+
+  test('linkMissing: a graph born no-embeddings is linked once an embedder works, birth.json says ok, one row', async () => {
+    const { d, graph, rows } = await born();
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('no-embeddings');
+    const before = rows.length;
+    const res = await linkMissing({ ...d, embed });
+    expect(res?.status).toBe('ok');
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('ok');
+    const added = rows.slice(before);
+    expect(added.length).toBe(1);
+    expect(added[0].op).toBe('maintain:link');
+    expect(added[0].text).toMatch(
+      /^Embedded \d+ neurons? I had not embedded yet: \d+ new related edges?\.$/
+    );
+    for (const n of graph.list())
+      expect(Math.hypot(...(n.pos ?? [9, 9, 9]))).toBeLessThanOrEqual(1);
+  });
+
+  test('linkMissing does nothing without an embedder or when every live neuron has a vector', async () => {
+    const { d, rows } = await born();
+    const before = rows.length;
+    expect(await linkMissing(d)).toBeUndefined();
+    await linkMissing({ ...d, embed });
+    const after = rows.length;
+    expect(after).toBe(before + 1);
+    expect(await linkMissing({ ...d, embed })).toBeUndefined();
+    expect(rows.length).toBe(after);
+  });
+
+  test('linkMissing with the embedder still down logs one row and keeps no-embeddings', async () => {
+    const { d, rows } = await born();
+    const before = rows.length;
+    const res = await linkMissing({
+      ...d,
+      embed: async () => {
+        throw new Error('ollama down');
+      },
+    });
+    expect(res?.status).toBe('no-embeddings');
+    expect(rows.length).toBe(before + 1);
+    expect(rows.at(-1)?.op).toBe('maintain:link');
+    expect(rows.at(-1)?.text).toContain('ollama down');
+    expect(readBirthRecord(d.dir)?.linkStatus).toBe('no-embeddings');
   });
 });
