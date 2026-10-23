@@ -1577,7 +1577,7 @@ traits: {
   enabled: true,
   threshold: 3,                    // consecutive CONTEXTUAL (429 / quota) failures before the circuit opens
   cooldownMs: 1_800_000,           // 30 min for an ordinary rate limit
-  weeklyQuotaCooldownMs: 21_600_000 // 6 h when the error text says "weekly usage limit"
+  weeklyQuotaCooldownMs: 21_600_000 // 6 h when the error text says "weekly (usage) limit"
 }</code></pre>
           <h4>State Machine</h4>
           <table>
@@ -1598,12 +1598,12 @@ traits: {
           <p>
             <span class="badge badge-yellow">2026-08-22</span> When the classified error carries
             <code>resetsAt</code> &mdash; parsed by <code>parseResetsAt()</code> from the Claude CLI's
-            <code>resets 12:20pm (zone)</code> hint &mdash; the cooldown ends at that instant instead of a
+            <code>resets 12:20pm (zone)</code> hint, or the dated weekly form <code>resets Oct 24, 6pm (zone)</code> (2026-10-23) &mdash; the cooldown ends at that instant instead of a
             fixed <code>cooldownMs</code>, clamped to
             <code>[BackendCircuitBreaker.MIN_RESET_COOLDOWN_MS</code> (60&nbsp;000 ms)<code>,
             weeklyQuotaCooldownMs]</code>. Without a hint the behaviour is unchanged:
             <code>weeklyQuotaCooldownMs</code> when <code>isWeeklyQuotaError()</code> matches
-            (<code>/weekly usage limit/i</code>), <code>cooldownMs</code> otherwise.
+            (<code>/weekly (?:usage )?limit/i</code>: Ollama Cloud's "weekly usage limit" and, since 2026-10-23, the Claude CLI's "You've hit your weekly limit"), <code>cooldownMs</code> otherwise.
           </p>
           <h4>Daily-memory error memo</h4>
           <p>
