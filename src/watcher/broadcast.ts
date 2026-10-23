@@ -14,6 +14,9 @@
  * the cap; a failed delivery still counts toward the daily cap, but is not a
  * duplicate: only a delivered (or still in flight) broadcast blocks another
  * of the same kind for the same insight, so a failed one may be retried.
+ * A question the shared proactive throttle refused is `deferred`, not failed:
+ * nothing was attempted, so it neither counts toward the cap nor blocks a
+ * retry once the cooldown is over.
  * A question with no Telegram route or no operator chat is not a failure: it
  * lands in Work → Sent to you (`deliverWatcherQuestion`), so it is never
  * retried into the cap. Never throws.
@@ -52,6 +55,13 @@ export interface Broadcast {
   createdAt: string;
   deliveredAt?: string;
   deliveryError?: string;
+  /**
+   * Not attempted: the shared proactive throttle (`__watcher__` cooldown or
+   * fleet cap) refused a question before anything was sent. A deferral is not
+   * a delivery attempt, so it never counts toward the daily cap and never
+   * blocks a retry of the same insight and kind (`deliveryError` says why).
+   */
+  deferred?: boolean;
   /** What the entry point answered (the proactive tool's text for a question). */
   delivery?: string;
   /** When a planner prompt listed it, and in which cycle. */
@@ -68,8 +78,14 @@ export interface BroadcastDelivery {
   wake?: (botId: string) => void;
   directive?: (botId: string, text: string) => void;
   goal?: (botId: string, text: string, reason: string) => void | Promise<void>;
-  /** Ask the operator; `ok: false` when the throttle refused or delivery failed. */
-  question?: (botId: string, text: string) => Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Ask the operator; `ok: false` when the throttle refused or delivery failed.
+   * `deferred: true` = the throttle refused before any attempt (not a failure).
+   */
+  question?: (
+    botId: string,
+    text: string
+  ) => Promise<{ ok: boolean; detail: string; deferred?: boolean }>;
 }
 
 export interface BroadcastInput {
@@ -82,7 +98,7 @@ export interface BroadcastInput {
 }
 
 export type BroadcastResult =
-  | { status: 'delivered' | 'failed'; broadcast: Broadcast }
+  | { status: 'delivered' | 'failed' | 'deferred'; broadcast: Broadcast }
   | { status: 'capped' | 'duplicate' | 'invalid'; broadcast?: undefined };
 
 export interface BroadcasterDeps {
@@ -162,11 +178,17 @@ export class Broadcaster {
     return (opts.limit ? all.slice(0, opts.limit) : all).map((b) => ({ ...b }));
   }
 
-  /** Broadcasts to a bot created on the current UTC day (delivered or not). */
+  /**
+   * Broadcasts to a bot created on the current UTC day: delivered, failed or
+   * in flight. A deferral (`deferred`) is not counted: nothing was attempted,
+   * and counting it let repeated re-proposals of a throttled question cap the
+   * bot for the day with nothing delivered.
+   */
   countToday(botId: string): number {
     const day = new Date(this.now()).toISOString().slice(0, 10);
     let n = 0;
     for (const b of this.byId.values()) {
+      if (b.deferred && !b.deliveredAt) continue;
       if (b.botId === botId && b.createdAt.slice(0, 10) === day) n++;
     }
     return n;
@@ -184,7 +206,7 @@ export class Broadcaster {
     if (!text && kind !== 'wake') return { status: 'invalid' };
     for (const b of this.byId.values()) {
       if (b.insightId !== insightId || b.kind !== kind) continue;
-      // A failed delivery may be retried; a delivered or in-flight one may not.
+      // A failed or deferred delivery may be retried; a delivered or in-flight one may not.
       if (b.deliveryError !== undefined && !b.deliveredAt) continue;
       return { status: 'duplicate' };
     }
@@ -208,7 +230,7 @@ export class Broadcaster {
     };
     this.put(created);
 
-    let outcome: { ok: boolean; detail?: string };
+    let outcome: { ok: boolean; detail?: string; deferred?: boolean };
     try {
       outcome = await this.deliver(created, input.reason ?? text);
     } catch (err) {
@@ -220,21 +242,28 @@ export class Broadcaster {
           deliveredAt: this.iso(),
           ...(outcome.detail ? { delivery: outcome.detail.slice(0, 300) } : {}),
         }
-      : { ...created, deliveryError: (outcome.detail ?? 'not delivered').slice(0, 300) };
+      : {
+          ...created,
+          deliveryError: (outcome.detail ?? 'not delivered').slice(0, 300),
+          ...(outcome.deferred ? { deferred: true } : {}),
+        };
+    // Recorded (not dropped) so the record that held the cap slot while in
+    // flight is closed; `deferred` takes it out of the cap and the duplicates.
     this.put(done);
+    const status = outcome.ok ? 'delivered' : outcome.deferred ? 'deferred' : 'failed';
     this.deps.log?.say(
       'broadcast',
-      outcome.ok ? 'broadcast:sent' : 'broadcast:failed',
+      `broadcast:${status === 'delivered' ? 'sent' : status}`,
       narrateBroadcast({
         kind,
         bot: this.name(botId),
-        status: outcome.ok ? 'sent' : 'failed',
+        status: status === 'delivered' ? 'sent' : status,
         text,
         ...(outcome.ok ? {} : { error: done.deliveryError }),
       }),
       { neuronIds: [insightId], source: `broadcast:${done.id}` }
     );
-    return { status: outcome.ok ? 'delivered' : 'failed', broadcast: { ...done } };
+    return { status, broadcast: { ...done } };
   }
 
   /** Delivered, not yet shown to a planner, created within `BROADCAST_PENDING_MS`. Oldest first. */
@@ -273,7 +302,10 @@ export class Broadcaster {
     return { ...next };
   }
 
-  private async deliver(b: Broadcast, reason: string): Promise<{ ok: boolean; detail?: string }> {
+  private async deliver(
+    b: Broadcast,
+    reason: string
+  ): Promise<{ ok: boolean; detail?: string; deferred?: boolean }> {
     const d = this.deps.delivery;
     switch (b.kind) {
       case 'wake':

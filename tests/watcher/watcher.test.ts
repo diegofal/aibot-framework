@@ -7,9 +7,15 @@ import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-l
 import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
 import type { Config } from '../../src/config';
 import type { LLMClient } from '../../src/core/llm-client';
+import { ProactiveThrottle } from '../../src/tools/send-proactive-message';
 import { graphFiles } from '../../src/watcher/paths';
 import { WATCHER_DEFAULTS, type WatcherEvent } from '../../src/watcher/types';
-import { Watcher, type WatcherDeps, createFleetWatcher } from '../../src/watcher/watcher';
+import {
+  Watcher,
+  type WatcherDeps,
+  createFleetWatcher,
+  deliverWatcherQuestion,
+} from '../../src/watcher/watcher';
 
 let root: string;
 let t: number;
@@ -1084,6 +1090,262 @@ describe('Watcher stop during birth (cancellation is per run)', () => {
     await watcher.idle();
     expect(watcher.readBirth()?.finishedAt).toBeDefined();
     expect(watcher.state().phase).toBe('sense');
+    await watcher.stop();
+  });
+});
+
+describe('Watcher stop during a pass (cancellation is per run)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const rowsAfterSleep = (w: Watcher) => {
+    const rows = w.log.recent(500);
+    const sleepSeq = Math.max(...rows.filter((r) => r.op === 'sleep').map((r) => r.seq));
+    return rows.filter((r) => r.seq > sleepSeq);
+  };
+  /** An embedder that is fast during birth and, once `gate` is on, waits for `release`. */
+  function gatedEmbed() {
+    const g = { on: false, calls: 0, waiting: [] as Array<() => void> };
+    const embed = (): Promise<number[]> => {
+      if (!g.on) return Promise.resolve([1, 0]);
+      g.calls++;
+      return new Promise((resolve) => g.waiting.push(() => resolve([0, 1])));
+    };
+    const release = () => {
+      for (const r of g.waiting.splice(0)) r();
+    };
+    return { g, embed, release };
+  }
+
+  test('a notice pass abandoned by stop writes nothing after the sleep row and keeps the buffer', async () => {
+    let itemId = '';
+    const { client } = noticeClient(() =>
+      JSON.stringify({
+        keep: [{ text: 'The boiler is serviced in May', kind: 'fact', from: [itemId] }],
+      })
+    );
+    const { g, embed, release } = gatedEmbed();
+    const { watcher, activityStream } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        embed,
+        stopTimeoutMs: 30,
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    g.on = true;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    activityStream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    await sleep(5);
+    const before = watcher.buffer.items().map((i) => i.id);
+    itemId =
+      watcher.buffer.items().find((i) => (i.event as { type?: string }).type === 'worker:waiting')
+        ?.id ?? '';
+    const neuronsBefore = watcher.graph.list().length;
+    const pass = watcher.noticeNow();
+    for (let i = 0; i < 100 && g.calls === 0; i++) await sleep(5);
+    expect(g.calls).toBe(1);
+    await watcher.stop();
+    release();
+    await pass;
+    await sleep(20);
+    expect(rowsAfterSleep(watcher)).toEqual([]);
+    expect(watcher.graph.list().length).toBe(neuronsBefore);
+    expect(watcher.buffer.items().map((i) => i.id)).toEqual(before);
+    expect(watcher.state().phase).toBe('sleep');
+    // What stop persisted is what the next start restores.
+    g.on = false;
+    await watcher.start();
+    expect(
+      watcher.buffer
+        .items()
+        .map((i) => i.id)
+        .filter((id) => before.includes(id))
+    ).toEqual(before);
+    await watcher.idle();
+    await watcher.stop();
+  });
+
+  test('an integrate pass abandoned by stop writes no neuron, row or broadcast after the sleep row', async () => {
+    const { g, embed, release } = gatedEmbed();
+    const ref: { w?: Watcher } = {};
+    const { client } = integrateClient(() => {
+      const goal = ref.w?.graph.list().find((n) => n.kind === 'goal')?.id as string;
+      return JSON.stringify({
+        insights: [{ text: 'Jarvis keeps failing on the same fetch', support: [goal] }],
+        broadcasts: [{ bot: 'b1', kind: 'wake', text: '', insightIndex: 0 }],
+        attending: [goal],
+      });
+    });
+    const woke: string[] = [];
+    const { watcher, activityStream } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        broadcastDelivery: { wake: (b) => void woke.push(b) },
+        embed,
+        stopTimeoutMs: 30,
+      },
+      integrateOn
+    );
+    ref.w = watcher;
+    await watcher.start();
+    await watcher.idle();
+    g.on = true;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    const pass = watcher.integrateNow();
+    for (let i = 0; i < 100 && g.calls === 0; i++) await sleep(5);
+    expect(g.calls).toBe(1);
+    await watcher.stop();
+    release();
+    await pass;
+    await sleep(20);
+    expect(rowsAfterSleep(watcher)).toEqual([]);
+    expect(watcher.graph.list().some((n) => n.kind === 'insight')).toBe(false);
+    expect(woke).toEqual([]);
+    expect(watcher.broadcaster.list()).toEqual([]);
+    expect(watcher.state().phase).toBe('sleep');
+  });
+
+  test('a stale pass that settles during the next start never resets its phase nor feeds it', async () => {
+    let itemId = '';
+    const { client } = noticeClient(() =>
+      JSON.stringify({
+        keep: [{ text: 'The boiler is serviced in May', kind: 'fact', from: [itemId] }],
+      })
+    );
+    const { g, embed, release } = gatedEmbed();
+    const { watcher, activityStream, config } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        embed,
+        stopTimeoutMs: 30,
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    g.on = true;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    activityStream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    await sleep(5);
+    itemId =
+      watcher.buffer.items().find((i) => (i.event as { type?: string }).type === 'worker:waiting')
+        ?.id ?? '';
+    const stale = watcher.noticeNow();
+    for (let i = 0; i < 100 && g.calls === 0; i++) await sleep(5);
+    expect(g.calls).toBe(1);
+    await watcher.stop();
+    // A new bot and no birth record: the next start is a birth that embeds the
+    // new neurons through the same gate, so it is still in phase birth.
+    config.bots.push({
+      id: 'b2',
+      name: 'b2',
+      soulDir: soul('b2', 'Scout'),
+      enabled: true,
+    } as never);
+    rmSync(join(root, 'data', 'watcher', 'birth.json'), { force: true });
+    await watcher.start();
+    for (let i = 0; i < 100 && g.calls < 2; i++) await sleep(5);
+    expect(g.calls).toBeGreaterThanOrEqual(2);
+    expect(watcher.state().phase).toBe('birth');
+    // Only the stale pass's embedding answers: its .finally must leave the resync alone.
+    const staleRelease = g.waiting.shift() as () => void;
+    staleRelease();
+    await stale;
+    await sleep(10);
+    expect(watcher.state().phase).toBe('birth');
+    expect(watcher.graph.list().some((n) => n.text === 'The boiler is serviced in May')).toBe(
+      false
+    );
+    release();
+    await watcher.idle();
+    expect(watcher.state().phase).toBe('sense');
+    // The live run notices for itself (not the stale pass's promise).
+    g.on = false;
+    const fresh = await watcher.noticeNow();
+    expect(fresh?.status).toBe('noticed');
+    await watcher.stop();
+  });
+});
+
+describe('Watcher question broadcasts and the shared throttle (one pass)', () => {
+  test("two questions in one pass: the second is deferred, B's cap is untouched, later B is reached", async () => {
+    const throttle = new ProactiveThrottle(
+      () => ({ cooldownMs: 3_600_000, dailyCap: 10 }),
+      () => t
+    );
+    const sent: string[] = [];
+    const woke: string[] = [];
+    const qDeps = {
+      throttle,
+      operatorChatId: (): number | undefined => 42,
+      telegram: () => ({
+        api: { sendMessage: async (_c: number, text: string) => void sent.push(text) },
+      }),
+      now: () => t,
+      logger: noopLogger,
+    };
+    let reply = '';
+    const { client } = integrateClient(() => reply);
+    const { watcher, activityStream, config } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        broadcastDelivery: {
+          question: (botId, text) => deliverWatcherQuestion(qDeps, botId, text),
+          wake: (b) => void woke.push(b),
+        },
+      },
+      integrateOn
+    );
+    config.bots.push({
+      id: 'b2',
+      name: 'b2',
+      soulDir: soul('b2', 'Scout'),
+      enabled: true,
+    } as never);
+    await watcher.start();
+    await watcher.idle();
+    const goal = watcher.graph.list().find((n) => n.kind === 'goal')?.id as string;
+    reply = JSON.stringify({
+      insights: [
+        { text: 'Jarvis waits on a missing API key', support: [goal] },
+        { text: 'Scout repeats a search nobody reads', support: [goal] },
+      ],
+      broadcasts: [
+        { bot: 'b1', kind: 'question', text: 'Is the key coming?', insightIndex: 0 },
+        { bot: 'b2', kind: 'question', text: 'Should Scout stop?', insightIndex: 1 },
+      ],
+      attending: [goal],
+    });
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    const out = await watcher.integrateNow();
+    expect(out?.status).toBe('integrated');
+    const statuses = out?.status === 'integrated' ? out.broadcasts.map((b) => b.status) : [];
+    expect(statuses).toEqual(['delivered', 'deferred']);
+    expect(watcher.broadcaster.countToday('b2')).toBe(0);
+    expect(sent).toHaveLength(1);
+    // A later wake for B goes out.
+    const insight = watcher.graph
+      .list()
+      .find((n) => n.kind === 'insight' && n.text.startsWith('Scout'))?.id as string;
+    const wake = await watcher.broadcaster.send({
+      botId: 'b2',
+      kind: 'wake',
+      text: '',
+      insightId: insight,
+    });
+    expect(wake.status).toBe('delivered');
+    expect(woke).toEqual(['b2']);
+    // After the cooldown, B's question is retryable and lands.
+    t += 3_600_001;
+    const retry = await watcher.broadcaster.send({
+      botId: 'b2',
+      kind: 'question',
+      text: 'Should Scout stop?',
+      insightId: insight,
+    });
+    expect(retry.status).toBe('delivered');
+    expect(sent).toHaveLength(2);
     await watcher.stop();
   });
 });

@@ -364,7 +364,7 @@ export function narratePredictionResolved(input: {
 export function narrateBroadcast(input: {
   kind: 'wake' | 'directive' | 'goal' | 'question';
   bot: string;
-  status: 'sent' | 'failed' | 'capped';
+  status: 'sent' | 'failed' | 'deferred' | 'capped';
   text?: string;
   error?: string;
   cap?: number;
@@ -379,6 +379,9 @@ export function narrateBroadcast(input: {
       question: `ask the operator through ${bot}`,
     }[input.kind];
     return `Did not ${verb}: it already had ${plural(input.cap ?? 0, 'broadcast', 'broadcasts')} today.`;
+  }
+  if (input.status === 'deferred') {
+    return `Held a question for the operator through ${bot} for later (${quoteModelText(input.error ?? 'throttled', 160)}).`;
   }
   if (input.status === 'failed') {
     const verb = {

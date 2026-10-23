@@ -134,7 +134,9 @@ export function broadcastRowsHtml(broadcasts, nowMs = Date.now()) {
   }
   const items = rows.map((b) => {
     let state;
-    if (!b.deliveredAt)
+    if (!b.deliveredAt && b.deferred)
+      state = `<span class="text-dim">held by the throttle: ${esc(b.deliveryError ?? '')}</span>`;
+    else if (!b.deliveredAt)
       state = `<span class="watcher-bc-failed">not delivered: ${esc(b.deliveryError ?? '')}</span>`;
     else if (b.servedByCycle) {
       state = `served by cycle <button type="button" class="btn btn-sm" data-open-cycle="${esc(

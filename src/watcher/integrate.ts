@@ -44,7 +44,7 @@ import {
   narrateIntegrateUnparsable,
   narrateNoticeRecognised,
 } from './narration';
-import { type NoticeOutcome, earliestEventAt, noticeItems } from './notice';
+import { type NoticeOutcome, type PassOptions, earliestEventAt, noticeItems } from './notice';
 import {
   BROADCAST_KINDS,
   type IntegratePredictionRow,
@@ -127,7 +127,9 @@ export type IntegrateOutcome =
       contradictions: Neuron[];
       predictions: Neuron[];
       broadcasts: BroadcastResult[];
-    };
+    }
+  /** Its run was stopped: nothing written after that (graph, state, log, broadcasts). */
+  | { status: 'cancelled' };
 
 /** `<dir>/integrate.json`: what is pending, when it last ran, what it attends to. */
 export interface IntegrateState {
@@ -261,6 +263,7 @@ function readState(dir: string): IntegrateState {
 export class Integrator {
   private st: IntegrateState;
   private inFlight: Promise<IntegrateOutcome> | null = null;
+  private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
   private readonly bornAt: number;
 
@@ -325,26 +328,40 @@ export class Integrator {
     return nowMs - last >= cfg.heartbeatMs;
   }
 
-  /** One pass; a call while one runs shares it. */
-  run(): Promise<IntegrateOutcome> {
-    if (this.inFlight) return this.inFlight;
-    this.inFlight = this.pass()
+  /**
+   * One pass; a call while one runs shares it, unless that one's run was
+   * cancelled (it writes nothing more, so a new run starts its own).
+   */
+  run(opts: PassOptions = {}): Promise<IntegrateOutcome> {
+    if (this.inFlight && !this.inFlightCancelled()) return this.inFlight;
+    const isCancelled = opts.isCancelled ?? (() => false);
+    const run: Promise<IntegrateOutcome> = this.pass(isCancelled)
       .catch((err): IntegrateOutcome => {
+        if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher integrate: pass failed');
         return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
       })
       .finally(() => {
-        this.inFlight = null;
+        if (this.inFlight === run) this.inFlight = null;
       });
-    return this.inFlight;
+    this.inFlight = run;
+    this.inFlightCancelled = isCancelled;
+    return run;
   }
 
-  private async pass(): Promise<IntegrateOutcome> {
+  /**
+   * Checked before every embed, after every embed settles (its result is
+   * dropped), before every graph write, before every `broadcaster.send` and
+   * before the state and the log: after a stop the state was persisted and the
+   * graph compacted, so a write here would land after the sleep row.
+   */
+  private async pass(isCancelled: () => boolean): Promise<IntegrateOutcome> {
     const { graph, log } = this.deps;
     const cfg = this.deps.config();
     if (!cfg.integrate.enabled) return { status: 'idle' };
     const pending = this.st.pending;
     if (pending.items.length === 0 && pending.neurons.length === 0) return { status: 'idle' };
+    if (isCancelled()) return { status: 'cancelled' };
 
     // Snapshot what this pass reads: anything observed meanwhile stays pending.
     const readItems = [...pending.items];
@@ -412,6 +429,7 @@ export class Integrator {
       ],
       { temperature: INTEGRATE_TEMPERATURE }
     );
+    if (isCancelled()) return { status: 'cancelled' };
     if (!res.ok) return this.refused(res);
     this.pausedLogged = false;
     const cost = {
@@ -437,10 +455,13 @@ export class Integrator {
     const insightByIndex: Array<Neuron | undefined> = [];
     const createdInsights: Neuron[] = [];
     for (const i of out.insights) {
-      const r = await this.insight(i, ctx);
+      if (isCancelled()) return { status: 'cancelled' };
+      const r = await this.insight(i, ctx, isCancelled);
+      if (isCancelled()) return { status: 'cancelled' };
       insightByIndex.push(r?.neuron);
       if (r?.created) createdInsights.push(r.neuron);
     }
+    // contradiction() and prediction() are synchronous: nothing settles in between.
     const contradictions = out.contradictions
       .map((c) => this.contradiction(c, ctx))
       .filter((n): n is Neuron => !!n);
@@ -459,6 +480,7 @@ export class Integrator {
       )
         continue;
       if (!this.deps.broadcaster) continue;
+      if (isCancelled()) return { status: 'cancelled' };
       broadcasts.push(
         await this.deps.broadcaster.send({
           botId: b.bot,
@@ -470,6 +492,7 @@ export class Integrator {
       );
     }
 
+    if (isCancelled()) return { status: 'cancelled' };
     const known = new Set([
       ...shown.keys(),
       ...insightByIndex.filter((n): n is Neuron => !!n).map((n) => n.id),
@@ -628,7 +651,8 @@ export class Integrator {
 
   private async insight(
     i: IntegrateInsightOut,
-    ctx: ApplyCtx
+    ctx: ApplyCtx,
+    isCancelled: () => boolean
   ): Promise<{ neuron: Neuron; created: boolean } | null> {
     const { graph, log } = this.deps;
     const text = clip(i.text, MAX_TEXT);
@@ -651,6 +675,17 @@ export class Integrator {
       );
       return { neuron: active, created: false };
     }
+    // Embedded before the neuron is written: an embedding that settles after a
+    // stop drops the whole insight instead of leaving a half-linked neuron.
+    let vec: number[] | undefined;
+    if (this.deps.embed) {
+      try {
+        vec = await this.deps.embed(text);
+      } catch {
+        // an insight without an embedding is still kept
+      }
+      if (isCancelled()) return null;
+    }
     const neuron = graph.addNeuron({
       kind: 'insight',
       text,
@@ -661,13 +696,7 @@ export class Integrator {
       pos: this.place(text, 'insight', support),
       meta: this.meta(ctx, support, { supportNeurons: support.map((n) => n.id).join(',') }),
     });
-    if (this.deps.embed) {
-      try {
-        graph.setEmbedding(neuron.id, await this.deps.embed(text));
-      } catch {
-        // an insight without an embedding is still kept
-      }
-    }
+    if (vec) graph.setEmbedding(neuron.id, vec);
     const edgeIds = support.map(
       (s) =>
         graph.addEdge({

@@ -186,6 +186,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private noticeRun: Promise<NoticeOutcome | null> | null = null;
+  /** The run signal of `noticeRun` / `integrateRun`: a stopped run's pass is never shared. */
+  private noticeRunSignal: AbortSignal | null = null;
+  private integrateRunSignal: AbortSignal | null = null;
   private readonly noticer?: Noticer;
   /** Phase 3: broadcasts (always on disk; delivered only through `broadcastDelivery`). */
   readonly broadcaster: Broadcaster;
@@ -349,24 +352,34 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   noticeNow(): Promise<NoticeOutcome | null> {
     const noticer = this.noticer;
     if (!noticer || !this.cfg().notice.enabled || !this.running) return Promise.resolve(null);
-    if (this.noticeRun) return this.noticeRun;
+    if (this.noticeRun && !this.noticeRunSignal?.aborted) return this.noticeRun;
     this.sense.flush();
     this.setPhase('notice');
-    this.noticeRun = noticer
-      .run()
+    // Same per-run cancellation as birth: a pass a stop left behind (waiting
+    // on an embedding that cannot be aborted) writes nothing more, never feeds
+    // the next run's integrator and never moves the next run's phase.
+    const signal = this.stopCtrl.signal;
+    const isCancelled = () => signal.aborted;
+    const run: Promise<NoticeOutcome | null> = noticer
+      .run({ isCancelled })
       .then((outcome) => {
-        this.integrator?.observeNotice(outcome);
+        if (!isCancelled()) this.integrator?.observeNotice(outcome);
         return outcome;
       })
       .catch((err): NoticeOutcome | null => {
-        this.fail(err);
+        if (!isCancelled()) this.fail(err);
         return null;
       })
       .finally(() => {
-        this.noticeRun = null;
-        if (this.running && !this.stopping) this.setPhase('sense');
+        if (this.noticeRun === run) {
+          this.noticeRun = null;
+          this.noticeRunSignal = null;
+        }
+        if (this.running && !this.stopping && !isCancelled()) this.setPhase('sense');
       });
-    return this.noticeRun;
+    this.noticeRun = run;
+    this.noticeRunSignal = signal;
+    return run;
   }
 
   /** True while the integrate timer runs (after birth, with `integrate.enabled`). */
@@ -384,20 +397,28 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     if (!integrator || !this.cfg().integrate.enabled || !this.running) {
       return Promise.resolve(null);
     }
-    if (this.integrateRun) return this.integrateRun;
+    if (this.integrateRun && !this.integrateRunSignal?.aborted) return this.integrateRun;
     this.sense.flush();
     this.setPhase('integrate');
-    this.integrateRun = integrator
-      .run()
+    // Per-run cancellation, as in `noticeNow`: no write nor broadcast after a stop.
+    const signal = this.stopCtrl.signal;
+    const isCancelled = () => signal.aborted;
+    const run: Promise<IntegrateOutcome | null> = integrator
+      .run({ isCancelled })
       .catch((err): IntegrateOutcome | null => {
-        this.fail(err);
+        if (!isCancelled()) this.fail(err);
         return null;
       })
       .finally(() => {
-        this.integrateRun = null;
-        if (this.running && !this.stopping) this.setPhase('sense');
+        if (this.integrateRun === run) {
+          this.integrateRun = null;
+          this.integrateRunSignal = null;
+        }
+        if (this.running && !this.stopping && !isCancelled()) this.setPhase('sense');
       });
-    return this.integrateRun;
+    this.integrateRun = run;
+    this.integrateRunSignal = signal;
+    return run;
   }
 
   /**
@@ -1054,14 +1075,16 @@ export interface WatcherQuestionDeps {
  * Telegram route (none, or no `operator.telegramChatId` = kept for the
  * dashboard, like `send_proactive_message`),
  * and one tool-audit row under `__watcher__` that `/api/proactive` lists in
- * Work → Sent to you. A refusal is audited as `policy`; only a delivery that
+ * Work → Sent to you. A refusal is audited as `policy` and reported as
+ * `deferred` (nothing was attempted: the broadcaster keeps it out of the bot's
+ * daily cap and lets it be retried after the cooldown); only a delivery that
  * landed is counted against the throttle. Never throws.
  */
 export async function deliverWatcherQuestion(
   deps: WatcherQuestionDeps,
   botId: string,
   text: string
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; deferred?: boolean }> {
   const now = deps.now ?? Date.now;
   const started = now();
   const message = `${WATCHER_QUESTION_PREFIX}${text}`;
@@ -1085,7 +1108,7 @@ export async function deliverWatcherQuestion(
     return { ok, detail };
   };
   const gate = deps.throttle.check(WATCHER_BOT_ID);
-  if (!gate.allowed) return finish(false, gate.reason, 'policy');
+  if (!gate.allowed) return { ...finish(false, gate.reason, 'policy'), deferred: true };
   const chatId = deps.operatorChatId();
   // No operator Telegram chat is the same case as no route: the dashboard is
   // the channel, so the question has landed (Work → Sent to you). Reporting a

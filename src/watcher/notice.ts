@@ -101,7 +101,14 @@ export type NoticeOutcome =
   | { status: 'capped' | 'breaker' }
   | { status: 'failed'; error: string }
   | { status: 'unparsable' }
-  | { status: 'noticed'; created: Neuron[]; recognised: Neuron[] };
+  | { status: 'noticed'; created: Neuron[]; recognised: Neuron[] }
+  /** Its run was stopped: nothing written after that (graph, buffer, log). */
+  | { status: 'cancelled' };
+
+/** Per-run cancellation (the watcher run's signal): a cancelled pass writes nothing more. */
+export interface PassOptions {
+  isCancelled?: () => boolean;
+}
 
 export interface NoticeDeps {
   graph: Graph;
@@ -193,6 +200,7 @@ const isConfidence = (c: unknown): c is Confidence => c === 'low' || c === 'medi
 export class Noticer {
   lastRunAt: number;
   private inFlight: Promise<NoticeOutcome> | null = null;
+  private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
 
   constructor(private readonly deps: NoticeDeps) {
@@ -210,21 +218,35 @@ export class Noticer {
     return since >= NOTICE_MIN_GAP_MS && total >= NOTICE_EARLY_FACTOR * cfg.salienceBar;
   }
 
-  /** One pass; a call while one runs shares it. */
-  run(): Promise<NoticeOutcome> {
-    if (this.inFlight) return this.inFlight;
-    this.inFlight = this.pass()
+  /**
+   * One pass; a call while one runs shares it, unless that one's run was
+   * cancelled (a stopped run's pass may still wait on an embedding that cannot
+   * be aborted; it writes nothing more, so a new run starts its own).
+   */
+  run(opts: PassOptions = {}): Promise<NoticeOutcome> {
+    if (this.inFlight && !this.inFlightCancelled()) return this.inFlight;
+    const isCancelled = opts.isCancelled ?? (() => false);
+    const run: Promise<NoticeOutcome> = this.pass(isCancelled)
       .catch((err): NoticeOutcome => {
+        if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher notice: pass failed');
         return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
       })
       .finally(() => {
-        this.inFlight = null;
+        if (this.inFlight === run) this.inFlight = null;
       });
-    return this.inFlight;
+    this.inFlight = run;
+    this.inFlightCancelled = isCancelled;
+    return run;
   }
 
-  private async pass(): Promise<NoticeOutcome> {
+  /**
+   * Checked before every embed, after every embed settles (its result is
+   * dropped), before every graph write, before `buffer.drain` and before the
+   * log: after a stop the buffer was persisted and the graph compacted, so a
+   * write here would land after the sleep row or in the next run's state.
+   */
+  private async pass(isCancelled: () => boolean): Promise<NoticeOutcome> {
     const { graph, buffer, log } = this.deps;
     const cfg = this.deps.config();
     const items = buffer
@@ -232,6 +254,7 @@ export class Noticer {
       .sort((a, b) => b.salience - a.salience)
       .slice(0, NOTICE_MAX_ITEMS);
     if (items.length === 0) return { status: 'idle' };
+    if (isCancelled()) return { status: 'cancelled' };
     this.lastRunAt = this.deps.now();
 
     const botName = this.deps.botName ?? ((id: string) => id);
@@ -246,6 +269,7 @@ export class Noticer {
       { temperature: NOTICE_TEMPERATURE }
     );
 
+    if (isCancelled()) return { status: 'cancelled' };
     if (!res.ok) return this.refused(res, items.length);
     this.pausedLogged = false;
     const cost = {
@@ -267,13 +291,16 @@ export class Noticer {
     const recognised: Neuron[] = [];
     const used = new Set<string>();
     for (const keep of out.keep) {
-      const result = await this.keep(keep, byId, res.model);
+      if (isCancelled()) return { status: 'cancelled' };
+      const result = await this.keep(keep, byId, res.model, isCancelled);
+      if (isCancelled()) return { status: 'cancelled' };
       if (!result) continue;
       for (const id of result.from) used.add(id);
       if (result.created) created.push(result.neuron);
       else recognised.push(result.neuron);
     }
 
+    if (isCancelled()) return { status: 'cancelled' };
     const seen = new Set(touchedIds);
     for (const id of new Set(out.touched)) {
       if (!seen.has(id) && graph.get(id)) graph.activate(id);
@@ -334,7 +361,8 @@ export class Noticer {
   private async keep(
     keep: NoticeKeep,
     items: Map<string, BufferItem>,
-    model: string
+    model: string,
+    isCancelled: () => boolean
   ): Promise<{ neuron: Neuron; created: boolean; from: string[] } | null> {
     const { graph, log } = this.deps;
     const text = clip(keep.text ?? '', MAX_TEXT);
@@ -351,14 +379,18 @@ export class Noticer {
     let vec: number[] | undefined;
     let match = same;
     if (!match && this.deps.embed) {
+      if (isCancelled()) return null;
       try {
         vec = await this.deps.embed(text);
+        // Settled after a stop: the result belongs to no live run.
+        if (isCancelled()) return null;
         match = graph.findSimilarEmbedding(vec, this.deps.config().graph.relatedThreshold)[0]
           ?.neuron;
       } catch {
         vec = undefined;
       }
     }
+    if (isCancelled()) return null;
     if (match) {
       const active = graph.activate(match.id) ?? match;
       log.say(

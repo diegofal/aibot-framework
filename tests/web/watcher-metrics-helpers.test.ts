@@ -187,6 +187,12 @@ describe('broadcastRowsHtml', () => {
     expect(
       broadcastRowsHtml([b({ deliveredAt: undefined, deliveryError: 'throttled' })], NOW)
     ).toContain('not delivered');
+    const held = broadcastRowsHtml(
+      [b({ deliveredAt: undefined, deliveryError: 'cooldown', deferred: true })],
+      NOW
+    );
+    expect(held).toContain('held by the throttle: cooldown');
+    expect(held).not.toContain('not delivered');
     expect(broadcastRowsHtml([], NOW)).toContain('No broadcasts yet');
   });
 });

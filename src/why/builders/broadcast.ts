@@ -22,6 +22,9 @@ export interface BroadcastWhyInput {
 const day = (iso: string) => iso.slice(0, 10);
 
 export function broadcastOutcome(b: Broadcast): string {
+  if (!b.deliveredAt && b.deferred) {
+    return `Held by the proactive throttle (${b.deliveryError ?? 'throttled'}); it may be proposed again later.`;
+  }
   if (!b.deliveredAt) return `Not delivered: ${b.deliveryError ?? 'unknown reason'}.`;
   if (b.servedByCycle) return `Served by a cycle on ${day(b.servedAt ?? b.deliveredAt)}.`;
   if (b.shownAt) return `Shown to the planner on ${day(b.shownAt)}; not acted on.`;

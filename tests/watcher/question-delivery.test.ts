@@ -193,3 +193,93 @@ describe('question broadcasts without an operator Telegram chat (cap)', () => {
     }
   });
 });
+
+describe('a question refused by the shared throttle is a deferral (cap)', () => {
+  test("another bot's question in the cooldown never uses this bot's cap; it is retryable later", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'watcher-q-'));
+    try {
+      let now = NOW;
+      const throttle = new ProactiveThrottle(
+        () => ({ cooldownMs: 3_600_000, dailyCap: 10 }),
+        () => now
+      );
+      const sent: string[] = [];
+      const woken: string[] = [];
+      const qDeps = {
+        throttle,
+        operatorChatId: (): number | undefined => 42,
+        telegram: () => ({
+          api: {
+            sendMessage: async (_chatId: number, text: string) => {
+              sent.push(text);
+            },
+          },
+        }),
+        now: () => now,
+        logger,
+      };
+      const b = new Broadcaster({
+        dir,
+        now: () => now,
+        delivery: {
+          question: (botId: string, text: string) => deliverWatcherQuestion(qDeps, botId, text),
+          wake: (botId: string) => {
+            woken.push(botId);
+          },
+        },
+      });
+      const qa = {
+        botId: 'a',
+        kind: 'question' as const,
+        text: 'Who owns Acme?',
+        insightId: 'n-1',
+      };
+      const qb = { botId: 'b', kind: 'question' as const, text: 'Is B blocked?', insightId: 'n-2' };
+      // One pass: A's question lands, B's is refused by the `__watcher__` cooldown.
+      expect((await b.send(qa)).status).toBe('delivered');
+      const refused = await b.send(qb);
+      expect(refused.status).toBe('deferred');
+      expect(b.countToday('b')).toBe(0);
+      // Re-proposed in later passes, still within the cooldown: never burns B's cap.
+      for (let i = 0; i < 5; i++) {
+        now += 60_000;
+        expect((await b.send(qb)).status).toBe('deferred');
+      }
+      expect(b.countToday('b')).toBe(0);
+      // B's other kinds still go out.
+      const wake = await b.send({ botId: 'b', kind: 'wake', text: '', insightId: 'n-3' });
+      expect(wake.status).toBe('delivered');
+      expect(woken).toEqual(['b']);
+      // After the cooldown the same question is retried and lands.
+      now = NOW + 3_600_001;
+      expect((await b.send(qb)).status).toBe('delivered');
+      expect(b.countToday('b')).toBe(2);
+      expect(sent).toHaveLength(2);
+      // A deferral is in the file, distinct from a failure, and survives a restart.
+      const reloaded = new Broadcaster({ dir, now: () => now, delivery: {} });
+      const deferred = reloaded.list({ botId: 'b' }).filter((x) => x.deferred);
+      expect(deferred.length).toBe(6);
+      expect(reloaded.countToday('b')).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a real Telegram error is still a failure that counts toward the cap', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'watcher-q-'));
+    try {
+      const { deps } = setup({ fail: true });
+      const b = new Broadcaster({
+        dir,
+        now: () => NOW,
+        delivery: { question: (botId, text) => deliverWatcherQuestion(deps, botId, text) },
+      });
+      const out = await b.send({ botId: 'b1', kind: 'question', text: 'Hi?', insightId: 'n-1' });
+      expect(out.status).toBe('failed');
+      expect(out.broadcast?.deferred).toBeUndefined();
+      expect(b.countToday('b1')).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

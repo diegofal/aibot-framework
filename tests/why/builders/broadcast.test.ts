@@ -64,6 +64,14 @@ describe('broadcastOutcome', () => {
     expect(broadcastOutcome({ ...base, deliveredAt: undefined, deliveryError: 'throttled' })).toBe(
       'Not delivered: throttled.'
     );
+    expect(
+      broadcastOutcome({
+        ...base,
+        deliveredAt: undefined,
+        deliveryError: 'cooldown',
+        deferred: true,
+      })
+    ).toBe('Held by the proactive throttle (cooldown); it may be proposed again later.');
     expect(broadcastOutcome(base)).toBe('Delivered; no planner has seen it yet.');
     expect(broadcastOutcome({ ...base, shownAt: '2026-10-23T10:05:00.000Z' })).toBe(
       'Shown to the planner on 2026-10-23; not acted on.'
