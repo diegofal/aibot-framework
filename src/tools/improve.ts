@@ -84,10 +84,6 @@ function buildClaudePrompt(absDir: string, focus: FocusArea, context?: string): 
 }
 
 /**
- * Core execution logic — spawns Claude Code CLI to improve soul files.
- * Used by both the LLM tool and the /improve skill command.
- */
-/**
  * argv (without the binary) of an improve session: its file tools, so no
  * `--tools ""`, but `--setting-sources ""` (`NO_SETTINGS_FLAGS`) like every
  * framework call. Pure.
@@ -105,6 +101,10 @@ export function buildImproveCliArgs(prompt: string, model?: string): string[] {
   return args;
 }
 
+/**
+ * Core execution logic — spawns Claude Code CLI to improve soul files.
+ * Used by both the LLM tool and the /improve skill command.
+ */
 export async function runImprove(opts: {
   claudePath: string;
   claudeModel?: string;

@@ -278,7 +278,8 @@ const LINK_NOTES = {
  * The pieces of the state bar, each its own HTML: `main` (dot, phase, ages),
  * `counts`, `notes`, `tiers` (the tier controls) and `button` (Start/Stop).
  * `drawState` updates them in place so a republish never rebuilds the tier
- * inputs under the operator's cursor.
+ * inputs under the operator's cursor. `button` is built only when read (the
+ * first render, `stateHtml`): afterwards `syncStateButton` updates it in place.
  */
 export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
   const s = state ?? {};
@@ -318,21 +319,17 @@ export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
     notes.push(`<div class="watcher-note">${LINK_NOTES[s.linkStatus]}</div>`);
   if (s.lastError) notes.push(`<div class="watcher-note is-error">${esc(s.lastError)}</div>`);
 
-  const b = stateButtonSpec(s, { busy });
-  const button = `<button type="button" class="${b.className}" data-action="${b.action}"${
-    b.disabled ? ' disabled' : ''
-  }>${b.label}</button>`;
-
   return {
     main: main.join('<span class="watcher-sep">·</span>'),
     counts: chips.join(''),
     notes: notes.join(''),
     tiers: tierControlsHtml(s.config, { busy }),
-    button,
+    get button() {
+      return stateButtonHtml(s, { busy });
+    },
   };
 }
 
-/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
 /** What the Start/Stop button of the state bar shows. */
 function stateButtonSpec(state, { busy = false } = {}) {
   const running = !!state?.running;
@@ -359,6 +356,15 @@ export function syncStateButton(button, state, { busy = false } = {}) {
   if (button.disabled !== b.disabled) button.disabled = b.disabled;
 }
 
+/** The Start/Stop button's HTML, for the first render of the state bar. */
+function stateButtonHtml(state, { busy = false } = {}) {
+  const b = stateButtonSpec(state, { busy });
+  return `<button type="button" class="${b.className}" data-action="${b.action}"${
+    b.disabled ? ' disabled' : ''
+  }>${b.label}</button>`;
+}
+
+/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
 export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
   const p = stateParts(state, nowMs, { busy });
   return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
