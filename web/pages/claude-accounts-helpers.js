@@ -19,8 +19,29 @@ function span(ms) {
   return `${m}m`;
 }
 
+/** A window whose reset time has passed: the reading says nothing about it now. */
+function hasReset(w, nowMs) {
+  const at = w?.resetsAt ? Date.parse(w.resetsAt) : Number.NaN;
+  return Number.isFinite(at) && at <= nowMs;
+}
+
+/** Older than this, the card tests the account again on its own. */
+export const LIMITS_STALE_MS = 30 * 60_000;
+
+/**
+ * Should the card re-test this account? Never checked, a window reset since
+ * the reading, or the reading is older than LIMITS_STALE_MS. Pure.
+ */
+export function limitsStale(limits, nowMs = Date.now()) {
+  if (!limits) return true;
+  const checked = Date.parse(limits.checkedAt);
+  if (!Number.isFinite(checked) || nowMs - checked > LIMITS_STALE_MS) return true;
+  return hasReset(limits.fiveHour, nowMs) || hasReset(limits.sevenDay, nowMs);
+}
+
 function windowLine(label, w, nowMs) {
   if (!w || typeof w.utilization !== 'number') return '';
+  if (hasReset(w, nowMs)) return `<div class="text-dim">${label}: reset since this check</div>`;
   const left = Math.max(0, Math.round((1 - w.utilization) * 100));
   const reset = w.resetsAt ? Date.parse(w.resetsAt) - nowMs : Number.NaN;
   const resets = Number.isFinite(reset) && reset > 0 ? ` · resets in ${span(reset)}` : '';
@@ -30,14 +51,21 @@ function windowLine(label, w, nowMs) {
 
 /**
  * The Available cell: what is left of the 5-hour and weekly windows at the
- * last Test, when each resets and how old the reading is. Pure.
+ * last Test, when each resets and how old the reading is. A window that has
+ * reset since says so instead of its old number. Pure.
  */
 export function availabilityHtml(limits, nowMs = Date.now()) {
   if (!limits) return '<span class="text-dim text-sm">Not checked yet · press Test</span>';
   const checked = Date.parse(limits.checkedAt);
   const age = Number.isFinite(checked) ? `checked ${span(Math.max(0, nowMs - checked))} ago` : '';
+  // Blocked only while some window that was at its limit has not reset yet.
+  const windows = [limits.fiveHour, limits.sevenDay].filter(
+    (w) => w && typeof w.utilization === 'number'
+  );
+  const stillBlocked =
+    windows.length === 0 || windows.some((w) => w.utilization >= 1 && !hasReset(w, nowMs));
   const blocked =
-    limits.status === 'rejected'
+    limits.status === 'rejected' && stillBlocked
       ? '<div style="color:var(--warn)">Blocked: at its limit</div>'
       : '';
   return `<div class="text-sm">${blocked}${windowLine('5h', limits.fiveHour, nowMs)}${windowLine('Week', limits.sevenDay, nowMs)}<div class="text-dim">${age}</div></div>`;

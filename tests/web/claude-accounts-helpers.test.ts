@@ -149,3 +149,47 @@ describe('availability column', () => {
     expect(html).toContain('5h: 50% left');
   });
 });
+
+describe('stale readings', () => {
+  const { availabilityHtml, limitsStale } = require('../../web/pages/claude-accounts-helpers.js');
+  const NOW = Date.parse('2026-10-23T09:15:00Z');
+  // The reading the card showed on 2026-10-23: taken Oct 15, both windows long since reset.
+  const OLD = {
+    checkedAt: '2026-10-15T13:20:55Z',
+    status: 'rejected',
+    fiveHour: { utilization: 0.05, resetsAt: '2026-10-15T14:50:00Z' },
+    sevenDay: { utilization: 1, resetsAt: '2026-10-15T18:00:00Z' },
+  };
+
+  test('a window that already reset shows no stale percentage and no Blocked', () => {
+    const html = availabilityHtml(OLD, NOW);
+    expect(html).not.toContain('0% left');
+    expect(html).not.toContain('Blocked');
+    expect(html).toContain('Week: reset since this check');
+  });
+
+  test('blocked stays while the window that blocked has not reset', () => {
+    const html = availabilityHtml(
+      {
+        ...OLD,
+        checkedAt: '2026-10-23T09:10:00Z',
+        sevenDay: { utilization: 1, resetsAt: '2026-10-24T21:00:00Z' },
+      },
+      NOW
+    );
+    expect(html).toContain('Blocked');
+  });
+
+  test('limitsStale: never checked, a window reset since, or older than 30 min', () => {
+    expect(limitsStale(undefined, NOW)).toBe(true);
+    expect(limitsStale(OLD, NOW)).toBe(true);
+    const fresh = {
+      checkedAt: '2026-10-23T09:00:00Z',
+      status: 'allowed',
+      fiveHour: { utilization: 0.1, resetsAt: '2026-10-23T12:00:00Z' },
+      sevenDay: { utilization: 0.2, resetsAt: '2026-10-29T21:00:00Z' },
+    };
+    expect(limitsStale(fresh, NOW)).toBe(false);
+    expect(limitsStale({ ...fresh, checkedAt: '2026-10-23T08:40:00Z' }, NOW)).toBe(true);
+  });
+});

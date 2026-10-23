@@ -300,9 +300,10 @@ export interface CircuitSkipDecision {
   probe: boolean;
 }
 
-const WEEKLY_QUOTA_PATTERN = /weekly usage limit/i;
+// Ollama Cloud: "weekly usage limit"; Claude CLI: "You've hit your weekly limit".
+const WEEKLY_QUOTA_PATTERN = /weekly (?:usage )?limit/i;
 
-/** Does the error text name a weekly quota (Ollama Cloud's shared weekly allowance)? */
+/** Does the error text name a weekly quota (Ollama Cloud's allowance or a Claude plan's week)? */
 export function isWeeklyQuotaError(error: unknown): boolean {
   if (error == null) return false;
   const msg = error instanceof Error ? error.message : String(error);
