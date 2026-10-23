@@ -31,7 +31,7 @@ import type { ContactEntry, UserDirectory } from '../bot/user-directory';
 import type { Config } from '../config';
 import { readTasksSnapshot } from '../goals/task-store';
 import type { Logger } from '../logger';
-import { SoulLoader } from '../soul';
+import { SoulLoader, stripMarkdownEmphasis } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { type AgentCycleRecord, readAgentCycles } from '../stats/readers/agent-cycles';
 import { parseGoals } from '../tools/goals';
@@ -931,8 +931,11 @@ function describeChannel(status: ChannelStatus | undefined, enabled: boolean): s
 function parseKeyValues(raw: string | null): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of (raw ?? '').split('\n')) {
-    const m = /^[-*\s]*(\w+)\s*:\s*(.+)$/.exec(line);
-    if (m && !out[m[1].toLowerCase()]) out[m[1].toLowerCase()] = m[2].trim();
+    // `**Name:** X` / `- **vibe**: X`: emphasis around the key and the value goes.
+    const m = /^[-*_>\s]*(\w+)(?:\*\*|__)?\s*:(.+)$/.exec(line);
+    if (!m || out[m[1].toLowerCase()]) continue;
+    const value = stripMarkdownEmphasis(m[2]);
+    if (value) out[m[1].toLowerCase()] = value;
   }
   return out;
 }

@@ -99,6 +99,34 @@ export function backupSoulFile(filepath: string, logger: Logger, maxVersions = 1
   return backupPath;
 }
 
+/**
+ * Markdown emphasis and code marks out of a short value: backticks and
+ * `**` / `__` anywhere, a single `*` / `_` only at the edges (so
+ * `snake_case` keeps its underscores). "** MyFirstMillion Bot" → "MyFirstMillion Bot".
+ */
+export function stripMarkdownEmphasis(value: string): string {
+  return value
+    .replace(/`/g, '')
+    .replace(/\*\*|__/g, '')
+    .replace(/^[\s*_]+|[\s*_]+$/g, '')
+    .trim();
+}
+
+/**
+ * The `name:` field of an IDENTITY.md text, also when written in markdown
+ * (`**Name:** X`, `- **name**: X`, a backticked value); null without one.
+ */
+export function parseIdentityName(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  for (const line of raw.split('\n')) {
+    const match = line.match(/^[\s>*_-]*(?:\*\*|__)?name(?:\*\*|__)?\s*:(.+)$/i);
+    if (!match) continue;
+    const name = stripMarkdownEmphasis(match[1]);
+    if (name) return name;
+  }
+  return null;
+}
+
 export class SoulLoader {
   private dir: string;
   private versioningEnabled: boolean;
@@ -444,13 +472,7 @@ export class SoulLoader {
 
   /** The `name:` field of IDENTITY.md (the name the bot goes by), or null. */
   readIdentityName(): string | null {
-    const raw = this.readIdentity();
-    if (!raw) return null;
-    for (const line of raw.split('\n')) {
-      const match = line.match(/^name\s*:\s*(.+)$/i);
-      if (match?.[1].trim()) return match[1].trim();
-    }
-    return null;
+    return parseIdentityName(this.readIdentity());
   }
 
   /**

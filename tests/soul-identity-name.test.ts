@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SoulLoader } from '../src/soul';
+import { SoulLoader, parseIdentityName, stripMarkdownEmphasis } from '../src/soul';
 
 const silentLogger = {
   info: () => {},
@@ -40,5 +40,32 @@ describe('SoulLoader.readIdentityName', () => {
   test('null without IDENTITY.md or without a name line', () => {
     expect(loader().readIdentityName()).toBeNull();
     expect(loader('emoji: 🐟\n').readIdentityName()).toBeNull();
+  });
+});
+
+describe('identity name written in markdown', () => {
+  test('bold key and value: "**Name:** MyFirstMillion Bot"', () => {
+    expect(loader('# Identity\n\n**Name:** MyFirstMillion Bot\n').readIdentityName()).toBe(
+      'MyFirstMillion Bot'
+    );
+  });
+
+  test('list item, bold value, backticks, underscores', () => {
+    expect(loader('- **name**: `Finny`\n').readIdentityName()).toBe('Finny');
+    expect(loader('* Name: **Finny**\n').readIdentityName()).toBe('Finny');
+    expect(loader('name: __Finny__\n').readIdentityName()).toBe('Finny');
+    expect(loader('name: *Finny*\n').readIdentityName()).toBe('Finny');
+  });
+
+  test('a value that is only emphasis marks is no name', () => {
+    expect(loader('**Name:** **\n').readIdentityName()).toBeNull();
+  });
+
+  test('parseIdentityName and stripMarkdownEmphasis are pure', () => {
+    expect(parseIdentityName('**Name:** MyFirstMillion Bot')).toBe('MyFirstMillion Bot');
+    expect(parseIdentityName(null)).toBeNull();
+    expect(stripMarkdownEmphasis('** MyFirstMillion Bot')).toBe('MyFirstMillion Bot');
+    expect(stripMarkdownEmphasis('`a_b`')).toBe('a_b');
+    expect(stripMarkdownEmphasis('snake_case_name')).toBe('snake_case_name');
   });
 });

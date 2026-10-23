@@ -591,3 +591,19 @@ describe('linking what birth could not embed', () => {
     expect(readBirthRecord(d.dir)?.linkStatus).toBe('no-embeddings');
   });
 });
+
+describe('birth: bot names written in markdown', () => {
+  test('"**Name:** MyFirstMillion Bot" becomes the entity name without the stars', async () => {
+    const { d, graph } = deps();
+    writeFileSync(
+      join(root, 'souls', 'b2', 'IDENTITY.md'),
+      '# Identity\n\n**Name:** MyFirstMillion Bot\n**Vibe:** `frugal` and **bold**\n'
+    );
+    await continueBirth(d, beginBirth(d));
+    const n = graph.findByKey('bot:b2');
+    expect(n?.meta?.name).toBe('MyFirstMillion Bot');
+    expect(n?.text.startsWith('MyFirstMillion Bot')).toBe(true);
+    expect(n?.text).not.toContain('*');
+    expect(n?.text).not.toContain('`');
+  });
+});
