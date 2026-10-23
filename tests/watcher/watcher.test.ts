@@ -98,6 +98,19 @@ describe('Watcher', () => {
     await watcher.stop();
   });
 
+  // Birth publishes neurons before the layout; a connected page must get the
+  // final positions, not keep the fallback shell ones.
+  test('birth publishes the final layout of the neurons it published', async () => {
+    const { watcher, events } = make();
+    await watcher.start();
+    await watcher.idle();
+    const layouts = events.filter((e) => e.type === 'watcher:layout');
+    expect(layouts.length).toBeGreaterThan(0);
+    const last = layouts.at(-1)?.data as { positions: Record<string, number[]> };
+    for (const n of watcher.graph.list()) expect(last.positions[n.id]).toEqual(n.pos as number[]);
+    await watcher.stop();
+  });
+
   test('every event is also emitted under its own name', async () => {
     const { watcher } = make();
     const logs: WatcherEvent[] = [];
@@ -544,6 +557,42 @@ describe('Watcher integration (phase 3)', () => {
     expect(s.watcher.state().attending).toEqual([goalId(s.watcher)]);
     expect(s.watcher.state().phase).toBe('sense');
     expect(s.watcher.budget.used('integrate').calls).toBe(1);
+    await s.watcher.stop();
+  });
+
+  // Integration reads fleet-wide goals and knowledge: none of it may reach a
+  // tenant bot as a directive, goal, question or wake.
+  test('tenant bots are never in the bot list nor broadcast targets', async () => {
+    const tenantAnswer = (w: Watcher) =>
+      JSON.stringify({
+        insights: [{ text: 'Jarvis keeps failing on the same fetch', support: [goalId(w)] }],
+        broadcasts: [
+          { bot: 't1', kind: 'wake', text: '', insightIndex: 0 },
+          { bot: 'b1', kind: 'wake', text: '', insightIndex: 0 },
+        ],
+        attending: [],
+      });
+    const s = withIntegrate(tenantAnswer);
+    const cfg = s.config as unknown as {
+      bots: Array<Record<string, unknown>>;
+      multiTenant?: { enabled: boolean };
+    };
+    cfg.bots.push({
+      id: 't1',
+      name: 't1',
+      soulDir: soul('t1', 'Acme'),
+      enabled: true,
+      tenantId: 'acme',
+    });
+    cfg.multiTenant = { enabled: true };
+    await s.watcher.start();
+    await s.watcher.idle();
+    s.activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await s.watcher.integrateNow();
+    expect(s.prompts[0]).toContain('- b1: ');
+    expect(s.prompts[0]).not.toContain('- t1: ');
+    expect(s.woke).toEqual(['b1']);
+    expect(s.watcher.broadcaster.list().map((b) => b.botId)).toEqual(['b1']);
     await s.watcher.stop();
   });
 

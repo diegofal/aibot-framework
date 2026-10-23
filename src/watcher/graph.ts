@@ -47,7 +47,9 @@ import {
 export type GraphChange =
   | { type: 'neuron'; neuron: Neuron }
   | { type: 'edge'; edge: Edge }
-  | { type: 'activate'; activation: ActivationData };
+  | { type: 'activate'; activation: ActivationData }
+  /** One batched change for a relayout (`setPositions`): neuron id → new position. */
+  | { type: 'layout'; positions: Record<string, Vec3> };
 
 export interface GraphOptions {
   now?: () => number;
@@ -319,14 +321,24 @@ export class Graph {
     return out;
   }
 
-  /** Positions for many neurons at once, then one compaction instead of a line per neuron. */
+  /**
+   * Positions for many neurons at once, then one compaction instead of a line
+   * per neuron, and one `layout` change (not one per neuron: a relayout moves
+   * up to `maxNeurons`) with the positions applied to known neurons.
+   */
   setPositions(positions: Map<string, Vec3>): void {
+    const applied: Record<string, Vec3> = {};
+    let moved = 0;
     for (const [id, pos] of positions) {
       const n = this.neurons.get(id);
-      if (n) this.neurons.set(id, { ...n, pos });
+      if (!n) continue;
+      this.neurons.set(id, { ...n, pos });
+      applied[id] = pos;
+      moved++;
     }
     this.rev++;
     this.compact();
+    if (moved > 0) this.emit({ type: 'layout', positions: applied });
   }
 
   edgesOf(id: string): Edge[] {

@@ -142,9 +142,13 @@ export type WatcherEventType =
   | 'watcher:neuron'
   | 'watcher:edge'
   | 'watcher:activate'
+  | 'watcher:layout'
   | 'watcher:state';
 
-/** What `/ws/watcher` carries: `data` is the row, neuron, edge, activation or state. */
+/**
+ * What `/ws/watcher` carries: `data` is the row, neuron, edge, activation,
+ * state, or for `watcher:layout` `{ positions: { [neuronId]: [x, y, z] } }`.
+ */
 export interface WatcherEvent {
   type: WatcherEventType;
   ts: string;

@@ -417,11 +417,15 @@ function bump(model, kind) {
 
 const NONE = Object.freeze({ kind: 'none' });
 
+const isVec3 = (p) =>
+  Array.isArray(p) && p.length === 3 && p.every((x) => typeof x === 'number' && Number.isFinite(x));
+
 /**
  * Apply one `watcher:*` event to the model. Updates the model in place (it
  * holds up to `maxNeurons` neurons; copying the maps per event would stall
  * birth) and returns what the ball should do: spawn / update / archive /
- * pulse / edge (with the id), log (with the row), state, or none.
+ * pulse / edge (with the id), layout (with the ids moved), log (with the
+ * row), state, or none.
  */
 export function applyWatcherEvent(model, event) {
   if (!model || !event || typeof event.type !== 'string') return NONE;
@@ -458,6 +462,18 @@ export function applyWatcherEvent(model, event) {
       model.neurons.set(data.id, next);
       return { kind: 'pulse', id: data.id };
     }
+    case 'watcher:layout': {
+      const positions = data.positions;
+      if (!positions || typeof positions !== 'object') return NONE;
+      const ids = [];
+      for (const [id, pos] of Object.entries(positions)) {
+        const prev = model.neurons.get(id);
+        if (!prev || !isVec3(pos)) continue;
+        model.neurons.set(id, { ...prev, pos: [pos[0], pos[1], pos[2]] });
+        ids.push(id);
+      }
+      return ids.length ? { kind: 'layout', ids } : NONE;
+    }
     case 'watcher:log': {
       if (!isRow(data)) return NONE;
       model.log = mergeLogRows(model.log, [data]);
@@ -469,6 +485,76 @@ export function applyWatcherEvent(model, event) {
     default:
       return NONE;
   }
+}
+
+/**
+ * Did this event name a neuron the page does not have? (An activation or an
+ * edge for an id created while the socket was down: the page refetches the
+ * graph instead of dropping it.)
+ */
+export function needsGraphRefetch(model, event) {
+  if (!model || !event || typeof event.type !== 'string') return false;
+  const d = event.data;
+  if (!d || typeof d !== 'object') return false;
+  const unknown = (id) => typeof id === 'string' && !model.neurons.has(id);
+  if (event.type === 'watcher:activate') return unknown(d.id);
+  if (event.type === 'watcher:edge') return unknown(d.from) || unknown(d.to);
+  return false;
+}
+
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Bring the model in line with a fresh `GET /api/watcher/graph` (after a
+ * socket reconnect, or an event for an unknown id). In place, like
+ * `applyWatcherEvent`: neurons the snapshot has and the model does not are
+ * added, changed ones replaced, live ones the snapshot lacks are archived
+ * (`archivedAt` = `nowIso`); edges follow the snapshot exactly. Returns the
+ * ids for the ball: `{ added, updated, archived, edgesChanged }`. A junk
+ * snapshot changes nothing.
+ */
+export function reconcileGraph(model, snapshot, { nowIso = new Date().toISOString() } = {}) {
+  const out = { added: [], updated: [], archived: [], edgesChanged: false };
+  if (!model || !snapshot || !Array.isArray(snapshot.neurons)) return out;
+  const seen = new Set();
+  for (const n of snapshot.neurons) {
+    if (!n || typeof n.id !== 'string') continue;
+    seen.add(n.id);
+    const prev = model.neurons.get(n.id);
+    if (!prev) {
+      model.neurons.set(n.id, n);
+      out.added.push(n.id);
+      continue;
+    }
+    if (sameJson(prev, n)) continue;
+    model.neurons.set(n.id, n);
+    if (!prev.archivedAt && n.archivedAt) out.archived.push(n.id);
+    else out.updated.push(n.id);
+  }
+  for (const [id, n] of model.neurons) {
+    if (seen.has(id) || n.archivedAt) continue;
+    model.neurons.set(id, { ...n, archivedAt: nowIso });
+    out.archived.push(id);
+  }
+  if (Array.isArray(snapshot.edges)) {
+    const edgeIds = new Set();
+    for (const e of snapshot.edges) {
+      if (!e || typeof e.id !== 'string') continue;
+      edgeIds.add(e.id);
+      const prev = model.edges.get(e.id);
+      if (prev && sameJson(prev, e)) continue;
+      model.edges.set(e.id, e);
+      out.edgesChanged = true;
+    }
+    for (const id of [...model.edges.keys()]) {
+      if (edgeIds.has(id)) continue;
+      model.edges.delete(id);
+      out.edgesChanged = true;
+    }
+  }
+  if (snapshot.rev !== undefined) model.rev = snapshot.rev;
+  if (snapshot.linkStatus !== undefined) model.linkStatus = snapshot.linkStatus;
+  return out;
 }
 
 /* ── Replay + spawn pacing ───────────────────────────────────────── */

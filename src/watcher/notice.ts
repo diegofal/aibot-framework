@@ -13,7 +13,8 @@
  * only non-operator messages support is kept as a topic. A neuron is
  * `operatorSourced` unless every item behind it is a non-operator message
  * (`restsOnOperatorMaterial`: bot activity — cycles, tools, surprises, workers,
- * goals, tasks — is operator material). Every row is
+ * goals, tasks — is operator material), and also whenever an operator-sourced
+ * neuron was among the touched neurons the prompt showed in full. Every row is
  * code-written; model text appears only quoted. Budget and breaker are
  * consulted by the instrumented client before every call; a capped day logs
  * one row, an open circuit one row per episode. The buffer is drained only
@@ -51,6 +52,7 @@ import {
   type Vec3,
   type WatcherConfig,
   isHumanInbound,
+  isOperatorSourced,
   isPublicHumanItem,
   restsOnOperatorMaterial,
 } from './types';
@@ -261,6 +263,9 @@ export class Noticer {
     const touchedIds = [...new Set(items.flatMap((i) => i.touched))];
     const touched = touchedIds.map((id) => graph.get(id)).filter((n): n is Neuron => !!n);
     const prompt = buildNoticePrompt(noticeItems(items, botName), touched);
+    // The prompt shows every touched neuron in full: if one is operator
+    // material, anything the model writes may restate it (conservative).
+    const shownOperator = touched.some((n) => isOperatorSourced(n));
     const res = await this.deps.client.chat(
       [
         { role: 'system', content: prompt.system },
@@ -292,7 +297,7 @@ export class Noticer {
     const used = new Set<string>();
     for (const keep of out.keep) {
       if (isCancelled()) return { status: 'cancelled' };
-      const result = await this.keep(keep, byId, res.model, isCancelled);
+      const result = await this.keep(keep, byId, res.model, isCancelled, shownOperator);
       if (isCancelled()) return { status: 'cancelled' };
       if (!result) continue;
       for (const id of result.from) used.add(id);
@@ -362,7 +367,8 @@ export class Noticer {
     keep: NoticeKeep,
     items: Map<string, BufferItem>,
     model: string,
-    isCancelled: () => boolean
+    isCancelled: () => boolean,
+    shownOperator = false
   ): Promise<{ neuron: Neuron; created: boolean; from: string[] } | null> {
     const { graph, log } = this.deps;
     const text = clip(keep.text ?? '', MAX_TEXT);
@@ -437,7 +443,9 @@ export class Noticer {
         source: 'notice',
         model,
         ...(eventAt ? { eventAt } : {}),
-        ...(restsOnOperatorMaterial(support) ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        ...(shownOperator || restsOnOperatorMaterial(support)
+          ? { [OPERATOR_SOURCED]: 'true' }
+          : {}),
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

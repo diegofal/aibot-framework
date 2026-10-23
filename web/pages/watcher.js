@@ -24,8 +24,10 @@ import {
   legendHtml,
   logListHtml,
   mergeLogRows,
+  needsGraphRefetch,
   neuronSheetBody,
   readWatcherMessage,
+  reconcileGraph,
   replayQueue,
   stateHtml,
   watcherDisabledHtml,
@@ -51,6 +53,8 @@ const SLOW_CLOCK_MS = 60_000;
 const LOG_PAGE = 1000;
 const LOG_MAX_PAGES = 20;
 const TITLE = '<div class="page-title">Watcher</div>';
+/** Events for unknown ids (or a reconnect) within this window share one graph refetch. */
+const GRAPH_REFETCH_DEBOUNCE_MS = 1500;
 
 let page = null;
 /** Bumped on every destroy: a render whose awaits resolve after it gives up. */
@@ -66,6 +70,7 @@ export function destroyWatcher() {
   clearInterval(page.clock);
   clearInterval(page.slowClock);
   clearTimeout(page.replay?.timer);
+  clearTimeout(page.graphRefetch);
   page = null;
 }
 
@@ -282,6 +287,9 @@ function onEffect(effect) {
     case 'edge':
       if (ballLive) page.ball.edgesChanged();
       break;
+    case 'layout':
+      if (ballLive) page.ball.move(effect.ids);
+      break;
     case 'log':
       if (page.paused) {
         page.pending++;
@@ -304,6 +312,32 @@ function onEffect(effect) {
   }
 }
 
+/**
+ * Refetch the graph and reconcile the model (debounced): neurons and edges
+ * created while the socket was down never come as events.
+ */
+function scheduleGraphRefetch() {
+  if (!page || page.graphRefetch) return;
+  page.graphRefetch = setTimeout(() => void refetchGraph(), GRAPH_REFETCH_DEBOUNCE_MS);
+}
+
+async function refetchGraph() {
+  const snap = await api('/api/watcher/graph').catch(() => null);
+  if (!page || page.stopped) return;
+  page.graphRefetch = null;
+  if (!snap || snap.error || isWatcherOff(snap)) return;
+  const out = reconcileGraph(page.model, snap);
+  if (page.ball && !page.replay) {
+    for (const id of out.added) page.ball.spawn(id);
+    for (const id of [...out.updated, ...out.archived]) page.ball.update(id);
+    if (out.edgesChanged) page.ball.edgesChanged();
+  }
+  if (out.added.length || out.updated.length || out.archived.length || out.edgesChanged) {
+    drawState();
+    drawInsights();
+  }
+}
+
 function onMessage(e) {
   if (!page || page.stopped) return;
   const msg = readWatcherMessage(e.data);
@@ -313,8 +347,13 @@ function onMessage(e) {
     page.model.log = mergeLogRows(page.model.log, msg.log);
     drawState();
     if (!page.paused && !page.replay) drawLog();
+    // Every history after the first is a reconnect: what changed meanwhile
+    // only exists in the graph.
+    if (page.historySeen) scheduleGraphRefetch();
+    page.historySeen = true;
     return;
   }
+  if (needsGraphRefetch(page.model, msg.event)) scheduleGraphRefetch();
   onEffect(applyWatcherEvent(page.model, msg.event));
 }
 
@@ -632,6 +671,8 @@ export async function renderWatcher(el) {
     slowClock: null,
     listeners: new AbortController(),
     replayLoading: false,
+    historySeen: false,
+    graphRefetch: null,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');

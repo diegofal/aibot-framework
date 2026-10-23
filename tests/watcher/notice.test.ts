@@ -586,6 +586,29 @@ describe('Noticer provenance (phase 3)', () => {
     expect(n.meta?.operatorSourced).toBeUndefined();
   });
 
+  // The prompt shows the full text of every touched neuron: if one of them is
+  // operator material, what the model writes may restate it.
+  test('an operator-sourced touched neuron shown in the prompt marks what is created', async () => {
+    const a = item(userSays('b1', 'invoices'));
+    const s = setup({ reply: keepOf('Users of Jarvis ask about invoices', [a.id], 'topic') });
+    s.graph.patchMeta(s.invoices.id, { operatorSourced: 'true' });
+    a.touched = [s.invoices.id];
+    s.buffer.push(a);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  test('a touched neuron that is not operator-sourced does not mark it', async () => {
+    const a = item(userSays('b1', 'invoices'));
+    const s = setup({ reply: keepOf('Users of Jarvis ask about invoices', [a.id], 'topic') });
+    a.touched = [s.invoices.id];
+    s.buffer.push(a);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBeUndefined();
+  });
+
   test('a user message plus bot activity is operatorSourced', async () => {
     const a = item(userSays('b1', 'weather'));
     const b = item(surprise('b1'));

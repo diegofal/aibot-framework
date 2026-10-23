@@ -108,6 +108,12 @@ export interface BroadcasterDeps {
   log?: WatcherLog;
   botName?: (botId: string) => string;
   maxPerBotPerDay?: number;
+  /**
+   * A tenant bot in multi-tenant mode: never a target (`invalid`), whatever
+   * proposed it. The watcher reads the whole fleet; a tenant bot must not
+   * receive admin or another tenant's material.
+   */
+  isTenantBot?: (botId: string) => boolean;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -202,6 +208,7 @@ export class Broadcaster {
     const botId = String(input.botId ?? '').trim();
     const insightId = String(input.insightId ?? '').trim();
     if (!botId || !insightId || !isKind(input.kind)) return { status: 'invalid' };
+    if (this.deps.isTenantBot?.(botId)) return { status: 'invalid' };
     const kind = input.kind;
     if (!text && kind !== 'wake') return { status: 'invalid' };
     for (const b of this.byId.values()) {

@@ -248,6 +248,36 @@ describe('Graph', () => {
     expect(graph().get(a.id)?.pos).toEqual([0.1, 0.2, 0.3]);
   });
 
+  // A page connected during birth got the neurons at their fallback shell
+  // positions; the relayout must reach it.
+  test('setPositions emits one layout change with the positions it applied', () => {
+    const changes: GraphChange[] = [];
+    const g = graph({ onChange: (c) => changes.push(c) });
+    const a = g.addNeuron(fact('a'));
+    const b = g.addNeuron(fact('b'));
+    changes.length = 0;
+    g.setPositions(
+      new Map([
+        [a.id, [0.1, 0.2, 0.3]],
+        [b.id, [-0.1, 0, 0.5]],
+        ['n-ghost', [0, 0, 0]],
+      ])
+    );
+    expect(changes).toEqual([
+      {
+        type: 'layout',
+        positions: { [a.id]: [0.1, 0.2, 0.3], [b.id]: [-0.1, 0, 0.5] },
+      },
+    ]);
+  });
+
+  test('setPositions with nothing to move emits nothing', () => {
+    const changes: GraphChange[] = [];
+    const g = graph({ onChange: (c) => changes.push(c) });
+    g.setPositions(new Map([['n-ghost', [0, 0, 0]]]));
+    expect(changes).toEqual([]);
+  });
+
   test('every change goes to the listener', () => {
     const changes: GraphChange[] = [];
     const g = graph({ onChange: (c) => changes.push(c) });

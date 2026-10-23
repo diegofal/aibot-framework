@@ -82,6 +82,28 @@ describe('Broadcaster.send', () => {
     expect(rows.some((row) => row.phase === 'broadcast' && row.op === 'broadcast:sent')).toBe(true);
   });
 
+  // Defence in depth: whatever proposes it, a tenant bot is never a target.
+  test('a tenant bot is rejected before anything is recorded or delivered', async () => {
+    const calls: string[] = [];
+    const b = new Broadcaster({
+      dir,
+      now: () => t,
+      delivery: {
+        wake: (id) => {
+          calls.push(`wake:${id}`);
+        },
+      },
+      isTenantBot: (id) => id === 't1',
+    });
+    for (const kind of ['wake', 'directive', 'goal', 'question']) {
+      const r = await send(b, { botId: 't1', kind, insightId: `n-${kind}` });
+      expect(r.status).toBe('invalid');
+    }
+    expect(calls).toEqual([]);
+    expect(b.list()).toEqual([]);
+    expect((await send(b)).status).toBe('delivered');
+  });
+
   test('directive, goal and question call their deps', async () => {
     const { b, calls } = setup();
     await send(b, { kind: 'directive', text: 'Check the shared lead first' });

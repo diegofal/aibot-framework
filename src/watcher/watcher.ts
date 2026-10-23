@@ -273,6 +273,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       delivery: deps.broadcastDelivery ?? {},
       log: this.log,
       botName: (id) => this.botName(id),
+      isTenantBot: (id) => this.isTenantBot(id),
       logger: this.logger,
     });
     const integrate = this.tierClient('integrate');
@@ -287,7 +288,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         now: this.now,
         bots: () =>
           (this.deps.config().bots ?? [])
-            .filter((b) => b.enabled !== false)
+            .filter((b) => b.enabled !== false && !this.isTenantBot(b.id))
             .map((b) => ({ id: b.id, name: this.botName(b.id) })),
         botName: (id) => this.botName(id),
         broadcaster: this.broadcaster,
@@ -303,6 +304,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       now: this.now,
       ...(deps.random ? { random: deps.random } : {}),
     });
+  }
+
+  /**
+   * A tenant bot in multi-tenant mode (`bots[].tenantId`, the same rule as
+   * `fleet_memory_search`'s `isTenantBot`): never a broadcast target nor in
+   * the integrate prompt's bot list.
+   */
+  private isTenantBot(botId: string): boolean {
+    const config = this.deps.config();
+    return !!config.multiTenant?.enabled && !!config.bots?.find((b) => b.id === botId)?.tenantId;
   }
 
   /** A tier's client wrapped with budget, breaker and query log (phase 3 asks for `integrate`). */
@@ -1003,6 +1014,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private onGraphChange(change: GraphChange): void {
     if (change.type === 'neuron') this.publish('watcher:neuron', change.neuron);
     else if (change.type === 'edge') this.publish('watcher:edge', change.edge);
+    else if (change.type === 'layout')
+      this.publish('watcher:layout', { positions: change.positions });
     else this.publish('watcher:activate', change.activation);
   }
 

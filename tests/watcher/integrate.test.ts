@@ -629,6 +629,36 @@ describe('Integrator.run', () => {
     expect(insight?.meta?.operatorSourced).toBeUndefined();
   });
 
+  // Integrate shows the neighbourhood, goals, insights and predictions in
+  // full: an operator-sourced one marks the pass even when nothing cites it.
+  test('an operator-sourced neuron only shown (never cited) marks what the pass creates', async () => {
+    const s = setup({ reply: full });
+    s.graph.patchMeta(s.n.near.id, { operatorSourced: 'true' });
+    s.integrator.observe(
+      item(
+        {
+          botId: 'b1',
+          channelKind: 'web',
+          chatId: 'w-anon',
+          userId: 'w-anon',
+          timestamp: t - 60_000,
+          text: 'acme leads',
+        },
+        1.5
+      )
+    );
+    s.integrator.observeNotice({
+      status: 'noticed',
+      created: [s.n.leadA, s.n.leadB],
+      recognised: [],
+    });
+    await s.integrator.run();
+    expect(s.prompts[0]).toContain(`[${s.n.near.id}]`);
+    const insight = s.graph.list().find((x) => x.kind === 'insight');
+    expect(insight?.meta?.supportNeurons).not.toContain(s.n.near.id);
+    expect(insight?.meta?.operatorSourced).toBe('true');
+  });
+
   test('integrate off (config) makes run idle without a call', async () => {
     const s = setup({ reply: full, cfg: { enabled: false } });
     expect((await ran(s)).status).toBe('idle');

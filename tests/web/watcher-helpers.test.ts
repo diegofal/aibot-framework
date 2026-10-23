@@ -20,12 +20,14 @@ import {
   logListHtml,
   logRowHtml,
   mergeLogRows,
+  needsGraphRefetch,
   neuronBrightness,
   neuronColour,
   neuronPosition,
   neuronRadius,
   neuronSheetBody,
   readWatcherMessage,
+  reconcileGraph,
   replayQueue,
   shellPosition,
   stateHtml,
@@ -362,6 +364,83 @@ describe('readWatcherMessage', () => {
   });
 });
 
+describe('reconcileGraph', () => {
+  function model() {
+    return createWatcherModel({
+      state: runningState(),
+      graph: {
+        neurons: [neuron(), neuron({ id: 'n-2', text: 'old' }), neuron({ id: 'n-gone' })],
+        edges: [
+          { id: 'e-1', from: 'n-00000001', to: 'n-2', rel: 'related', weight: 0.9 },
+          { id: 'e-gone', from: 'n-00000001', to: 'n-gone', rel: 'related', weight: 0.9 },
+        ],
+        rev: 3,
+      },
+    });
+  }
+
+  it('adds missing neurons, updates changed ones, archives removed ones, syncs edges', () => {
+    const m = model();
+    const out = reconcileGraph(
+      m,
+      {
+        neurons: [neuron(), neuron({ id: 'n-2', text: 'new' }), neuron({ id: 'n-new' })],
+        edges: [
+          { id: 'e-1', from: 'n-00000001', to: 'n-2', rel: 'related', weight: 0.5 },
+          { id: 'e-new', from: 'n-new', to: 'n-2', rel: 'related', weight: 0.9 },
+        ],
+        rev: 9,
+        linkStatus: 'ok',
+      },
+      { nowIso: '2026-10-23T10:00:00.000Z' }
+    );
+    expect(out).toEqual({
+      added: ['n-new'],
+      updated: ['n-2'],
+      archived: ['n-gone'],
+      edgesChanged: true,
+    });
+    expect(m.neurons.get('n-2')?.text).toBe('new');
+    expect(m.neurons.get('n-new')).toBeDefined();
+    expect(m.neurons.get('n-gone')?.archivedAt).toBe('2026-10-23T10:00:00.000Z');
+    expect([...m.edges.keys()].sort()).toEqual(['e-1', 'e-new']);
+    expect(m.edges.get('e-1')?.weight).toBe(0.5);
+    expect(m.rev).toBe(9);
+    expect(m.linkStatus).toBe('ok');
+  });
+
+  it('an archived neuron in the snapshot is reported as archived, once', () => {
+    const m = model();
+    const snap = {
+      neurons: [
+        neuron(),
+        neuron({ id: 'n-2', text: 'old', archivedAt: '2026-10-23T09:00:00Z' }),
+        neuron({ id: 'n-gone' }),
+      ],
+      edges: [...m.edges.values()],
+      rev: 4,
+    };
+    expect(reconcileGraph(m, snap).archived).toEqual(['n-2']);
+    expect(reconcileGraph(m, snap)).toEqual({
+      added: [],
+      updated: [],
+      archived: [],
+      edgesChanged: false,
+    });
+  });
+
+  it('a junk snapshot changes nothing', () => {
+    const m = model();
+    expect(reconcileGraph(m, null)).toEqual({
+      added: [],
+      updated: [],
+      archived: [],
+      edgesChanged: false,
+    });
+    expect(m.neurons.size).toBe(3);
+  });
+});
+
 describe('createWatcherModel', () => {
   it('indexes neurons and edges by id and keeps the log newest first', () => {
     const model = createWatcherModel({
@@ -432,6 +511,52 @@ describe('applyWatcherEvent', () => {
     expect(effect).toEqual({ kind: 'pulse', id: 'n-00000001' });
     expect(model.neurons.get('n-00000001')?.activations).toBe(4);
     expect(model.neurons.get('n-00000001')?.lastActivatedAt).toBe('2026-10-23T09:59:00Z');
+  });
+
+  it('moves every known neuron of a layout event and reports which', () => {
+    const model = createWatcherModel({
+      state: runningState(),
+      graph: { neurons: [neuron(), neuron({ id: 'n-2' })], edges: [] },
+    });
+    const effect = applyWatcherEvent(model, {
+      type: 'watcher:layout',
+      ts: 't',
+      data: {
+        positions: {
+          'n-00000001': [0.1, 0.2, 0.3],
+          'n-2': [0, 0, -0.4],
+          'n-ghost': [1, 1, 1],
+          'n-bad': ['x', 0, 0],
+        },
+      },
+    });
+    expect(effect).toEqual({ kind: 'layout', ids: ['n-00000001', 'n-2'] });
+    expect(model.neurons.get('n-00000001')?.pos).toEqual([0.1, 0.2, 0.3]);
+    expect(model.neurons.get('n-2')?.pos).toEqual([0, 0, -0.4]);
+    expect(model.neurons.has('n-ghost')).toBe(false);
+  });
+
+  it('a layout event without positions is ignored', () => {
+    const model = fresh();
+    expect(applyWatcherEvent(model, { type: 'watcher:layout', ts: 't', data: {} })).toEqual({
+      kind: 'none',
+    });
+  });
+
+  it('needsGraphRefetch: an activation or edge naming a neuron the page does not have', () => {
+    const model = fresh();
+    const act = (id: string) => ({ type: 'watcher:activate', ts: 't', data: { id } });
+    expect(needsGraphRefetch(model, act('n-ghost'))).toBe(true);
+    expect(needsGraphRefetch(model, act('n-00000001'))).toBe(false);
+    const edge = (from: string, to: string) => ({
+      type: 'watcher:edge',
+      ts: 't',
+      data: { id: 'e-9', from, to, rel: 'related', weight: 1 },
+    });
+    expect(needsGraphRefetch(model, edge('n-00000001', 'n-ghost'))).toBe(true);
+    expect(needsGraphRefetch(model, edge('n-00000001', 'n-00000001'))).toBe(false);
+    expect(needsGraphRefetch(model, { type: 'watcher:log', ts: 't', data: row() })).toBe(false);
+    expect(needsGraphRefetch(model, null)).toBe(false);
   });
 
   it('ignores an activation of an unknown neuron', () => {

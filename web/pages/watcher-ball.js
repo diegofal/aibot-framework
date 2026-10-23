@@ -29,6 +29,8 @@ const BACKGROUND = 0x05070b;
 const FOV = 45;
 const halfTan = Math.tan((FOV * Math.PI) / 360);
 const SPAWN_SECONDS = 0.9;
+/** How long a neuron glides to its new place after a relayout (`watcher:layout`). */
+const MOVE_SECONDS = 1.2;
 const AUTO_ROTATE_RAD_PER_S = 0.06;
 const AUTO_ROTATE_IDLE_MS = 3000;
 const BRIGHTNESS_REFRESH_MS = 5000;
@@ -210,9 +212,12 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   // the sRGB bytes directly instead of THREE.Color's linearised values.
   const rgb = (hex) => [1, 3, 5].map((o) => Number.parseInt(hex.slice(o, o + 2), 16) / 255);
 
+  // Slots gliding to a new layout position: slot → { from, to, start }.
+  const moving = new Map();
+
   function writeSlot(i, neuron, nowMs) {
-    const p = neuronPosition(neuron);
-    arr.position.set(p, i * 3);
+    // A gliding slot keeps its in-between position; the tick finishes the move.
+    if (!moving.has(i)) arr.position.set(neuronPosition(neuron), i * 3);
     arr.aColor.set(rgb(neuronColour(neuron)), i * 3);
     arr.aSize[i] = neuronRadius(neuron);
     arr.aBright[i] = neuronBrightness(neuron, nowMs);
@@ -247,6 +252,28 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     const neuron = model.neurons.get(id);
     if (i === undefined || !neuron) return;
     writeSlot(i, neuron, Date.now());
+    edgesDirty = true;
+  }
+
+  /** Glide the given neurons from where they are drawn to their model position. */
+  function move(ids) {
+    for (const id of ids ?? []) {
+      const i = slotOf.get(id);
+      const neuron = model.neurons.get(id);
+      if (i === undefined || !neuron) continue;
+      const from = [arr.position[i * 3], arr.position[i * 3 + 1], arr.position[i * 3 + 2]];
+      moving.set(i, { from, to: neuronPosition(neuron), start: time });
+    }
+  }
+
+  function stepMoves() {
+    for (const [i, m] of moving) {
+      const k = Math.min(1, (time - m.start) / MOVE_SECONDS);
+      const e = k * k * (3 - 2 * k);
+      for (let a = 0; a < 3; a++) arr.position[i * 3 + a] = m.from[a] + (m.to[a] - m.from[a]) * e;
+      if (k >= 1) moving.delete(i);
+    }
+    touch('position');
     edgesDirty = true;
   }
 
@@ -459,6 +486,7 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     } else {
       carry = 0;
     }
+    if (moving.size) stepMoves();
     if (!drag && now - lastInput > AUTO_ROTATE_IDLE_MS)
       orbit.theta += (dt / 1000) * AUTO_ROTATE_RAD_PER_S;
     placeCamera();
@@ -510,6 +538,8 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
       edgesDirty = true;
     },
     update,
+    /** Glide moved neurons to their new layout position (a `watcher:layout`). */
+    move,
     archive: update,
     pulse,
     edgesChanged() {
@@ -521,6 +551,7 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     /** Empty the ball (before a replay). */
     clear() {
       queue.length = 0;
+      moving.clear();
       slotOf.clear();
       idAt.length = 0;
       count = 0;
