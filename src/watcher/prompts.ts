@@ -4,6 +4,7 @@
  * prompt can see is decided in one place (`notice.ts`), after tier 0 already
  * reduced non-operator text to topic words.
  */
+import type { Attention } from './self-model';
 import type { Neuron, NeuronKind } from './types';
 
 /** What tier 1 may create. Insights, contradictions and predictions are tier 2's. */
@@ -129,6 +130,8 @@ export interface IntegratePromptInput {
   bots: Array<{ id: string; name: string }>;
   /** Phase 4: the watcher's interoceptive record ("## How I am"); empty or absent = no section. */
   interoception?: Record<string, unknown>;
+  /** Phase 4: what I attend to now ("## What I am attending to"); absent = no section. */
+  attention?: Attention;
 }
 
 const INTEGRATE_SYSTEM = [
@@ -169,7 +172,8 @@ export function buildIntegratePrompt(input: IntegratePromptInput): {
     '  "contradictions": [{ "a": "n-…", "b": "n-…", "text": "what disagrees, one sentence" }],',
     '  "predictions": [{ "text": "a checkable event", "horizonHours": 24, "probability": 0.7, "about": "bot id (optional)", "neuronIds": ["n-…"] }],',
     `  "broadcasts": [{ "bot": "bot id", "kind": "${BROADCAST_KINDS.join(' | ')}", "text": "what the bot (or the operator) is told", "insightIndex": 0 }],`,
-    '  "attending": ["n-… ids of what you are attending to now"]',
+    '  "attending": ["n-… ids of what you are attending to now"],',
+    '  "drivenBy": ["names of the How I am variables that shaped this answer, e.g. operatorSilenceHours; empty if none"]',
     '}',
   ].join('\n');
   const intero = Object.entries(input.interoception ?? {});
@@ -200,6 +204,17 @@ export function buildIntegratePrompt(input: IntegratePromptInput): {
             'How I am',
             intero.map(([k, v]) => `- ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
           ),
+        ]
+      : []),
+    ...(input.attention
+      ? [
+          section('What I am attending to', [
+            `- phase: ${input.attention.phase}`,
+            ...input.attention.focus.map((n) => `- focus: [${n.id}] ${n.kind}: ${n.text}`),
+            ...input.attention.items.map(
+              (i) => `- event: [${i.id}] ${i.what} (salience ${round(i.salience)})`
+            ),
+          ]),
         ]
       : []),
     [

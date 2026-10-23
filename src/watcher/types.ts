@@ -101,6 +101,8 @@ export interface WatcherLogRow {
   tokens?: number;
   costUsd?: number;
   durationMs?: number;
+  /** Phase 4, `integrate:pass` only: the "How I am" variables the model named (known keys only). */
+  drivenBy?: string[];
 }
 
 /** What tier 0 senses: an activity-stream event or a `human_inbound` hook event. */
@@ -131,6 +133,8 @@ export interface WatcherState {
   lastError?: string;
   /** Phase 3: neuron ids the last integrate pass said it attends to (`Integrator.attending`). */
   attending?: string[];
+  /** When the last integrate pass set `attending`. */
+  attendingAt?: string;
 }
 
 export type WatcherEventType =

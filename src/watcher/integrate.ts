@@ -50,6 +50,7 @@ import {
   type IntegratePromptInput,
   buildIntegratePrompt,
 } from './prompts';
+import type { Attention } from './self-model';
 import {
   type BufferItem,
   type Confidence,
@@ -109,6 +110,8 @@ export interface IntegrateOutput {
   predictions: IntegratePredictionOut[];
   broadcasts: IntegrateBroadcastOut[];
   attending: string[];
+  /** Phase 4: which "How I am" variables the model says shaped this pass. */
+  drivenBy: string[];
 }
 
 export type IntegrateOutcome =
@@ -149,6 +152,8 @@ export interface IntegrateDeps {
   embed?: (text: string) => Promise<number[]>;
   /** Phase 4: the interoceptive record for "## How I am"; absent until then. */
   interoception?: () => Record<string, unknown>;
+  /** Phase 4: what the watcher attends to, for "## What I am attending to". */
+  attention?: () => Attention;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -205,6 +210,7 @@ export function parseIntegrateOutput(
           insightIndex: typeof b.insightIndex === 'number' ? b.insightIndex : -1,
         })),
         attending: strList(raw.attending),
+        drivenBy: strList(raw.drivenBy),
       };
     },
   });
@@ -369,7 +375,8 @@ export class Integrator {
     const insights = this.latest('insight', INTEGRATE_LAST_INSIGHTS);
     const predictions = this.latest('prediction', INTEGRATE_LAST_PREDICTIONS);
     const bots = this.deps.bots();
-    const interoception = this.deps.interoception?.();
+    const interoception = this.readSelf(() => this.deps.interoception?.());
+    const attention = this.readSelf(() => this.deps.attention?.());
 
     const input: IntegratePromptInput = {
       events: noticeItems(events, botName),
@@ -383,6 +390,7 @@ export class Integrator {
       predictions: predictions.map(predictionRow),
       bots,
       ...(interoception ? { interoception } : {}),
+      ...(attention ? { attention } : {}),
     };
     const shown = new Map<string, Neuron>();
     for (const n of [...fresh, ...neighbourhood, ...goals, ...insights, ...predictions]) {
@@ -477,6 +485,8 @@ export class Integrator {
     };
     this.persist();
 
+    const shownVariables = new Set(Object.keys(interoception ?? {}));
+    const drivenBy = uniq(out.drivenBy.filter((k) => shownVariables.has(k)));
     const delivered = broadcasts.filter((b) => b.status === 'delivered').length;
     const createdIds = [...createdInsights, ...contradictions, ...preds].map((n) => n.id);
     log.say(
@@ -489,7 +499,11 @@ export class Integrator {
         predictions: preds.length,
         broadcasts: delivered,
       }),
-      { ...cost, ...(createdIds.length ? { neuronIds: createdIds } : {}) }
+      {
+        ...cost,
+        ...(createdIds.length ? { neuronIds: createdIds } : {}),
+        ...(shownVariables.size ? { drivenBy } : {}),
+      }
     );
     return {
       status: 'integrated',
@@ -498,6 +512,16 @@ export class Integrator {
       predictions: preds,
       broadcasts,
     };
+  }
+
+  /** A self-model reader that throws only drops its section. */
+  private readSelf<T>(read: () => T | undefined): T | undefined {
+    try {
+      return read();
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher integrate: a self-model reader failed');
+      return undefined;
+    }
   }
 
   private refused(res: Exclude<WatcherCallResult, { ok: true }>): IntegrateOutcome {

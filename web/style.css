@@ -10148,3 +10148,73 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-signal[aria-pressed="true"] {
   outline: 2px solid var(--accent, currentColor);
 }
+/* Watcher phase 4: How I am, Attending to, Introspection */
+.watcher-self {
+  grid-template-columns: 1fr 1fr 1fr;
+}
+@media (max-width: 1100px) {
+  .watcher-self {
+    grid-template-columns: 1fr;
+  }
+}
+.watcher-self-list,
+.watcher-self-events,
+.watcher-self-history {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.watcher-self-row,
+.watcher-self-answer,
+.watcher-self-event {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.watcher-self-label {
+  min-width: 110px;
+}
+.watcher-self-row.is-warn .watcher-self-value {
+  color: var(--danger);
+}
+.watcher-self-sub {
+  flex-basis: 100%;
+}
+.watcher-self-phase {
+  font-size: var(--fs-sm);
+  margin-top: 6px;
+}
+.watcher-self-actions {
+  margin-top: 6px;
+}
+.watcher-self-score {
+  font-weight: 600;
+  min-width: 70px;
+}
+.watcher-insight.is-focus {
+  border-left: 2px solid var(--accent, currentColor);
+  padding-left: 6px;
+}
+.watcher-fields {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.watcher-field {
+  font-size: var(--fs-xs, 11px);
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.watcher-field.is-match {
+  color: var(--success, #2e7d32);
+  border-color: currentColor;
+}
+.watcher-field.is-miss {
+  color: var(--danger);
+  border-color: currentColor;
+}

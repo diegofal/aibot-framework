@@ -398,3 +398,16 @@ export function narrateBroadcast(input: {
       return `I asked the operator, through ${bot}: ${quoted}.`;
   }
 }
+
+// ── self-model (phase 4) ──
+
+/** The row after the watcher was asked what it is doing (`introspection.ts`). */
+export function narrateIntrospection(input: {
+  trigger: 'manual' | 'sample';
+  score: number;
+  parsed: boolean;
+}): string {
+  const who = input.trigger === 'manual' ? 'The operator asked me' : 'I asked myself';
+  if (!input.parsed) return `${who} what I am doing; my answer could not be read (score 0).`;
+  return `${who} what I am doing; my answer matched ${Math.round(input.score * 100)} % of what I was really doing.`;
+}

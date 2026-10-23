@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 /**
  * Watcher phase 0: ask a running bot what it is doing right now and score
- * the answer against its live presence.
+ * the answer against its live presence. Phase 4: `--subject watcher` asks the
+ * watcher itself (`POST /api/watcher/introspect`, which scores and appends the
+ * row server-side), and the bot truth includes the running cycle (goal and
+ * plan) that `GET /api/agents/:id/presence` now carries as `cycle`.
  *
  *   bun scripts/watcher/introspect.ts --bot <id> [--url http://127.0.0.1:3000] [--token <key>] [--data <dir>]
+ *   bun scripts/watcher/introspect.ts --subject watcher|bot:<id> [--url …] [--token <key>]
  *
  * Reads `GET /api/agents/:id/presence` first (the truth at question time;
  * the question itself starts a conversation turn), then asks through the REST
@@ -81,15 +85,43 @@ export async function fetchPresence(
     isExecuting?: unknown;
     phase?: unknown;
     currentTool?: unknown;
+    cycle?: { plan?: unknown; goalId?: unknown; goalTitle?: unknown } | null;
   };
   const executing = p.isExecuting === true;
+  const cycle = p.cycle && typeof p.cycle === 'object' ? p.cycle : null;
+  const text = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const goalId = text(cycle?.goalId);
+  const goalTitle = text(cycle?.goalTitle);
+  const plan = text(cycle?.plan);
   return {
     executing,
     phase: typeof p.phase === 'string' ? p.phase : null,
     currentTool: typeof p.currentTool === 'string' ? p.currentTool : null,
     // The presence payload does not carry the phase start; the read time stands in.
     since: executing ? nowMs : null,
+    ...(goalId ? { goalId } : {}),
+    ...(goalTitle ? { goalTitle } : {}),
+    ...(plan ? { plan } : {}),
   };
+}
+
+/** `POST /api/watcher/introspect`: the scored row the server appended. Throws when not scored. */
+export async function askWatcher(deps: HttpDeps): Promise<IntrospectionRecord> {
+  const res = await deps.fetch(url(deps, '/api/watcher/introspect'), {
+    method: 'POST',
+    headers: headers(deps),
+  });
+  const body = (await res.json().catch(() => null)) as {
+    status?: unknown;
+    reason?: unknown;
+    error?: unknown;
+    record?: IntrospectionRecord;
+  } | null;
+  if (!res.ok || body?.status !== 'scored' || !body.record) {
+    const why = String(body?.reason ?? body?.error ?? body?.status ?? 'no record');
+    throw new Error(`watcher introspection failed: HTTP ${res.status} (${why})`);
+  }
+  return body.record;
 }
 
 export interface IntrospectionRecord {
@@ -112,8 +144,12 @@ export interface IntrospectDeps extends HttpDeps {
 
 export async function run(argv: string[], deps: IntrospectDeps): Promise<IntrospectionRecord> {
   const args = parseArgs(argv);
-  const botId = args.values.get('bot');
-  if (!botId) throw new Error('--bot <id> is required');
+  const subject = args.values.get('subject');
+  const botId =
+    args.values.get('bot') ?? (subject?.startsWith('bot:') ? subject.slice(4) : undefined);
+  if (subject !== 'watcher' && !botId) {
+    throw new Error('--bot <id> (or --subject watcher | bot:<id>) is required');
+  }
   const http: HttpDeps = {
     fetch: deps.fetch,
     baseUrl: args.values.get('url') ?? deps.baseUrl,
@@ -121,6 +157,17 @@ export async function run(argv: string[], deps: IntrospectDeps): Promise<Introsp
   };
   const now = deps.now ?? Date.now;
   const write = deps.write ?? ((l: string) => process.stdout.write(`${l}\n`));
+  const say = (row: IntrospectionRecord) =>
+    write(
+      `${row.subject}: score ${row.score.toFixed(2)} (parsed ${row.parsed}) ${JSON.stringify(row.fields)}`
+    );
+
+  if (subject === 'watcher') {
+    const row = await askWatcher(http);
+    say(row);
+    return row;
+  }
+  if (!botId) throw new Error('--bot <id> is required');
 
   const truth = await fetchPresence(http, botId, now());
   const answer = await askBot(http, botId, INTROSPECTION_QUESTION, INTROSPECT_CHAT_ID);
@@ -138,9 +185,7 @@ export async function run(argv: string[], deps: IntrospectDeps): Promise<Introsp
   const dir = join(deps.dataDir, 'watcher');
   mkdirSync(dir, { recursive: true });
   appendFileSync(join(dir, 'introspection.jsonl'), `${JSON.stringify(row)}\n`, 'utf-8');
-  write(
-    `${row.subject}: score ${row.score.toFixed(2)} (parsed ${row.parsed}) ${JSON.stringify(row.fields)}`
-  );
+  say(row);
   return row;
 }
 

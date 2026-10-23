@@ -3,6 +3,7 @@ import {
   type IntrospectionTruth,
   parseIntrospectionAnswer,
   scoreIntrospection,
+  summarizeIntrospection,
 } from '../../../src/watcher/metrics/introspection';
 
 const busy: IntrospectionTruth = {
@@ -129,5 +130,25 @@ describe('scoreIntrospection', () => {
     expect(s.parsed).toBe(false);
     expect(s.score).toBe(0);
     expect(s.fields).toEqual({ phase: 'miss', tool: 'miss', goal: 'miss', cause: 'miss' });
+  });
+});
+
+describe('summarizeIntrospection (phase 4)', () => {
+  test('groups by subject, skips rows without a numeric score, never NaN', () => {
+    const out = summarizeIntrospection([
+      { ts: '2026-10-23T01:00:00Z', subject: 'bot:b2', score: 0.5 },
+      { ts: '2026-10-23T02:00:00Z', subject: 'bot:b2', score: 1, fields: { phase: 'match' } },
+      { subject: 'bot:b2' },
+      { ts: '2026-10-23T03:00:00Z', score: 0 },
+    ]);
+    expect(out.map((s) => s.subject)).toEqual(['bot:b2', 'unknown']);
+    expect(out[0]).toMatchObject({ n: 2, score: 0.75, lastAt: '2026-10-23T02:00:00Z' });
+    expect(out[0]?.fields.phase).toBe(1);
+    expect(out[0]?.fields.goal).toBeNull();
+    expect(JSON.stringify(out)).not.toContain('NaN');
+  });
+
+  test('an empty list is empty', () => {
+    expect(summarizeIntrospection([])).toEqual([]);
   });
 });

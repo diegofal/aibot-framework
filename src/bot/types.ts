@@ -110,6 +110,12 @@ export interface BotContext {
    * "## Fleet broadcast" planner block.
    */
   watcherBroadcasts?: WatcherBroadcastSource;
+  /**
+   * The fleet watcher's view of a bot right now (phase 4), set by
+   * `BotManager.setWatcherSelfState`. Absent = no "## Your current state"
+   * block in the planners or the conversation prompt.
+   */
+  watcherSelfState?: WatcherSelfStateSource;
 
   // Helper methods
   getActiveModel(botId: string): string;
@@ -126,4 +132,9 @@ export interface WatcherBroadcastSource {
     botId: string
   ): Array<{ id: string; kind: 'wake' | 'directive' | 'goal' | 'question'; text: string }>;
   markShown(ids: string[], cycleId?: string): void;
+}
+
+/** What the planners and the conversation prompt read of the watcher's self-model (`Watcher.selfStateFor`). */
+export interface WatcherSelfStateSource {
+  selfStateFor(botId: string): import('./agent-loop-prompts').SelfStateInput | undefined;
 }

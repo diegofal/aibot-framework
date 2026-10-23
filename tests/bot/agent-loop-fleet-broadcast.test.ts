@@ -17,7 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentLoop } from '../../src/bot/agent-loop';
-import type { WatcherBroadcastSource } from '../../src/bot/types';
+import type { WatcherBroadcastSource, WatcherSelfStateSource } from '../../src/bot/types';
 import { GlobalAgentLoopConfigSchema } from '../../src/config';
 
 function mockLogger(): any {
@@ -61,7 +61,10 @@ function fakeSource(items: Array<{ id: string; kind: 'wake' | 'directive'; text:
   return { source, shown };
 }
 
-function makeLoop(answer: string, opts: { source?: WatcherBroadcastSource; mode?: string } = {}) {
+function makeLoop(
+  answer: string,
+  opts: { source?: WatcherBroadcastSource; mode?: string; selfState?: WatcherSelfStateSource } = {}
+) {
   const soulLoader = {
     readIdentity: () => 'id',
     readSoul: () => 'soul',
@@ -116,6 +119,7 @@ function makeLoop(answer: string, opts: { source?: WatcherBroadcastSource; mode?
     resolveBotId: (id: string) => id,
     activityStream: { publish: mock(() => {}) },
     ...(opts.source ? { watcherBroadcasts: opts.source } : {}),
+    ...(opts.selfState ? { watcherSelfState: opts.selfState } : {}),
   };
   const loop = new AgentLoop(
     ctx,
@@ -200,5 +204,39 @@ describe('agent loop: fleet broadcasts', () => {
     await loop.runOne('bot1');
     expect(systems.length).toBeGreaterThan(0);
     expect(cycleRows()[0].status).toBeDefined();
+  });
+});
+
+describe('agent loop: your current state (watcher phase 4)', () => {
+  for (const mode of ['periodic', 'continuous']) {
+    test(`${mode}: the planner sees the watcher's view of the bot`, async () => {
+      const asked: string[] = [];
+      const selfState: WatcherSelfStateSource = {
+        selfStateFor: (botId) => {
+          asked.push(botId);
+          return {
+            presence: { executing: true, phase: 'planner', currentTool: null, since: null },
+            fleetFocus: ['Two bots research Acme'],
+          };
+        },
+      };
+      const { loop, systems } = makeLoop(plan(), { selfState, mode });
+      await loop.runOne('bot1');
+      expect(asked).toContain('bot1');
+      expect(systems.some((s) => s.includes('## Your current state'))).toBe(true);
+      expect(systems.some((s) => s.includes('Two bots research Acme'))).toBe(true);
+    });
+  }
+
+  test('a self-state source that throws only drops the section', async () => {
+    const selfState: WatcherSelfStateSource = {
+      selfStateFor: () => {
+        throw new Error('boom');
+      },
+    };
+    const { loop, systems } = makeLoop(plan(), { selfState });
+    await loop.runOne('bot1');
+    expect(systems.some((s) => s.includes('## Your current state'))).toBe(false);
+    expect(cycleRows()).toHaveLength(1);
   });
 });

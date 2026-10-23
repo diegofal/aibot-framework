@@ -40,6 +40,7 @@ import {
   buildFeedbackProcessorPrompt,
   buildFleetBroadcastSection,
   buildPlannerPrompt,
+  buildSelfStateSection,
 } from './agent-loop-prompts';
 import {
   type CycleDispatch,
@@ -548,6 +549,22 @@ export class AgentLoop {
       return buildFleetBroadcastSection(items);
     } catch (err) {
       this.ctx.logger.warn({ err, botId }, 'Fleet broadcast block: could not read broadcasts');
+      return undefined;
+    }
+  }
+
+  /**
+   * "## Your current state" for this bot's planner, from the watcher's
+   * self-model (`deps.watcherSelfState`). Undefined without a watcher; never
+   * throws (a failure drops the block).
+   */
+  private plannerSelfState(botId: string): string | undefined {
+    const source = this.ctx.watcherSelfState;
+    if (!source) return undefined;
+    try {
+      return buildSelfStateSection(source.selfStateFor(botId)) || undefined;
+    } catch (err) {
+      this.ctx.logger.warn({ err, botId }, 'Self-state block: could not read the watcher');
       return undefined;
     }
   }
@@ -2252,6 +2269,7 @@ export class AgentLoop {
     const plannerNowMs = Date.now();
     const standingDue = this.plannerStandingDue(botId, botConfig, goals, plannerNowMs);
     const fleetBroadcast = this.plannerFleetBroadcast(botId);
+    const selfState = this.plannerSelfState(botId);
     let plannerTaskFields: PlannerTaskFields = {};
 
     if (isContinuous) {
@@ -2297,6 +2315,7 @@ export class AgentLoop {
         workers: plannerWorkers,
         standingDue,
         fleetBroadcast,
+        selfState,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });
@@ -2421,6 +2440,7 @@ export class AgentLoop {
         workers: plannerWorkers,
         standingDue,
         fleetBroadcast,
+        selfState,
         nowMs: plannerNowMs,
         curiosityBlock: curiosityCycle?.curiosityBlock,
       });

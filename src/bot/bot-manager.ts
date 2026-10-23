@@ -93,7 +93,7 @@ import { sendLongMessage } from './telegram-utils';
 import { TenantFacade } from './tenant-facade';
 import { ToolAuditLog } from './tool-audit-log';
 import { ToolRegistry } from './tool-registry';
-import type { BotContext, SeenUser, WatcherBroadcastSource } from './types';
+import type { BotContext, SeenUser, WatcherBroadcastSource, WatcherSelfStateSource } from './types';
 import { UserDirectory } from './user-directory';
 
 export class BotManager {
@@ -1650,6 +1650,18 @@ export class BotManager {
   /** The fleet watcher's broadcasts, for the planner's `## Fleet broadcast` block (absent = none). */
   setWatcherBroadcasts(source: WatcherBroadcastSource | undefined): void {
     (this.botContext as { watcherBroadcasts?: WatcherBroadcastSource }).watcherBroadcasts = source;
+  }
+
+  /** The watcher's view of each bot, for "## Your current state" (planners and conversation; absent = none). */
+  setWatcherSelfState(source: WatcherSelfStateSource | undefined): void {
+    (this.botContext as { watcherSelfState?: WatcherSelfStateSource }).watcherSelfState = source;
+  }
+
+  /** The running agent-loop cycle of a bot (`AgentLoop.runningCycle`); undefined between cycles. */
+  getRunningCycle(
+    botId: string
+  ): { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined {
+    return this.agentLoop.runningCycle(botId);
   }
 
   /** The fleet contact directory; the watcher reads people from it at birth. */

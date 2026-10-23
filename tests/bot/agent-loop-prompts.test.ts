@@ -10,6 +10,7 @@ import {
   buildFleetBroadcastSection,
   buildOperatorGoalsSection,
   buildPlannerPrompt,
+  buildSelfStateSection,
   buildStrategistPrompt,
 } from '../../src/bot/agent-loop-prompts';
 import type { StoredTask } from '../../src/goals/task-store';
@@ -521,6 +522,83 @@ describe('Fleet broadcast section (watcher phase 3)', () => {
       const { system } = build(planner);
       expect(system).not.toContain('## Fleet broadcast');
       expect(system).not.toContain('serves_broadcast');
+    }
+  });
+});
+
+describe('Your current state section (watcher phase 4)', () => {
+  const planner = {
+    identity: 'TestBot',
+    soul: 'A bot',
+    motivations: 'Be helpful',
+    goals: '## Goals\n- Goal 1',
+    recentMemory: 'Did stuff',
+    datetime: '2026-03-08T12:00:00Z',
+    availableTools: ['web_search'],
+    hasCreateTool: false,
+  };
+  const now = Date.parse('2026-10-23T10:00:00Z');
+  const state = {
+    presence: {
+      executing: true,
+      phase: 'executor',
+      currentTool: 'web_fetch',
+      since: now - 120_000,
+    },
+    cycle: {
+      cycleId: 'c-1',
+      plan: 'Read the Acme filings',
+      goalId: 'g-aaaaaaaa',
+      goalTitle: 'Map Acme',
+    },
+    fleetFocus: ['Jarvis and Scout both research Acme'],
+  };
+
+  test('renders phase, tool, since, the cycle and the fleet focus', () => {
+    const text = buildSelfStateSection(state, now);
+    expect(text).toContain('## Your current state');
+    expect(text).toContain('executor');
+    expect(text).toContain('web_fetch');
+    expect(text).toContain('2m ago');
+    expect(text).toContain('Map Acme (g-aaaaaaaa)');
+    expect(text).toContain('Read the Acme filings');
+    expect(text).toContain('Jarvis and Scout both research Acme');
+  });
+
+  test('idle with no cycle and no fleet focus still says so', () => {
+    const text = buildSelfStateSection(
+      {
+        presence: { executing: false, phase: null, currentTool: null, since: null },
+        fleetFocus: [],
+      },
+      now
+    );
+    expect(text).toContain('idle between cycles');
+    expect(text).not.toContain('Cycle:');
+    expect(text).not.toContain('The fleet is attending to');
+  });
+
+  test('empty when the watcher is off', () => {
+    expect(buildSelfStateSection(undefined)).toBe('');
+  });
+
+  test('both planner prompts carry it before the fleet broadcast', () => {
+    const selfState = buildSelfStateSection(state, now);
+    const fleetBroadcast = buildFleetBroadcastSection([
+      { id: 'b-11111111', kind: 'directive', text: 'x' },
+    ]);
+    for (const build of [buildPlannerPrompt, buildContinuousPlannerPrompt]) {
+      const { system } = build({ ...planner, selfState, fleetBroadcast });
+      expect(system).toContain('## Your current state');
+      expect(system.indexOf('## Your current state')).toBeLessThan(
+        system.indexOf('## Fleet broadcast')
+      );
+    }
+  });
+
+  test('without the watcher neither prompt has the section', () => {
+    for (const build of [buildPlannerPrompt, buildContinuousPlannerPrompt]) {
+      expect(build(planner).system).not.toContain('## Your current state');
     }
   });
 });

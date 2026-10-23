@@ -36,6 +36,12 @@ import {
   insightRowsHtml,
   metricsStripHtml,
 } from './watcher-metrics-helpers.js';
+import {
+  attendingHtml,
+  focusHighlightIds,
+  howIAmHtml,
+  introspectionHtml,
+} from './watcher-self-helpers.js';
 import { dashboardSocketUrl, openReconnectingSocket } from './ws-reconnect.js';
 
 const CLOCK_MS = 30_000;
@@ -146,6 +152,11 @@ function shell() {
       <div class="watcher-thoughts-col"><div class="watcher-log-title">Insights</div><div id="watcher-insights"></div></div>
       <div class="watcher-thoughts-col"><div class="watcher-log-title">Broadcasts</div><div id="watcher-broadcasts"></div></div>
     </section>
+    <section class="watcher-thoughts watcher-self" aria-label="The watcher's self-model">
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">How I am</div><div id="watcher-how"></div></div>
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">Attending to</div><div id="watcher-attending"></div></div>
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">Introspection</div><div id="watcher-introspection"></div></div>
+    </section>
   </div>`;
 }
 
@@ -164,6 +175,57 @@ function drawBroadcasts() {
   if (host) host.innerHTML = broadcastRowsHtml(page.broadcasts ?? [], Date.now());
 }
 
+function drawSelf() {
+  const self = page.self;
+  const how = $('#watcher-how');
+  if (how) how.innerHTML = howIAmHtml(self?.interoception);
+  const att = $('#watcher-attending');
+  if (att) att.innerHTML = attendingHtml(self?.attention, Date.now());
+  const intro = $('#watcher-introspection');
+  if (intro) {
+    intro.innerHTML = introspectionHtml(self?.introspection, self?.subjects, Date.now(), {
+      busy: page.introspecting,
+    });
+  }
+}
+
+/** With no row selected and no filter, the ball lights what the watcher attends to. */
+function applyFocus() {
+  const ids = focusHighlightIds(page.self?.attention, {
+    selectedSeq: page.selectedSeq,
+    filterId: page.filterId,
+  });
+  if (ids) page.ball?.highlight(ids);
+}
+
+async function refreshSelf() {
+  const mine = page;
+  const self = await api('/api/watcher/self').catch(() => null);
+  if (page !== mine || !page) return;
+  if (self && !self.error) page.self = self;
+  drawSelf();
+  applyFocus();
+}
+
+async function askIntrospection() {
+  if (page.introspecting) return;
+  page.introspecting = true;
+  drawSelf();
+  const res = await api('/api/watcher/introspect', { method: 'POST' }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!page) return;
+  page.introspecting = false;
+  if (!res || res.error || res.status !== 'scored') {
+    showToast(`Could not ask the watcher: ${res?.reason ?? res?.error ?? 'no answer'}`, {
+      tone: 'danger',
+    });
+  } else {
+    showToast(`Introspection score: ${Math.round(Number(res.record?.score ?? 0) * 100)} %`);
+  }
+  await refreshSelf();
+}
+
 async function refreshSlow() {
   const mine = page;
   const [metrics, broadcasts] = await Promise.all([
@@ -175,6 +237,7 @@ async function refreshSlow() {
   if (Array.isArray(broadcasts?.broadcasts)) page.broadcasts = broadcasts.broadcasts;
   drawMetrics();
   drawBroadcasts();
+  await refreshSelf();
 }
 
 async function sendSignal(id, signal) {
@@ -279,6 +342,7 @@ function selectRow(li) {
   if (page.selectedSeq === seq) {
     page.selectedSeq = null;
     page.ball?.highlight(page.filterId ? [page.filterId] : []);
+    applyFocus();
   } else {
     page.selectedSeq = seq;
     page.ball?.highlight(ids);
@@ -290,6 +354,7 @@ function clearFilter() {
   page.filterId = null;
   page.selectedSeq = null;
   page.ball?.highlight([]);
+  applyFocus();
   drawLogHead();
   drawLog();
 }
@@ -450,6 +515,8 @@ function wire(el) {
       }
       case 'watcher-replay-stop':
         return endReplay();
+      case 'watcher-introspect':
+        return askIntrospection();
       default:
         break;
     }
@@ -488,6 +555,7 @@ async function mountTheBall() {
   }
   page.ball = ball;
   ball.place([...page.model.neurons.keys()]);
+  applyFocus();
   drawReplayBar();
 }
 
@@ -511,11 +579,12 @@ export async function renderWatcher(el) {
     return;
   }
 
-  const [graph, log, metrics, broadcasts] = await Promise.all([
+  const [graph, log, metrics, broadcasts, self] = await Promise.all([
     api('/api/watcher/graph').catch(() => null),
     api('/api/watcher/log?limit=200').catch(() => null),
     api('/api/watcher/metrics?window=7d').catch(() => null),
     api('/api/watcher/broadcasts?limit=30').catch(() => null),
+    api('/api/watcher/self').catch(() => null),
   ]);
   if (gen !== generation) return;
   if (isWatcherOff(graph) || isWatcherOff(log)) {
@@ -543,6 +612,8 @@ export async function renderWatcher(el) {
     stopped: false,
     metrics: metrics && !metrics.error ? metrics : null,
     broadcasts: Array.isArray(broadcasts?.broadcasts) ? broadcasts.broadcasts : [],
+    self: self && !self.error ? self : null,
+    introspecting: false,
     slowClock: null,
   };
   el.innerHTML = shell();
@@ -555,6 +626,7 @@ export async function renderWatcher(el) {
   drawMetrics();
   drawInsights();
   drawBroadcasts();
+  drawSelf();
   wire(el);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();

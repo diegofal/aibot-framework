@@ -44,6 +44,7 @@ function makeApp(
     now?: () => number;
     events?: KarmaEvent[];
     pool?: FakePool;
+    runningCycle?: (botId: string) => unknown;
   } = {}
 ) {
   const app = new Hono();
@@ -59,6 +60,7 @@ function makeApp(
       config: fx.config,
       botManager: {
         isRunning: () => opts.running ?? true,
+        ...(opts.runningCycle ? { getRunningCycle: opts.runningCycle as never } : {}),
         getAgentLoopState: () =>
           ({
             botSchedules: [
@@ -223,6 +225,36 @@ describe('GET /api/agents/:id/presence', () => {
     tracker.handle({ type: 'agent:result', botId: 'b1', timestamp: t });
     const after = await (await app.request('/api/agents/b1/presence')).json();
     expect(after.isExecuting).toBe(false);
+  });
+
+  it('carries the running cycle (watcher phase 4), null between cycles or without a reader', async () => {
+    const withCycle = await (
+      await makeApp({
+        runningCycle: (id) =>
+          id === 'b1'
+            ? { cycleId: 'c-1', plan: 'Read filings', goalId: 'g-aaaaaaaa', goalTitle: 'Map Acme' }
+            : undefined,
+      }).request('/api/agents/b1/presence')
+    ).json();
+    expect(withCycle.cycle).toEqual({
+      cycleId: 'c-1',
+      plan: 'Read filings',
+      goalId: 'g-aaaaaaaa',
+      goalTitle: 'Map Acme',
+    });
+    const between = await (
+      await makeApp({ runningCycle: () => undefined }).request('/api/agents/b1/presence')
+    ).json();
+    expect(between.cycle).toBeNull();
+    const broken = await (
+      await makeApp({
+        runningCycle: () => {
+          throw new Error('down');
+        },
+      }).request('/api/agents/b1/presence')
+    ).json();
+    expect(broken.cycle).toBeNull();
+    expect((await (await makeApp().request('/api/agents/b1/presence')).json()).cycle).toBeNull();
   });
 
   it('uses the scheduler flag when no tracker is wired', async () => {

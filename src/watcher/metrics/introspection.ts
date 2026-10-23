@@ -128,3 +128,55 @@ export function scoreIntrospection(
   const matched = known.filter((f) => fields[f] === 'match').length;
   return { parsed: true, score: known.length === 0 ? 0 : matched / known.length, fields };
 }
+
+/** Metric 3 per subject (phase 4): what the page and `GET /api/watcher/self` show. */
+export interface IntrospectionSubjectSummary {
+  subject: string;
+  /** Rows with a numeric score. */
+  n: number;
+  /** Mean score, 0 when n is 0. */
+  score: number;
+  lastAt: string | null;
+  /** Match share per field over the rows where the field was known; null = never known. */
+  fields: Record<keyof IntrospectionAnswer, number | null>;
+}
+
+/** One summary per subject, `watcher` first, then by name. Pure; never NaN. */
+export function summarizeIntrospection(
+  rows: Array<{
+    ts?: string;
+    subject?: string;
+    score?: number;
+    fields?: Partial<Record<keyof IntrospectionAnswer, FieldVerdict>>;
+  }>
+): IntrospectionSubjectSummary[] {
+  const groups = new Map<string, typeof rows>();
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!r || typeof r.score !== 'number' || !Number.isFinite(r.score)) continue;
+    const subject = typeof r.subject === 'string' && r.subject ? r.subject : 'unknown';
+    const list = groups.get(subject) ?? [];
+    list.push(r);
+    groups.set(subject, list);
+  }
+  const out: IntrospectionSubjectSummary[] = [];
+  for (const [subject, list] of groups) {
+    const fields = {} as Record<keyof IntrospectionAnswer, number | null>;
+    for (const f of FIELDS) {
+      const known = list.filter((r) => r.fields?.[f] === 'match' || r.fields?.[f] === 'miss');
+      fields[f] = known.length
+        ? known.filter((r) => r.fields?.[f] === 'match').length / known.length
+        : null;
+    }
+    const stamps = list.map((r) => r.ts).filter((t): t is string => typeof t === 'string');
+    out.push({
+      subject,
+      n: list.length,
+      score: list.reduce((sum, r) => sum + (r.score as number), 0) / list.length,
+      lastAt: stamps.length ? (stamps.sort().at(-1) as string) : null,
+      fields,
+    });
+  }
+  return out.sort((a, b) =>
+    a.subject === 'watcher' ? -1 : b.subject === 'watcher' ? 1 : a.subject.localeCompare(b.subject)
+  );
+}

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Config } from '../../../src/config';
 import { WATCHER_DEFAULTS } from '../../../src/watcher/types';
-import { Watcher } from '../../../src/watcher/watcher';
+import { Watcher, type WatcherDeps } from '../../../src/watcher/watcher';
 import { watcherRoutes } from '../../../src/web/routes/watcher';
 import { WhySchema } from '../../../src/why/types';
 
@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-function setup(enabled = true) {
+function setup(enabled = true, extra: Partial<WatcherDeps> = {}) {
   const soulDir = join(root, 'souls', 'b1');
   mkdirSync(soulDir, { recursive: true });
   writeFileSync(join(soulDir, 'IDENTITY.md'), 'name: Jarvis\n');
@@ -52,6 +52,7 @@ function setup(enabled = true) {
           getUserDirectory: () => ({ list: () => [], findByChannel: () => undefined }) as never,
         },
         now: () => t,
+        ...extra,
       })
     : undefined;
   return { config, watcher };
@@ -337,5 +338,77 @@ describe('watcher routes (phase 3)', () => {
     expect((await postJson(a, '/api/watcher/neurons/b-nope/signal', { signal: 'up' })).status).toBe(
       404
     );
+  });
+});
+
+describe('watcher routes (phase 4)', () => {
+  const noticeLlm = (text: string) => ({
+    notice: {
+      client: {
+        backend: 'claude-cli',
+        generate: async () => ({ text: '' }),
+        chat: async () => ({ text, usage: { model: 'claude-haiku-5-5', totalTokens: 90 } }),
+      } as never,
+      model: 'claude-haiku-5-5',
+      backend: 'claude-cli' as const,
+    },
+  });
+  const reply = JSON.stringify({ phase: 'sense', tool: null, goal: null, cause: null });
+
+  it('POST /introspect asks the watcher, scores and appends the row', async () => {
+    const { config, watcher } = setup(true, { llm: noticeLlm(reply) });
+    await watcher?.start();
+    await watcher?.idle();
+    const a = app(config, watcher);
+    const res = await post(a, '/api/watcher/introspect');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('scored');
+    expect(body.record).toMatchObject({ subject: 'watcher', trigger: 'manual', parsed: true });
+    const self = await (await a.request('/api/watcher/self')).json();
+    expect(self.introspection).toHaveLength(1);
+    await watcher?.stop();
+  });
+
+  it('POST /introspect is 409 when the watcher cannot be asked', async () => {
+    const { config, watcher } = setup();
+    const res = await post(app(config, watcher), '/api/watcher/introspect');
+    expect(res.status).toBe(409);
+    expect((await res.json()).status).toBe('unavailable');
+  });
+
+  it('POST /introspect is 429 when the budget refuses', async () => {
+    const { config, watcher } = setup(true, { llm: noticeLlm(reply) });
+    (config.watcher as { notice: { maxPerDay: number } }).notice.maxPerDay = 0;
+    await watcher?.start();
+    await watcher?.idle();
+    const res = await post(app(config, watcher), '/api/watcher/introspect');
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({ status: 'refused', reason: 'cap' });
+    await watcher?.stop();
+  });
+
+  it('GET /self answers interoception, attention and the introspection history', async () => {
+    const { config, watcher } = setup();
+    await watcher?.start();
+    await watcher?.idle();
+    const body = await (await app(config, watcher).request('/api/watcher/self')).json();
+    expect(body.interoception).toMatchObject({
+      breakerOpen: [],
+      budgetUsedToday: { notice: 0, integrate: 0, tokens: 0, usd: 0 },
+    });
+    expect(body.attention).toMatchObject({ phase: 'sense', focusNeuronIds: [] });
+    expect(body.introspection).toEqual([]);
+    expect(body.subjects).toEqual([]);
+    await watcher?.stop();
+  });
+
+  it('GET /self and POST /introspect are 404 when off and for tenants', async () => {
+    const off = setup(false);
+    expect((await app(off.config, undefined).request('/api/watcher/self')).status).toBe(404);
+    expect((await post(app(off.config, undefined), '/api/watcher/introspect')).status).toBe(404);
+    const { config, watcher } = setup();
+    expect((await app(config, watcher, 't1').request('/api/watcher/self')).status).toBe(404);
+    expect((await post(app(config, watcher, 't1'), '/api/watcher/introspect')).status).toBe(404);
   });
 });

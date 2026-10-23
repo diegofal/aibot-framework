@@ -148,3 +148,24 @@ describe('BotManager.setWatcherBroadcasts (phase 3)', () => {
     await m.stopAll();
   });
 });
+
+describe('BotManager self-state hooks (phase 4)', () => {
+  test('setWatcherSelfState publishes the source on the shared context', async () => {
+    const m = await manager();
+    const source = { selfStateFor: () => undefined };
+    m.setWatcherSelfState(source);
+    expect((m as any).botContext.watcherSelfState).toBe(source);
+    m.setWatcherSelfState(undefined);
+    expect((m as any).botContext.watcherSelfState).toBeUndefined();
+    await m.stopAll();
+  });
+
+  test('getRunningCycle reads the agent loop, undefined between cycles', async () => {
+    const m = await manager();
+    expect(m.getRunningCycle('nobody')).toBeUndefined();
+    (m as any).agentLoop.runningCycle = (id: string) =>
+      id === 'b1' ? { cycleId: 'c-1', plan: 'p' } : undefined;
+    expect(m.getRunningCycle('b1')).toEqual({ cycleId: 'c-1', plan: 'p' });
+    await m.stopAll();
+  });
+});

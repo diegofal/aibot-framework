@@ -103,6 +103,39 @@ describe('buildIntegratePrompt', () => {
     expect(user).toContain('## How I am\n- fleetKarmaAvg: 61');
   });
 
+  test('"What I am attending to" shows the phase, the focus and the top items', () => {
+    expect(buildIntegratePrompt(input()).user).not.toContain('## What I am attending to');
+    const { user } = buildIntegratePrompt(
+      input({
+        attention: {
+          phase: 'integrate',
+          items: [
+            {
+              id: 'b-11111111',
+              botId: 'b1',
+              what: 'web_fetch failed in Jarvis',
+              salience: 0.8,
+              reasons: [],
+              touched: [],
+            },
+          ],
+          focusNeuronIds: ['n-ins00001'],
+          focus: [
+            { id: 'n-ins00001', kind: 'insight', text: 'Two bots chase the same publishers' },
+          ],
+        },
+      })
+    );
+    expect(user).toContain('## What I am attending to\n- phase: integrate');
+    expect(user).toContain('- focus: [n-ins00001] insight: Two bots chase the same publishers');
+    expect(user).toContain('- event: [b-11111111] web_fetch failed in Jarvis (salience 0.8)');
+    expect(user.indexOf('## What I am attending to')).toBeLessThan(user.indexOf('## Answer'));
+  });
+
+  test('the contract asks for drivenBy', () => {
+    expect(buildIntegratePrompt(input()).user).toContain('"drivenBy"');
+  });
+
   test('operator events are marked', () => {
     const { user } = buildIntegratePrompt(
       input({

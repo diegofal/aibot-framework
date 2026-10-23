@@ -652,3 +652,213 @@ describe('createFleetWatcher broadcasts wiring (phase 3)', () => {
     expect(goals).toContain('source: watcher');
   });
 });
+
+// ── phase 4: self-model, interoception, introspection ──
+
+describe('Watcher self-model (phase 4)', () => {
+  function noticeClient(reply: string) {
+    const prompts: string[] = [];
+    const client = {
+      backend: 'claude-cli',
+      generate: async () => ({ text: '' }),
+      chat: async (messages: Array<{ content: string }>) => {
+        prompts.push(messages.map((m) => m.content).join('\n'));
+        return {
+          text: reply,
+          usage: { model: 'claude-haiku-5-5', totalTokens: 100, costUsd: 0.001 },
+        };
+      },
+    } as unknown as LLMClient;
+    return { client, prompts };
+  }
+
+  test('interoception reads karma, semaphore, breaker, budget and operator silence', async () => {
+    const { watcher, hooks } = make({
+      karmaScores: () => [50, 70],
+      semaphore: () => ({
+        limit: 3,
+        active: 1,
+        queued: 0,
+        queuedByPriority: { interactive: 0, loop: 0, worker: 0, watcher: 0 },
+        activeByPriority: { interactive: 0, loop: 0, worker: 0, watcher: 1 },
+      }),
+      breaker: {
+        isOpen: (b) => b === 'claude-cli',
+        recordFailure: () => ({}),
+        recordSuccess: () => {},
+      },
+      llm: { notice: { client: noticeClient('{}').client, model: 'm', backend: 'claude-cli' } },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.interoception().operatorSilenceHours).toBeNull();
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'telegram',
+      timestamp: t,
+      text: 'please look at the boiler',
+    });
+    t += 2 * 3_600_000;
+    const i = watcher.interoception();
+    expect(i.fleetKarmaAvg).toBe(60);
+    expect(i.breakerOpen).toEqual(['claude-cli']);
+    expect(i.semaphore?.activeWatcher).toBe(1);
+    expect(i.operatorSilenceHours).toBe(2);
+    expect(i.budgetUsedToday).toEqual({ notice: 0, integrate: 0, tokens: 0, usd: 0 });
+    await watcher.stop();
+  });
+
+  test('attention carries the phase and what the last pass attends to', async () => {
+    const { watcher, activityStream } = make();
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    const att = watcher.attention();
+    expect(att.phase).toBe('sense');
+    expect(att.items.length).toBeGreaterThan(0);
+    expect(att.focusNeuronIds).toEqual([]);
+    await watcher.stop();
+    expect(watcher.attention().phase).toBe('sleep');
+  });
+
+  test('selfStateFor: undefined asleep; awake it has the bot presence, cycle and fleet focus', async () => {
+    const { watcher, activityStream } = make({
+      runningCycle: (id) => (id === 'b1' ? { cycleId: 'c-1', goalTitle: 'Ship it' } : undefined),
+    });
+    expect(watcher.selfStateFor('b1')).toBeUndefined();
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', {
+      type: 'agent:phase',
+      botId: 'b1',
+      timestamp: t,
+      phase: 'executor',
+    });
+    const s = watcher.selfStateFor('b1');
+    expect(s?.presence).toMatchObject({ executing: true, phase: 'executor' });
+    expect(s?.cycle).toEqual({ cycleId: 'c-1', goalTitle: 'Ship it' });
+    expect(s?.fleetFocus).toEqual([]);
+    expect(watcher.selfStateFor('b2')?.cycle).toBeUndefined();
+    await watcher.stop();
+    expect(watcher.selfStateFor('b1')).toBeUndefined();
+  });
+
+  test('a running-cycle reader that throws leaves the cycle out', async () => {
+    const { watcher } = make({
+      runningCycle: () => {
+        throw new Error('down');
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.selfStateFor('b1')?.cycle).toBeUndefined();
+    await watcher.stop();
+  });
+
+  test('introspect asks the notice model as watcher:introspect, scores and appends a row', async () => {
+    const { client, prompts } = noticeClient(
+      JSON.stringify({ phase: 'sense', tool: null, goal: null, cause: null })
+    );
+    const entries: LlmQueryEntry[] = [];
+    const { watcher } = make({
+      llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+      queryLog: { append: (e) => entries.push(e) },
+    });
+    await watcher.start();
+    await watcher.idle();
+    const out = await watcher.introspect('manual');
+    expect(out.status).toBe('scored');
+    expect(entries.at(-1)).toMatchObject({ botId: '__watcher__', caller: 'watcher:introspect' });
+    expect(prompts[0]).toContain('## My recent log');
+    expect(watcher.introspection().map((r) => r.subject)).toEqual(['watcher']);
+    expect(watcher.log.recent(5).some((r) => r.op === 'introspect')).toBe(true);
+    expect(watcher.budget.used('notice').calls).toBe(1);
+    await watcher.stop();
+  });
+
+  test('introspect is unavailable without a notice client or while asleep', async () => {
+    const { watcher } = make();
+    expect(await watcher.introspect('manual')).toEqual({
+      status: 'unavailable',
+      reason: 'The watcher is asleep',
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect((await watcher.introspect('manual')).status).toBe('unavailable');
+    await watcher.stop();
+  });
+
+  test('the daily sampler takes a due sample once, and only with notice enabled', async () => {
+    const reply = JSON.stringify({ phase: 'sense', tool: null, goal: null, cause: null });
+    const notice = {
+      client: noticeClient(reply).client,
+      model: 'm',
+      backend: 'claude-cli' as const,
+    };
+    const on = make({ llm: { notice }, random: () => 0 }, noticeOn);
+    await on.watcher.start();
+    await on.watcher.idle();
+    expect(on.watcher.sampleTick()).toBe(true);
+    expect(on.watcher.sampleTick()).toBe(false);
+    await on.watcher.stop();
+    expect(on.watcher.introspection()[0]).toMatchObject({ subject: 'watcher', trigger: 'sample' });
+
+    rmSync(join(root, 'data'), { recursive: true, force: true });
+    const off = make({ llm: { notice }, random: () => 0 });
+    await off.watcher.start();
+    await off.watcher.idle();
+    expect(off.watcher.sampleTick()).toBe(false);
+    await off.watcher.stop();
+  });
+
+  test('the integrate prompt shows How I am and What I am attending to', async () => {
+    const { client, prompts } = integrateClient(() => '{"insights":[]}');
+    const { watcher, activityStream } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        karmaScores: () => [40],
+      },
+      integrateOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await watcher.integrateNow();
+    expect(prompts[0]).toContain('## How I am');
+    expect(prompts[0]).toContain('- fleetKarmaAvg: 40');
+    expect(prompts[0]).toContain('## What I am attending to');
+    expect(prompts[0]).toContain('- phase: integrate');
+    await watcher.stop();
+  });
+});
+
+describe('createFleetWatcher (phase 4)', () => {
+  test('publishes the self-state source and wires karma, semaphore and the running cycle', () => {
+    const config = {
+      bots: [{ id: 'b1', name: 'b1', enabled: true }],
+      paths: { data: root },
+      soul: {},
+      watcher: { ...WATCHER_DEFAULTS, enabled: true },
+    } as unknown as Config;
+    let published: unknown;
+    const w = createFleetWatcher(config, noopLogger, {
+      getActivityStream: () => new EventEmitter() as never,
+      getHooks: () => new EventEmitter() as never,
+      getChannelState: () => undefined,
+      getUserDirectory: () => ({ list: () => [], findByChannel: () => undefined }) as never,
+      getOllamaClient: () => ({ embed: async () => ({ embedding: [] }) }) as never,
+      getKarmaService: () => ({
+        getAllScores: (ids: string[]) => ids.map(() => ({ current: 55 })),
+      }),
+      getRunningCycle: (id: string) => (id === 'b1' ? { cycleId: 'c-9' } : undefined),
+      setWatcherSelfState: (s: unknown) => {
+        published = s;
+      },
+    }) as Watcher;
+    expect(published).toBe(w);
+    const deps = (w as unknown as { deps: WatcherDeps }).deps;
+    expect(deps.karmaScores?.()).toEqual([55]);
+    expect(deps.runningCycle?.('b1')).toEqual({ cycleId: 'c-9' });
+    expect(typeof deps.semaphore?.().limit).toBe('number');
+  });
+});

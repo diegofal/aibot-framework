@@ -175,6 +175,30 @@ describe('metric 3: introspection', () => {
     expect(m.value).toBeCloseTo(0.5, 10);
     expect(m.detail).toMatchObject({ watcher: 0.75, 'bot:b1': 0 });
   });
+
+  test('phase 4: one summary per subject, watcher first, field match shares', () => {
+    const r = rec({
+      introspection: [
+        {
+          ts: iso(NOW - H),
+          subject: 'bot:b1',
+          score: 0,
+          fields: { phase: 'miss', tool: 'match', goal: 'unknown', cause: 'unknown' },
+        },
+        {
+          ts: iso(NOW - 2 * H),
+          subject: 'watcher',
+          score: 1,
+          fields: { phase: 'match', tool: 'match', goal: 'match', cause: 'unknown' },
+        },
+        { ts: iso(NOW - 20 * D), subject: 'watcher', score: 0 },
+      ],
+    });
+    const m = metric(r, 'introspection');
+    expect(m.subjects?.map((x) => x.subject)).toEqual(['watcher', 'bot:b1']);
+    expect(m.subjects?.[0]).toMatchObject({ n: 1, score: 1, lastAt: iso(NOW - 2 * H) });
+    expect(m.subjects?.[1]?.fields).toEqual({ phase: 0, tool: 1, goal: null, cause: null });
+  });
 });
 
 describe('metric 4: calibration', () => {

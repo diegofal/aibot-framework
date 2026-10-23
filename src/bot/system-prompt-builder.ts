@@ -7,6 +7,7 @@ import { type MemoryViewer, memoryScope } from '../memory/viewer';
 import { renderSpeakerSection } from '../relay/prompt';
 import type { RelayParty } from '../relay/types';
 import type { CustomizationService } from '../tenant/customization';
+import { buildSelfStateSection } from './agent-loop-prompts';
 import { ENVELOPE_PROMPT_NOTE } from './message-envelope';
 import { type PermissionMode, buildSensitiveActionProtocol } from './tool-permissions';
 import type { ToolRegistry } from './tool-registry';
@@ -161,6 +162,17 @@ export class SystemPromptBuilder {
 
     if (mode === 'conversation' && options.relayContext) {
       prompt += `\n\n${options.relayContext}`;
+    }
+
+    // What the fleet watcher observes about this bot now (only with the watcher on).
+    if (mode === 'conversation' && this.ctx.watcherSelfState) {
+      let selfState = '';
+      try {
+        selfState = buildSelfStateSection(this.ctx.watcherSelfState.selfStateFor(botId));
+      } catch {
+        selfState = '';
+      }
+      if (selfState) prompt += `\n\n${selfState}`;
     }
 
     // Memory search reinforcement (always when memory tools exist)

@@ -48,6 +48,7 @@ interface Setup {
   maxTokensPerDay?: number;
   open?: boolean;
   cfg?: Partial<WatcherConfig['integrate']>;
+  deps?: Record<string, unknown>;
 }
 
 function setup(opts: Setup = {}) {
@@ -157,6 +158,7 @@ function setup(opts: Setup = {}) {
       botName: (id) => (id === 'b1' ? 'Jarvis' : id === 'b2' ? 'Scout' : id),
       broadcaster,
       logger: quiet,
+      ...(opts.deps ?? {}),
     });
   return {
     graph,
@@ -216,6 +218,15 @@ describe('parseIntegrateOutput', () => {
     expect(out?.attending).toEqual(['n-1']);
   });
 
+  test('reads drivenBy as a list of strings, empty when absent', () => {
+    const out = parseIntegrateOutput(
+      JSON.stringify({ insights: [], drivenBy: ['operatorSilenceHours', 7] }),
+      quiet
+    );
+    expect(out?.drivenBy).toEqual(['operatorSilenceHours']);
+    expect(parseIntegrateOutput('{"insights":[]}', quiet)?.drivenBy).toEqual([]);
+  });
+
   test('null when it is not the integrate JSON', () => {
     expect(parseIntegrateOutput('hello', quiet)).toBeNull();
   });
@@ -227,6 +238,7 @@ describe('parseIntegrateOutput', () => {
       predictions: [],
       broadcasts: [],
       attending: [],
+      drivenBy: [],
     });
   });
 });
@@ -361,6 +373,39 @@ describe('Integrator.run', () => {
     expect(s.rows.filter((r) => r.op === 'integrate:insight')).toHaveLength(1);
     expect(s.entries).toHaveLength(1);
     expect(s.entries[0]).toMatchObject({ botId: '__watcher__', caller: 'watcher:integrate' });
+  });
+
+  test('phase 4: the prompt shows how I am and what I attend to; drivenBy lands on the pass row', async () => {
+    const s = setup({
+      reply: answer(() => ({
+        insights: [],
+        drivenBy: ['operatorSilenceHours', 'not-a-variable', 'bufferSalience'],
+      })),
+      deps: {
+        interoception: () => ({ operatorSilenceHours: 30, bufferSalience: 1.5 }),
+        attention: () => ({
+          phase: 'integrate',
+          items: [],
+          focusNeuronIds: [],
+          focus: [{ id: 'n-x', kind: 'insight', text: 'Two bots, one lead' }],
+        }),
+      },
+    });
+    await ran(s);
+    expect(s.prompts[0]).toContain('## How I am');
+    expect(s.prompts[0]).toContain('## What I am attending to');
+    expect(s.prompts[0]).toContain('Two bots, one lead');
+    const pass = s.rows.find((r) => r.op === 'integrate:pass');
+    expect(pass?.drivenBy).toEqual(['operatorSilenceHours', 'bufferSalience']);
+  });
+
+  test('phase 4: without an interoception record drivenBy is not written', async () => {
+    const s = setup({
+      reply: answer(() => ({ insights: [], drivenBy: ['operatorSilenceHours'] })),
+    });
+    await ran(s);
+    const pass = s.rows.find((r) => r.op === 'integrate:pass');
+    expect(pass).not.toHaveProperty('drivenBy');
   });
 
   test('the prompt shows events, fresh neurons, neighbourhood, goals and bots', async () => {

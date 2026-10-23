@@ -98,6 +98,22 @@ describe('fetchPresence', () => {
   test('a 404 throws', async () => {
     await expect(fetchPresence({ fetch: fakeFetch({}) }, 'a', NOW)).rejects.toThrow('404');
   });
+
+  test('phase 4: the running cycle becomes the goal and the cause of the truth', async () => {
+    const f = fakeFetch({
+      '/api/agents/a/presence': {
+        body: {
+          ...presence,
+          cycle: { cycleId: 'c-1', plan: 'Read the filings', goalId: 'g-1', goalTitle: 'Map Acme' },
+        },
+      },
+    });
+    expect(await fetchPresence({ fetch: f }, 'a', NOW)).toMatchObject({
+      goalId: 'g-1',
+      goalTitle: 'Map Acme',
+      plan: 'Read the filings',
+    });
+  });
 });
 
 describe('scripts/watcher/introspect run', () => {
@@ -146,6 +162,51 @@ describe('scripts/watcher/introspect run', () => {
   test('missing --bot throws before any request', async () => {
     await expect(run([], { fetch: fakeFetch({}), dataDir: root })).rejects.toThrow('--bot');
     expect(calls).toHaveLength(0);
+  });
+
+  test('phase 4: --subject watcher asks the watcher route and prints its row', async () => {
+    const record = {
+      ts: '2026-10-23T12:00:00.000Z',
+      subject: 'watcher',
+      score: 0.75,
+      parsed: true,
+      fields: { phase: 'match', tool: 'match', goal: 'match', cause: 'miss' },
+    };
+    const f = fakeFetch({ '/api/watcher/introspect': { body: { status: 'scored', record } } });
+    const out: string[] = [];
+    const row = await run(['--subject', 'watcher', '--url', 'http://h:1', '--token', 'tok'], {
+      fetch: f,
+      dataDir: root,
+      write: (l) => out.push(l),
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ method: 'POST', url: 'http://h:1/api/watcher/introspect' });
+    expect(calls[0].headers.Authorization).toBe('Bearer tok');
+    expect(row).toMatchObject({ subject: 'watcher', score: 0.75 });
+    expect(out.join('\n')).toContain('watcher: score 0.75');
+    // the server appends the row; the script does not write a second one
+    expect(existsSync(join(root, 'watcher', 'introspection.jsonl'))).toBe(false);
+  });
+
+  test('phase 4: a watcher that cannot be asked throws with the reason', async () => {
+    const f = fakeFetch({
+      '/api/watcher/introspect': {
+        status: 409,
+        body: { status: 'unavailable', reason: 'The watcher is asleep' },
+      },
+    });
+    await expect(run(['--subject', 'watcher'], { fetch: f, dataDir: root })).rejects.toThrow(
+      'asleep'
+    );
+  });
+
+  test('phase 4: --subject bot:<id> is the same as --bot', async () => {
+    const f = fakeFetch({
+      '/api/agents/a/presence': { body: presence },
+      '/api/v1/chat/a': { body: { reply: '{"phase":"executor","tool":"web_fetch"}' } },
+    });
+    const row = await run(['--subject', 'bot:a'], { fetch: f, dataDir: root, now: () => NOW });
+    expect(row.subject).toBe('bot:a');
   });
 
   test('a failed chat call appends nothing', async () => {

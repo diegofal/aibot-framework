@@ -14,6 +14,11 @@ import type { TierUsage } from '../budget';
 import { servedFromCycles } from '../outcomes';
 import type { Neuron } from '../types';
 import { idleCycleShare, medianCycleIntervalMs } from './baseline';
+import {
+  type FieldVerdict,
+  type IntrospectionSubjectSummary,
+  summarizeIntrospection,
+} from './introspection';
 
 export type MetricsWindow = '7d' | '30d';
 
@@ -60,7 +65,12 @@ export interface MetricsRecords {
   /** `canaries.jsonl` rows (phase 0 script): plants and checks. */
   canaries: Array<{ kind?: string; checkedAt?: string; plantedAt?: string; found?: boolean }>;
   /** `introspection.jsonl` rows (phase 0 script). */
-  introspection: Array<{ ts?: string; subject?: string; score?: number }>;
+  introspection: Array<{
+    ts?: string;
+    subject?: string;
+    score?: number;
+    fields?: Partial<Record<'phase' | 'tool' | 'goal' | 'cause', FieldVerdict>>;
+  }>;
   /** Every bot's KNOWLEDGE.json surprises (text). */
   knowledgeSurprises: string[];
   /** Fleet idle share from the latest phase 0 baseline report, when there is one. */
@@ -81,6 +91,8 @@ export interface WatcherMetric {
   /** Records the value stands on; 0 = the value is the baseline. */
   n: number;
   detail?: Record<string, number>;
+  /** Metric 3 only (phase 4): one summary per subject in the window. */
+  subjects?: IntrospectionSubjectSummary[];
 }
 
 export interface WatcherGuard {
@@ -250,6 +262,7 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
     unit: 'score',
     n: intro.length,
     detail: bySubject,
+    subjects: summarizeIntrospection(intro),
   });
 
   // 4. Calibration (Brier over predictions resolved in the window)

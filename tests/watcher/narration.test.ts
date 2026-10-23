@@ -6,6 +6,7 @@ import {
   narrateBorn,
   narrateGoals,
   narrateHistory,
+  narrateIntrospection,
   narrateLearned,
   narrateLinking,
   narrateMetBot,
@@ -356,6 +357,17 @@ describe('notice narration (phase 2)', () => {
   test('narrateNoticePaused', () => {
     expect(narrateNoticePaused({ backend: 'claude-cli' })).toBe(
       'Claude CLI is rate-limited across the fleet (circuit open). Noticing is paused until it recovers.'
+    );
+  });
+});
+
+describe('narrateIntrospection (phase 4)', () => {
+  test('says who asked and the score, in code-written words', () => {
+    expect(narrateIntrospection({ trigger: 'manual', score: 0.75, parsed: true })).toBe(
+      'The operator asked me what I am doing; my answer matched 75 % of what I was really doing.'
+    );
+    expect(narrateIntrospection({ trigger: 'sample', score: 0, parsed: false })).toBe(
+      'I asked myself what I am doing; my answer could not be read (score 0).'
     );
   });
 });

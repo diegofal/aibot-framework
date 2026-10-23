@@ -12,13 +12,15 @@
 import { EventEmitter } from 'node:events';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { SelfStateInput } from '../bot/agent-loop-prompts';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import type { ChannelStatus } from '../bot/telegram-errors';
-import type { WatcherBroadcastSource } from '../bot/types';
+import type { WatcherBroadcastSource, WatcherSelfStateSource } from '../bot/types';
 import type { UserDirectory } from '../bot/user-directory';
 import type { ChannelKind } from '../channel/types';
 import type { Config } from '../config';
+import { type CliSemaphoreStats, getClaudeCliStats } from '../core/cli-semaphore';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
@@ -44,6 +46,15 @@ import { WorkingBuffer } from './buffer';
 import { Graph, type GraphChange } from './graph';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
+  INTROSPECTION_LOG_ROWS,
+  type IntrospectionOutcome,
+  type IntrospectionRow,
+  IntrospectionSampler,
+  type IntrospectionTrigger,
+  readIntrospection,
+  runIntrospection,
+} from './introspection';
+import {
   type InstrumentOptions,
   type InstrumentedClient,
   type WatcherTierClient,
@@ -51,10 +62,19 @@ import {
   instrumented,
 } from './llm';
 import { WatcherLog } from './log';
-import { narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
+import { narrateIntrospection, narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
 import { type NoticeOutcome, Noticer } from './notice';
 import { applyServed, duePredictions, resolvePredictions } from './outcomes';
 import { bufferFile, watcherDir, watcherLogDir } from './paths';
+import { WatcherPresence } from './presence';
+import {
+  type Attention,
+  type Interoception,
+  attention,
+  fleetFocusTexts,
+  interoception,
+  lastOperatorMs,
+} from './self-model';
 import { type SenderInfo, Sense, inboundSender } from './sense';
 import {
   type BirthRecord,
@@ -77,6 +97,8 @@ export const NOTICE_CHECK_MS = 30_000;
 export const INTEGRATE_CHECK_MS = 60_000;
 /** Outcomes (served broadcasts, due predictions) are checked at most this often. */
 export const OUTCOMES_EVERY_MS = 10 * 60_000;
+/** How often the introspection sampler asks whether a sample is due. */
+export const INTROSPECT_CHECK_MS = 60_000;
 /** Neuron kinds the operator can 👍/👎 (contradictions: confirm or dismiss). */
 export const SIGNAL_KINDS: readonly NeuronKind[] = ['insight', 'contradiction', 'prediction'];
 
@@ -118,11 +140,25 @@ export interface WatcherDeps {
   breaker?: WatcherBreaker;
   /** Phase 3: the entry points broadcasts use (wake, directive, goal, question). */
   broadcastDelivery?: BroadcastDelivery;
-  /** Phase 4: the interoceptive record the integrate prompt shows as "## How I am". */
+  /**
+   * Phase 4: overrides the interoceptive record the integrate prompt shows as
+   * "## How I am". Without it the watcher composes its own (`interoception()`)
+   * from its budget, buffer and integrator plus the readers below.
+   */
   interoception?: () => Record<string, unknown>;
+  /** Phase 4: current karma of every enabled bot (fleet karma for "How I am"). */
+  karmaScores?: () => number[];
+  /** Phase 4: the Claude CLI semaphore (`getClaudeCliStats`). */
+  semaphore?: () => CliSemaphoreStats;
+  /** Phase 4: the running agent-loop cycle of a bot (`AgentLoop.runningCycle`). */
+  runningCycle?: (
+    botId: string
+  ) => { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined;
+  /** Phase 4: randomness of the daily introspection sampler (tests). */
+  random?: () => number;
 }
 
-export class Watcher extends EventEmitter {
+export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   readonly graph: Graph;
   readonly log: WatcherLog;
   readonly buffer = new WorkingBuffer();
@@ -148,6 +184,12 @@ export class Watcher extends EventEmitter {
   private integrateRun: Promise<IntegrateOutcome | null> | null = null;
   private outcomesRun: Promise<void> | null = null;
   private lastOutcomesAt = 0;
+  /** Phase 4: what every bot is doing now, from the activity stream (attached while awake). */
+  readonly presence = new WatcherPresence();
+  private lastOperatorAt: number | null = null;
+  private readonly sampler: IntrospectionSampler;
+  private introspectTimer: ReturnType<typeof setInterval> | null = null;
+  private introspectRun: Promise<IntrospectionOutcome> | null = null;
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -176,7 +218,10 @@ export class Watcher extends EventEmitter {
       now: this.now,
       botName: (id) => this.botName(id),
       sender: (e) => this.sender(e),
-      onItem: (item) => this.integrator?.observe(item),
+      onItem: (item) => {
+        if (item.fromOperator) this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
+        this.integrator?.observe(item);
+      },
       logger: this.logger,
     });
     this.budget = new DailyBudget({
@@ -232,19 +277,29 @@ export class Watcher extends EventEmitter {
         botName: (id) => this.botName(id),
         broadcaster: this.broadcaster,
         ...(deps.embed ? { embed: deps.embed } : {}),
-        ...(deps.interoception ? { interoception: deps.interoception } : {}),
+        interoception:
+          deps.interoception ?? (() => this.interoception() as unknown as Record<string, unknown>),
+        attention: () => this.attention(),
         logger: this.logger,
       });
     }
+    this.sampler = new IntrospectionSampler({
+      dir: this.dir,
+      now: this.now,
+      ...(deps.random ? { random: deps.random } : {}),
+    });
   }
 
   /** A tier's client wrapped with budget, breaker and query log (phase 3 asks for `integrate`). */
-  tierClient(tier: WatcherTier): InstrumentedClient | undefined {
+  tierClient(
+    tier: WatcherTier,
+    caller?: InstrumentOptions['caller']
+  ): InstrumentedClient | undefined {
     const client = this.deps.llm?.[tier];
     if (!client) return undefined;
     const opts: InstrumentOptions = {
       tier,
-      caller: tier === 'notice' ? 'watcher:notice' : 'watcher:integrate',
+      caller: caller ?? (tier === 'notice' ? 'watcher:notice' : 'watcher:integrate'),
       budget: this.budget,
       now: this.now,
       ...(this.deps.queryLog ? { queryLog: this.deps.queryLog } : {}),
@@ -337,6 +392,122 @@ export class Watcher extends EventEmitter {
     return this.outcomesRun;
   }
 
+  /**
+   * Phase 4: what the watcher feels now (fleet karma, breaker, semaphore,
+   * today's budget, operator silence, buffer salience, last integration).
+   * Every reader may fail; never throws.
+   */
+  interoception(): Interoception {
+    const backends = [
+      ...new Set(
+        (['notice', 'integrate'] as const)
+          .map((t) => this.deps.llm?.[t]?.backend)
+          .filter((b): b is NonNullable<typeof b> => !!b)
+      ),
+    ];
+    const breaker = this.deps.breaker;
+    const lastRunAt = this.integrator?.state().lastRunAt;
+    return interoception({
+      nowMs: this.now(),
+      ...(this.deps.karmaScores ? { karmaScores: this.deps.karmaScores } : {}),
+      backends,
+      ...(breaker ? { isCircuitOpen: (b: string) => breaker.isOpen(b) } : {}),
+      ...(this.deps.semaphore ? { semaphore: this.deps.semaphore } : {}),
+      budget: { notice: this.budget.used('notice'), integrate: this.budget.used('integrate') },
+      lastOperatorAt: this.lastOperatorAt,
+      bufferItems: this.buffer.items(),
+      ...(lastRunAt ? { lastIntegrateAt: lastRunAt } : {}),
+    });
+  }
+
+  /** Phase 4: the phase, the top buffer (and pending) items, and the last pass's focus. */
+  attention(): Attention {
+    const st = this.integrator?.state();
+    return attention({
+      phase: this.phase,
+      items: [...this.buffer.items(), ...(st?.pending.items ?? [])],
+      graph: this.graph,
+      attending: st?.attending ?? [],
+      ...(st?.attendingAt ? { attendingAt: st.attendingAt } : {}),
+      botName: (id) => this.botName(id),
+    });
+  }
+
+  /**
+   * Phase 4: "## Your current state" for a bot (its presence as the watcher
+   * sees it, its running cycle, the fleet's focus). Undefined while asleep.
+   */
+  selfStateFor(botId: string): SelfStateInput | undefined {
+    if (!this.running) return undefined;
+    let cycle: SelfStateInput['cycle'];
+    try {
+      cycle = this.deps.runningCycle?.(botId);
+    } catch {
+      cycle = undefined;
+    }
+    let fleetFocus: string[] = [];
+    try {
+      fleetFocus = fleetFocusTexts(this.attention());
+    } catch {
+      fleetFocus = [];
+    }
+    return { presence: this.presence.get(botId), ...(cycle ? { cycle } : {}), fleetFocus };
+  }
+
+  /**
+   * Phase 4: ask the watcher's own model what it is doing and score it
+   * (`introspection.ts`), on the notice tier (budget, breaker, query log as
+   * `watcher:introspect`). One in flight; never throws.
+   */
+  introspect(
+    trigger: IntrospectionTrigger = 'manual'
+  ): Promise<IntrospectionOutcome | { status: 'unavailable'; reason: string }> {
+    if (!this.running) {
+      return Promise.resolve({ status: 'unavailable', reason: 'The watcher is asleep' });
+    }
+    const client = this.tierClient('notice', 'watcher:introspect');
+    if (!client) {
+      return Promise.resolve({ status: 'unavailable', reason: 'The watcher has no notice model' });
+    }
+    if (this.introspectRun) return this.introspectRun;
+    this.introspectRun = runIntrospection({
+      client,
+      attention: () => this.attention(),
+      running: this.running,
+      logRows: () => this.log.recent(INTROSPECTION_LOG_ROWS).reverse(),
+      dir: this.dir,
+      now: this.now,
+      trigger,
+      logger: this.logger,
+    })
+      .then((out) => {
+        if (out.status === 'scored') {
+          this.log.say(
+            this.phase,
+            'introspect',
+            narrateIntrospection({ trigger, score: out.record.score, parsed: out.record.parsed }),
+            {
+              model: out.record.model,
+              tokens: out.record.tokens,
+              ...(out.record.costUsd !== undefined ? { costUsd: out.record.costUsd } : {}),
+              durationMs: out.record.durationMs,
+              source: 'watcher:introspect',
+            }
+          );
+        }
+        return out;
+      })
+      .finally(() => {
+        this.introspectRun = null;
+      });
+    return this.introspectRun;
+  }
+
+  /** Phase 4: `introspection.jsonl` (every subject), newest first. */
+  introspection(limit?: number): IntrospectionRow[] {
+    return readIntrospection(this.dir, limit);
+  }
+
   /** What the last integrate pass said it attends to (neuron ids; phase 4 reads it). */
   attending(): string[] {
     return this.integrator?.attending() ?? [];
@@ -388,6 +559,11 @@ export class Watcher extends EventEmitter {
     try {
       this.graph.load();
       this.buffer.restore(bufferFile(this.dir));
+      this.lastOperatorAt = lastOperatorMs(
+        [...this.buffer.items(), ...(this.integrator?.state().pending.items ?? [])],
+        this.lastOperatorAt
+      );
+      this.presence.attach(this.deps.activityStream as never);
       const record = readBirthRecord(this.dir);
       const deps = this.birthDeps();
       if (!record || !record.done.includes('wake')) {
@@ -429,14 +605,17 @@ export class Watcher extends EventEmitter {
     this.stopping = true;
     try {
       this.sense.detach();
+      this.presence.detach();
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
       this.stopNoticeTimer();
       this.stopIntegrateTimer();
+      this.stopIntrospectTimer();
       await this.background;
       await this.noticeRun;
       await this.integrateRun;
       await this.outcomesRun;
+      await this.introspectRun;
       this.integrator?.persist();
       this.sense.tick();
       this.graph.compact();
@@ -472,6 +651,9 @@ export class Watcher extends EventEmitter {
       linkStatus: this.linkStatus(record),
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.integrator ? { attending: this.integrator.attending() } : {}),
+      ...(this.integrator?.state().attendingAt
+        ? { attendingAt: this.integrator.state().attendingAt }
+        : {}),
     };
   }
 
@@ -511,6 +693,7 @@ export class Watcher extends EventEmitter {
           this.setPhase('sense');
           this.startNoticeTimer();
           this.startIntegrateTimer();
+          this.startIntrospectTimer();
         }
       });
   }
@@ -546,6 +729,28 @@ export class Watcher extends EventEmitter {
   private stopIntegrateTimer(): void {
     if (this.integrateTimer) clearInterval(this.integrateTimer);
     this.integrateTimer = null;
+  }
+
+  /** Three self-questions a day at random times, on the notice tier and only with `notice.enabled`. */
+  private startIntrospectTimer(): void {
+    if (this.introspectTimer || !this.deps.llm?.notice || !this.cfg().notice.enabled) return;
+    const timer = setInterval(() => this.sampleTick(), INTROSPECT_CHECK_MS);
+    (timer as { unref?: () => void }).unref?.();
+    this.introspectTimer = timer;
+  }
+
+  /** One check of the daily sampler (the timer calls it); a due sample is taken once. */
+  sampleTick(): boolean {
+    if (!this.running || this.stopping || !this.cfg().notice.enabled) return false;
+    if (this.introspectRun || !this.sampler.due()) return false;
+    this.sampler.markDone();
+    void this.introspect('sample');
+    return true;
+  }
+
+  private stopIntrospectTimer(): void {
+    if (this.introspectTimer) clearInterval(this.introspectTimer);
+    this.introspectTimer = null;
   }
 
   private async outcomes(): Promise<void> {
@@ -715,6 +920,12 @@ export interface FleetWatcherSource {
     recordDirective(botId: string, text: string, source: 'watcher'): void;
   };
   setWatcherBroadcasts?(source: WatcherBroadcastSource | undefined): void;
+  /** Phase 4: fleet karma, the running cycle, and where "## Your current state" is published. */
+  getKarmaService?(): { getAllScores(botIds: string[]): Array<{ current: number }> } | undefined;
+  getRunningCycle?(
+    botId: string
+  ): { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined;
+  setWatcherSelfState?(source: WatcherSelfStateSource | undefined): void;
 }
 
 /** A question broadcast reaches the operator with this prefix, through the bot it concerns. */
@@ -799,6 +1010,16 @@ export function createFleetWatcher(
       }
     },
     broadcastDelivery: fleetBroadcastDelivery(config, manager, logger),
+    karmaScores: () => {
+      const karma = manager.getKarmaService?.();
+      if (!karma) return [];
+      const ids = (config.bots ?? []).filter((b) => b.enabled !== false).map((b) => b.id);
+      return karma.getAllScores(ids).map((s) => s.current);
+    },
+    semaphore: getClaudeCliStats,
+    ...(manager.getRunningCycle
+      ? { runningCycle: (botId: string) => manager.getRunningCycle?.(botId) }
+      : {}),
   });
   try {
     manager.getToolRegistry?.().setFleetMemory(() => watcher.fleetMemory());
@@ -809,6 +1030,11 @@ export function createFleetWatcher(
     manager.setWatcherBroadcasts?.(watcher.broadcaster);
   } catch (err) {
     logger.warn({ err }, 'Watcher: could not publish broadcasts to the agent loop');
+  }
+  try {
+    manager.setWatcherSelfState?.(watcher);
+  } catch (err) {
+    logger.warn({ err }, 'Watcher: could not publish the self-state to the bots');
   }
   return watcher;
 }

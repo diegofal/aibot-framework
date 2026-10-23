@@ -12,6 +12,10 @@
  *   GET  /broadcasts       { broadcasts } newest first, each with `why`; ?botId=&limit=
  *   POST /neurons/:id/signal  { signal: up|down } on an insight / contradiction /
  *                          prediction (`n-…`) or a broadcast (`b-…`)
+ *   GET  /self             { running, interoception, attention, introspection, subjects } (phase 4)
+ *   POST /introspect       ask the watcher what it is doing now: 200 { status: scored, record },
+ *                          409 unavailable (asleep / no notice model), 429 refused (budget,
+ *                          breaker), 502 failed
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -23,6 +27,7 @@ import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 import type { Broadcast } from '../../watcher/broadcast';
 import { computeMetrics, parseMetricsWindow } from '../../watcher/metrics';
+import { summarizeIntrospection } from '../../watcher/metrics/introspection';
 import { loadMetricsRecords } from '../../watcher/metrics/records';
 import type { Neuron } from '../../watcher/types';
 import { WATCHER_DEFAULTS, type WatcherConfig } from '../../watcher/types';
@@ -34,6 +39,8 @@ import type { CycleReader } from '../../why/cycle-index';
 const LOG_DEFAULT_LIMIT = 200;
 const LOG_MAX_LIMIT = 1000;
 const CYCLE_WINDOW_MS = 86_400_000;
+/** Introspection rows `GET /self` returns (all subjects, newest first). */
+const SELF_HISTORY_LIMIT = 50;
 
 export interface WatcherRouteDeps {
   config: Config;
@@ -140,6 +147,29 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
       ...(deps.semaphore ? { semaphore: deps.semaphore } : {}),
     });
     return c.json(computeMetrics(records, window));
+  });
+
+  app.get('/self', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const all = w.introspection();
+    return c.json({
+      running: w.state().running,
+      interoception: w.interoception(),
+      attention: w.attention(),
+      introspection: all.slice(0, SELF_HISTORY_LIMIT),
+      subjects: summarizeIntrospection(all),
+    });
+  });
+
+  app.post('/introspect', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const out = await w.introspect('manual');
+    if (out.status === 'scored') return c.json(out);
+    if (out.status === 'unavailable') return c.json(out, 409);
+    if (out.status === 'refused') return c.json(out, 429);
+    return c.json(out, 502);
   });
 
   app.get('/broadcasts', (c) => {
