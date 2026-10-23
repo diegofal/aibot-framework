@@ -1458,3 +1458,40 @@ describe('Watcher: last tick follows sensing', () => {
     await watcher.stop();
   });
 });
+
+describe('Watcher: live tier switches (applyConfig)', () => {
+  const fake = { chat: async () => ({ text: '{}' }) } as unknown as LLMClient;
+  const llm = {
+    notice: { client: fake, model: 'claude-haiku-5-5', backend: 'claude-cli' as const },
+    integrate: { client: fake, model: 'claude-opus-5-5', backend: 'claude-cli' as const },
+  };
+
+  test('turning notice and integrate on starts their timers without a restart; off stops them', async () => {
+    const { watcher, config } = make({ llm });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: false });
+    const w = config.watcher as { notice: { enabled: boolean }; integrate: { enabled: boolean } };
+    w.notice = { ...w.notice, enabled: true };
+    w.integrate = { ...w.integrate, enabled: true };
+    watcher.applyConfig();
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    w.notice = { ...w.notice, enabled: false };
+    watcher.applyConfig();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: true });
+    await watcher.stop();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: false });
+  });
+
+  test('before birth is done, applyConfig starts nothing (birth starts the timers when it ends)', async () => {
+    const { watcher, config } = make({ llm });
+    await watcher.start();
+    const w = config.watcher as { notice: { enabled: boolean } };
+    w.notice = { ...w.notice, enabled: true };
+    watcher.applyConfig();
+    expect(watcher.state().timers?.notice).toBe(false);
+    await watcher.idle();
+    expect(watcher.state().timers?.notice).toBe(true);
+    await watcher.stop();
+  });
+});

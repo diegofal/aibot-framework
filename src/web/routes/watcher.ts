@@ -26,6 +26,12 @@ import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
 import type { Broadcast } from '../../watcher/broadcast';
+import {
+  applyWatcherConfigPatch,
+  parseWatcherConfigPatch,
+  persistWatcherConfigPatch,
+  tierSwitches,
+} from '../../watcher/config-file';
 import { computeMetrics, parseMetricsWindow } from '../../watcher/metrics';
 import { summarizeIntrospection } from '../../watcher/metrics/introspection';
 import { loadMetricsRecords } from '../../watcher/metrics/records';
@@ -52,6 +58,11 @@ export interface WatcherRouteDeps {
   /** Live Claude CLI semaphore (conversation-latency guard); absent = no reading. */
   semaphore?: () => { queuedInteractive: number; activeWatcher: number };
   now?: () => number;
+  /**
+   * The config file the process loaded (`loadConfig(path)`). `POST /config`
+   * persists into it; absent → the change is live only (`persisted: false`).
+   */
+  configPath?: string;
 }
 
 export function watcherRoutes(deps: WatcherRouteDeps): Hono {
@@ -70,7 +81,41 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 
   app.get('/', (c) => {
     const w = live();
-    return c.json(w ? { enabled: true, ...w.state() } : { enabled: false });
+    return c.json(
+      w ? { enabled: true, ...w.state(), config: tierSwitches(cfg()) } : { enabled: false }
+    );
+  });
+
+  /**
+   * Turn the notice / integrate tiers on or off and set their daily caps
+   * without a restart: `{ notice?: { enabled?, maxPerDay? }, integrate?: … }`.
+   * Persisted first (validated, `.bak`, atomic), then applied live; the
+   * watcher starts or stops its timers (`applyConfig`).
+   */
+  app.post('/config', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'Body must be JSON' }, 400);
+    }
+    const parsed = parseWatcherConfigPatch(body);
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    if (deps.configPath) {
+      const saved = persistWatcherConfigPatch(deps.configPath, parsed.patch);
+      if (!saved.ok) return c.json({ error: saved.error }, saved.status);
+    }
+    const next = applyWatcherConfigPatch(deps.config, parsed.patch);
+    w.applyConfig();
+    deps.logger.info({ patch: parsed.patch }, 'Watcher: tier config changed');
+    return c.json({
+      enabled: true,
+      ...w.state(),
+      config: tierSwitches(next),
+      persisted: !!deps.configPath,
+    });
   });
 
   app.post('/start', async (c) => {

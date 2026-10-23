@@ -135,6 +135,8 @@ export interface WatcherState {
   attending?: string[];
   /** When the last integrate pass set `attending`. */
   attendingAt?: string;
+  /** Whether the notice and integrate timers are running now (`Watcher.applyConfig`). */
+  timers?: { notice: boolean; integrate: boolean };
 }
 
 export type WatcherEventType =

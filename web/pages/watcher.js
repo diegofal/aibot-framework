@@ -25,12 +25,14 @@ import {
   legendHtml,
   logListHtml,
   mergeLogRows,
+  mergeWatcherState,
   needsGraphRefetch,
   neuronSheetBody,
   readWatcherMessage,
   reconcileGraph,
   replayQueue,
   stateHtml,
+  tierPatchFromInput,
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
@@ -380,7 +382,23 @@ async function setRunning(action) {
     showToast(`Could not ${action} the watcher: ${res?.error || 'no response'}`, {
       tone: 'danger',
     });
-  else page.model.state = { ...res, enabled: true };
+  else page.model.state = mergeWatcherState(page.model.state, res);
+  drawState();
+}
+
+async function setTiers(patch) {
+  if (page.busy) return;
+  page.busy = true;
+  drawState();
+  const res = await api('/api/watcher/config', { method: 'POST', body: patch }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!page) return;
+  page.busy = false;
+  if (isWatcherOff(res)) return showOff();
+  if (!res || res.error)
+    showToast(`Could not change the watcher: ${res?.error || 'no response'}`, { tone: 'danger' });
+  else page.model.state = mergeWatcherState(page.model.state, res);
   drawState();
 }
 
@@ -587,6 +605,23 @@ function wire(el, signal) {
       if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
       const li = e.target.closest('li.watcher-row');
       if (li && !page.replay && li.dataset.neurons) selectRow(li);
+    },
+    { signal }
+  );
+  // Notice / Integrate switches and daily caps (`POST /api/watcher/config`).
+  el.addEventListener(
+    'change',
+    (e) => {
+      if (!page) return;
+      const input = e.target.closest?.('[data-tier][data-field]');
+      if (!input) return;
+      const value = input.dataset.field === 'enabled' ? input.checked : input.value;
+      const patch = tierPatchFromInput(input.dataset.tier, input.dataset.field, value);
+      if (!patch) {
+        showToast('A daily cap is a whole number, 0 or more.', { tone: 'danger' });
+        return drawState();
+      }
+      return setTiers(patch);
     },
     { signal }
   );

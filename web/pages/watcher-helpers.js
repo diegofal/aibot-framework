@@ -320,7 +320,46 @@ export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
     '<span class="watcher-sep">·</span>'
   )}</div><div class="watcher-counts">${chips.join('')}</div>${notes.join(
     ''
-  )}<div class="watcher-state-actions">${button}</div></div>`;
+  )}<div class="watcher-state-actions">${tierControlsHtml(s.config, { busy })}${button}</div></div>`;
+}
+
+const TIER_LABELS = { notice: 'Notice', integrate: 'Integrate' };
+
+/**
+ * The live switches of the LLM tiers (`POST /api/watcher/config`): per tier
+ * an on/off checkbox and its daily call cap. Empty without a config.
+ */
+export function tierControlsHtml(config, { busy = false } = {}) {
+  if (!config || typeof config !== 'object') return '';
+  const dis = busy ? ' disabled' : '';
+  return `<div class="watcher-tiers">${Object.keys(TIER_LABELS)
+    .filter((tier) => config[tier])
+    .map((tier) => {
+      const t = config[tier];
+      const cap = Number.isFinite(Number(t.maxPerDay)) ? Number(t.maxPerDay) : 0;
+      return `<label class="watcher-tier"><input type="checkbox" data-tier="${tier}" data-field="enabled"${
+        t.enabled ? ' checked' : ''
+      }${dis}> ${TIER_LABELS[tier]}</label><label class="watcher-tier-cap" title="${TIER_LABELS[tier]} calls per day"><input type="number" min="0" step="1" data-tier="${tier}" data-field="maxPerDay" value="${cap}"${dis}>/day</label>`;
+    })
+    .join('')}</div>`;
+}
+
+/** The `POST /api/watcher/config` body for one changed control, or null when invalid. */
+export function tierPatchFromInput(tier, field, value) {
+  if (!(tier in TIER_LABELS)) return null;
+  if (field === 'enabled') return { [tier]: { enabled: !!value } };
+  if (field === 'maxPerDay') {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    return { [tier]: { maxPerDay: Number(text) } };
+  }
+  return null;
+}
+
+/** A new state over the previous one, keeping the tier `config` an event does not carry. */
+export function mergeWatcherState(prev, next) {
+  const keep = prev?.config && !next?.config ? { config: prev.config } : {};
+  return { ...keep, ...(next ?? {}), enabled: true };
 }
 
 /** Colour key for the ball: one dot per kind, plus the origin pair. */
@@ -480,7 +519,7 @@ export function applyWatcherEvent(model, event) {
       return { kind: 'log', row: data };
     }
     case 'watcher:state':
-      model.state = { ...data, enabled: true };
+      model.state = mergeWatcherState(model.state, data);
       return { kind: 'state' };
     default:
       return NONE;

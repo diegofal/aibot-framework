@@ -9632,6 +9632,23 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-canvas:active {
   cursor: grabbing;
 }
+.watcher-tiers {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-right: var(--s2);
+  font-size: var(--fs-sm);
+}
+.watcher-tier,
+.watcher-tier-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.watcher-tier-cap input {
+  width: 4.5em;
+}
 .watcher-hint {
   position: absolute;
   left: 12px;

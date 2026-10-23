@@ -189,6 +189,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private lastSenseStateAt = 0;
+  /** Birth or resync finished in this run: tier timers may run (`applyConfig`). */
+  private timersReady = false;
   private senseStateTimer: ReturnType<typeof setTimeout> | undefined;
   private noticeRun: Promise<NoticeOutcome | null> | null = null;
   /** The run signal of `noticeRun` / `integrateRun`: a stopped run's pass is never shared. */
@@ -695,6 +697,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     this.clearSenseStateTimer();
+    this.timersReady = false;
     this.stopNoticeTimer();
     this.stopIntegrateTimer();
     this.stopIntrospectTimer();
@@ -714,6 +717,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
       this.clearSenseStateTimer();
+      this.timersReady = false;
       this.stopNoticeTimer();
       this.stopIntegrateTimer();
       this.stopIntrospectTimer();
@@ -794,6 +798,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       counts: this.graph.counts(),
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),
+      timers: { notice: !!this.noticeTimer, integrate: !!this.integrateTimer },
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.integrator ? { attending: this.integrator.attending() } : {}),
       ...(this.integrator?.state().attendingAt
@@ -842,12 +847,39 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         // A run that was cancelled never moves the phase nor starts timers:
         // the watcher is asleep, or a newer run owns them.
         if (this.running && !this.stopping && !deps.isCancelled?.()) {
+          this.timersReady = true;
           this.setPhase('sense');
           this.startNoticeTimer();
           this.startIntegrateTimer();
           this.startIntrospectTimer();
         }
       });
+  }
+
+  /**
+   * Re-read `notice.enabled` / `integrate.enabled` (the live config changed,
+   * `POST /api/watcher/config`): start or stop the tier timers without a
+   * restart. Before birth/resync is done nothing starts (it starts them when
+   * it ends). Publishes the state. Never throws.
+   */
+  applyConfig(): void {
+    try {
+      if (this.running && !this.stopping && this.timersReady) {
+        const cfg = this.cfg();
+        if (cfg.notice.enabled) {
+          this.startNoticeTimer();
+          this.startIntrospectTimer();
+        } else {
+          this.stopNoticeTimer();
+          this.stopIntrospectTimer();
+        }
+        if (cfg.integrate.enabled) this.startIntegrateTimer();
+        else this.stopIntegrateTimer();
+      }
+      this.publish('watcher:state', this.state());
+    } catch (err) {
+      this.logger.warn({ err }, 'Watcher: could not apply the config change');
+    }
   }
 
   /** Begins only after birth or resync; checks `notice.enabled` on every tick too. */
