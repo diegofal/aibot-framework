@@ -341,6 +341,15 @@ export function legendHtml() {
   return `<div class="watcher-legend"><div class="watcher-legend-row">${kinds}</div><div class="watcher-legend-row">${origin}</div></div>`;
 }
 
+/**
+ * The server's answer means the watcher is off: `GET /api/watcher` says
+ * `{ enabled: false }` and, while off, every other route 404s with
+ * `{ enabled: false, error }`. The page then shows its off state instead of an error.
+ */
+export function isWatcherOff(res) {
+  return !!res && typeof res === 'object' && res.enabled === false;
+}
+
 export function watcherDisabledHtml() {
   return emptyState({
     icon: '◌',

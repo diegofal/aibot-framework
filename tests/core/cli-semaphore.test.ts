@@ -50,10 +50,38 @@ describe('CliSemaphore', () => {
       wait('loop', 'l2'),
       wait('interactive', 'i2'),
     ]);
-    expect(sem.stats().queuedByPriority).toEqual({ interactive: 2, loop: 2, worker: 1 });
+    expect(sem.stats().queuedByPriority).toEqual({
+      interactive: 2,
+      loop: 2,
+      worker: 1,
+      watcher: 0,
+    });
     hold();
     await all;
     expect(order).toEqual(['i1', 'i2', 'l1', 'l2', 'w1']);
+  });
+
+  test('the watcher waits behind every other priority', async () => {
+    const sem = new CliSemaphore(1);
+    const hold = await sem.acquire('loop');
+    const order: string[] = [];
+    const wait = (p: 'interactive' | 'loop' | 'worker' | 'watcher', tag: string) =>
+      sem.acquire(p).then((release) => {
+        order.push(tag);
+        release();
+      });
+    const all = Promise.all([
+      wait('watcher', 'x1'),
+      wait('worker', 'w1'),
+      wait('watcher', 'x2'),
+      wait('loop', 'l1'),
+      wait('interactive', 'i1'),
+    ]);
+    expect(sem.stats().queuedByPriority.watcher).toBe(2);
+    hold();
+    await all;
+    expect(order).toEqual(['i1', 'l1', 'w1', 'x1', 'x2']);
+    expect(sem.stats().activeByPriority.watcher).toBe(0);
   });
 
   test('an aborted waiter leaves the queue and rejects with LLMAbortedError', async () => {

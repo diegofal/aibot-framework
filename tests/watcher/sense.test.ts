@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUMAN_INBOUND_HOOK } from '../../src/bot/agent-loop-utils';
+import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-loop-utils';
 import { WorkingBuffer } from '../../src/watcher/buffer';
 import { Graph, type GraphChange } from '../../src/watcher/graph';
 import { WatcherLog } from '../../src/watcher/log';
@@ -139,6 +139,49 @@ describe('Sense', () => {
       text: 'Pay the Acme invoice',
     });
     expect((buffer.items()[0].event as { text?: string }).text).toBe('Pay the Acme invoice');
+  });
+
+  test('buffer items say whether the operator wrote them', () => {
+    const op = setup({ isOperator: true });
+    op.hooks.emit(HUMAN_INBOUND_HOOK, {
+      botId: 'b1',
+      channelKind: 'web',
+      chatId: '1',
+      timestamp: t,
+      text: 'Pay the Acme invoice',
+    });
+    expect(op.buffer.items()[0].fromOperator).toBe(true);
+    const other = setup();
+    other.hooks.emit(HUMAN_INBOUND_HOOK, {
+      botId: 'b1',
+      channelKind: 'web',
+      chatId: '1',
+      timestamp: t,
+      text: 'Pay the Acme invoice',
+    });
+    expect(other.buffer.items()[0].fromOperator).toBeUndefined();
+  });
+
+  test('an operator message (Telegram chat or dashboard thread) is sensed as the operator, verbatim', () => {
+    // sender() says "not the operator": the operator hook must not depend on it.
+    const { hooks, buffer, rows } = setup({ isOperator: false });
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'The Acme invoice is due on Friday',
+    });
+    const item = buffer.items()[0];
+    expect(item.fromOperator).toBe(true);
+    expect((item.event as { text?: string }).text).toBe('The Acme invoice is due on Friday');
+    expect((item.event as { channelKind?: string }).channelKind).toBe('dashboard');
+    expect(rows[0].text).toContain('the operator wrote to jarvis about The Acme invoice');
+  });
+
+  test('an operator message without text is ignored', () => {
+    const { hooks, buffer } = setup();
+    hooks.emit(OPERATOR_MESSAGE_HOOK, { botId: 'b1', channelKind: 'telegram', timestamp: t });
+    expect(buffer.size()).toBe(0);
   });
 
   test('detach stops listening', () => {

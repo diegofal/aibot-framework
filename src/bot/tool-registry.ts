@@ -48,6 +48,7 @@ import { createDelegationTool } from '../tools/delegate';
 import { DynamicToolStore } from '../tools/dynamic-tool-store';
 import { createExecTool } from '../tools/exec';
 import { createFileEditTool, createFileReadTool, createFileWriteTool } from '../tools/file';
+import { type FleetMemorySource, createFleetMemorySearchTool } from '../tools/fleet-memory-search';
 import { createGoalsTool } from '../tools/goals';
 import { createImproveTool } from '../tools/improve';
 import { createMemoryGetTool } from '../tools/memory-get';
@@ -123,6 +124,7 @@ export const TOOL_CATEGORIES: Record<ToolCategory, string[]> = {
     'core_memory_replace',
     'core_memory_search',
     'save_memory',
+    'fleet_memory_search',
   ],
   soul: ['update_soul', 'update_identity', 'manage_goals', 'improve'],
   files: ['file_read', 'file_write', 'file_edit'],
@@ -209,6 +211,22 @@ export class ToolRegistry {
     tools.push(meshPublish, meshQuery);
     this.ctx.toolDefinitions.push(meshPublish.definition, meshQuery.definition);
     this.ctx.logger.info('mesh_publish + mesh_query tools registered');
+  }
+
+  /**
+   * Register `fleet_memory_search` over the watcher's graph (called once the
+   * watcher exists, `createFleetWatcher`). Only when `watcher.enabled`;
+   * idempotent. The source is read per call, so a stopped watcher answers
+   * "not available" instead of a stale graph.
+   */
+  setFleetMemory(getSource: () => FleetMemorySource | undefined): void {
+    if (!this.ctx.config.watcher?.enabled) return;
+    const name = 'fleet_memory_search';
+    removeToolsInPlace(this.ctx.tools, (t) => t.definition.function.name === name);
+    this.ctx.tools.push(createFleetMemorySearchTool(getSource));
+    this.ctx.toolDefinitions.length = 0;
+    this.ctx.toolDefinitions.push(...this.ctx.tools.map((t) => t.definition));
+    this.ctx.logger.info('fleet_memory_search registered');
   }
 
   /**

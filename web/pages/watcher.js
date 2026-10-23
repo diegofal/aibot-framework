@@ -19,6 +19,7 @@ import {
   applyWatcherEvent,
   birthDate,
   createWatcherModel,
+  isWatcherOff,
   legendHtml,
   logListHtml,
   mergeLogRows,
@@ -53,6 +54,14 @@ export function destroyWatcher() {
 
 function $(sel) {
   return page?.el.querySelector(sel) ?? null;
+}
+
+/** The watcher went off under the page (any route answered `enabled: false`): show the off state. */
+function showOff() {
+  const el = page?.el;
+  destroyWatcher();
+  closeSheet();
+  if (el) el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
 }
 
 /* ── Rendering ───────────────────────────────────────────────────── */
@@ -185,11 +194,12 @@ async function setRunning(action) {
   }));
   if (!page) return;
   page.busy = false;
+  if (isWatcherOff(res)) return showOff();
   if (!res || res.error)
     showToast(`Could not ${action} the watcher: ${res?.error || 'no response'}`, {
       tone: 'danger',
     });
-  else if (res.enabled !== false) page.model.state = { ...res, enabled: true };
+  else page.model.state = { ...res, enabled: true };
   drawState();
 }
 
@@ -235,6 +245,7 @@ async function openNeuron(id) {
     error: err?.message || 'Request failed',
   }));
   if (!body.isConnected || !page) return;
+  if (isWatcherOff(detail)) return showOff();
   if (!detail || detail.error || !detail.neuron) {
     body.innerHTML = `<div class="text-dim">Could not load this neuron: ${escapeHtml(
       detail?.error || 'not found'
@@ -257,6 +268,7 @@ async function fetchDay(date) {
     const q = new URLSearchParams({ date, limit: String(LOG_PAGE) });
     if (before != null) q.set('before', String(before));
     const res = await api(`/api/watcher/log?${q}`);
+    if (isWatcherOff(res)) return null;
     const got = Array.isArray(res?.rows) ? res.rows : [];
     if (res?.error) throw new Error(res.error);
     rows = rows.concat(got);
@@ -276,6 +288,7 @@ async function startReplay({ date, birthOnly, label }) {
   let rows;
   try {
     rows = await fetchDay(date);
+    if (rows === null) return showOff();
   } catch (err) {
     showToast(`Could not load the log of ${date}: ${err.message}`, { tone: 'danger' });
     return;
@@ -417,7 +430,7 @@ export async function renderWatcher(el) {
     );
     return;
   }
-  if (state.enabled === false) {
+  if (isWatcherOff(state)) {
     el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
     return;
   }
@@ -427,6 +440,10 @@ export async function renderWatcher(el) {
     api('/api/watcher/log?limit=200').catch(() => null),
   ]);
   if (gen !== generation) return;
+  if (isWatcherOff(graph) || isWatcherOff(log)) {
+    el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
+    return;
+  }
   if (graph?.error) showToast(`Could not load the graph: ${graph.error}`, { tone: 'danger' });
 
   page = {

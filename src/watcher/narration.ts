@@ -188,6 +188,62 @@ export function narrateSenseSummary(input: {
   return `${head}, top: ${input.top} (salience ${round1(input.topSalience ?? 0)}).`;
 }
 
+/**
+ * Model output inside a code-written row: one line, at most 200 chars,
+ * double quotes inside turned to single, always wrapped in quotes.
+ */
+export function quoteModelText(text: string, max = 200): string {
+  const flat = String(text ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/"/g, "'");
+  const clipped = flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+  return `"${clipped}"`;
+}
+
+export function narrateNoticeLearned(input: {
+  text: string;
+  kind: NeuronKind;
+  confidence?: string;
+  bots: string[];
+}): string {
+  const detail = input.confidence ? `${input.kind}, confidence ${input.confidence}` : input.kind;
+  const from = input.bots.length ? `; from ${andList(input.bots)}` : '';
+  return `Learned: ${quoteModelText(input.text)} (${detail}${from}).`;
+}
+
+export function narrateNoticeRecognised(input: { text: string; activations: number }): string {
+  return `Recognised again: ${quoteModelText(input.text)} (${plural(input.activations, 'activation', 'activations')}).`;
+}
+
+export function narrateNoticePass(input: {
+  events: number;
+  kept: number;
+  recognised: number;
+  dropped: number;
+}): string {
+  const head = `Noticed ${plural(input.events, 'event', 'events')}`;
+  if (input.kept === 0 && input.recognised === 0) return `${head}; nothing worth keeping.`;
+  return `${head}: kept ${num(input.kept)}, recognised ${num(input.recognised)}, let ${num(input.dropped)} go.`;
+}
+
+export function narrateNoticeFailed(input: { events: number; error: string }): string {
+  return `Could not notice: the model call failed (${quoteModelText(input.error, 160)}). I kept the ${plural(input.events, 'event', 'events')} for the next pass.`;
+}
+
+export function narrateNoticeUnparsable(input: { events: number }): string {
+  return `Could not read the model's answer as JSON. I kept the ${plural(input.events, 'event', 'events')} for the next pass.`;
+}
+
+export function narrateNoticeCapped(input: { maxPerDay: number }): string {
+  return `Reached today's noticing budget (${plural(input.maxPerDay, 'call', 'calls')}). I keep sensing and will notice again tomorrow.`;
+}
+
+export function narrateNoticePaused(input: { backend: string }): string {
+  const name = BACKEND_NAMES[input.backend] ?? input.backend;
+  return `${name} is rate-limited across the fleet (circuit open). Noticing is paused until it recovers.`;
+}
+
 /** What an event was, in a few words, for "Noticed: …" rows. Human text is never quoted, only its topic words. */
 export function describeEvent(
   event: SensedEvent,

@@ -27,7 +27,8 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-import { HUMAN_INBOUND_HOOK } from '../../src/bot/agent-loop-utils';
+import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-loop-utils';
+import { BackendCircuitBreaker } from '../../src/bot/agent-retry-engine';
 import { HookEmitter } from '../../src/bot/hooks';
 import { UserDirectory } from '../../src/bot/user-directory';
 async function manager() {
@@ -101,6 +102,37 @@ describe('BotManager watcher getters', () => {
     expect(m.getUserDirectory()).toBeInstanceOf(UserDirectory);
     expect(m.getUserDirectory()).toBe(m.getUserDirectory());
     expect(m.getUserDirectory().list('b1')).toEqual([]);
+    await m.stopAll();
+  });
+
+  test('a dashboard operator message is emitted on the hooks as operator_message', async () => {
+    const m = await manager();
+    const seen: Array<Record<string, unknown>> = [];
+    m.getHooks().on(OPERATOR_MESSAGE_HOOK, (e: Record<string, unknown>) => seen.push(e));
+    m.recordOperatorMessage('b1', 'The Acme invoice is due on Friday');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      botId: 'b1',
+      channelKind: 'dashboard',
+      text: 'The Acme invoice is due on Friday',
+    });
+    expect(typeof seen[0].timestamp).toBe('number');
+    await m.stopAll();
+  });
+
+  test('the operator Telegram chat (pipeline) is emitted as operator_message from telegram', async () => {
+    const m = await manager();
+    const seen: Array<Record<string, unknown>> = [];
+    m.getHooks().on(OPERATOR_MESSAGE_HOOK, (e: Record<string, unknown>) => seen.push(e));
+    (m as any).botContext.recordOperatorMessage('b1', 'Remember: the boiler is serviced in May');
+    expect(seen[0]).toMatchObject({ botId: 'b1', channelKind: 'telegram' });
+    await m.stopAll();
+  });
+
+  test('getCircuitBreaker returns the fleet breaker the loop shares', async () => {
+    const m = await manager();
+    expect(m.getCircuitBreaker()).toBeInstanceOf(BackendCircuitBreaker);
+    expect(m.getCircuitBreaker()).toBe((m as any).botContext.circuitBreaker);
     await m.stopAll();
   });
 });

@@ -5,11 +5,19 @@
  * salience reaches `notice.salienceBar` or a neuron was touched, plus one
  * summary row per `log.senseSummaryEveryMs` window that saw anything.
  * Privacy: text from anyone but the operator is reduced to topic words here,
- * before anything is stored. A listener never throws into the publisher.
+ * before anything is stored. Operator messages from the operator surfaces
+ * (private Telegram chat, dashboard thread) arrive on `operator_message` and
+ * are kept verbatim, flagged `fromOperator`. A listener never throws into the
+ * publisher.
  */
 import { randomBytes } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
-import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from '../bot/agent-loop-utils';
+import {
+  HUMAN_INBOUND_HOOK,
+  type HumanInboundEvent,
+  OPERATOR_MESSAGE_HOOK,
+  type OperatorMessageEvent,
+} from '../bot/agent-loop-utils';
 import type { WorkingBuffer } from './buffer';
 import type { Graph } from './graph';
 import type { WatcherLog } from './log';
@@ -58,11 +66,14 @@ export class Sense {
     this.detach();
     const onActivity = (e: SensedEvent) => this.safeHandle(e);
     const onHuman = (e: SensedEvent) => this.safeHandle(e);
+    const onOperator = (e: OperatorMessageEvent) => this.safeHandleOperator(e);
     stream.on('activity', onActivity);
     hooks.on(HUMAN_INBOUND_HOOK, onHuman);
+    hooks.on(OPERATOR_MESSAGE_HOOK, onOperator);
     this.attached = [
       { target: stream, event: 'activity', fn: onActivity },
       { target: hooks, event: HUMAN_INBOUND_HOOK, fn: onHuman },
+      { target: hooks, event: OPERATOR_MESSAGE_HOOK, fn: onOperator as never },
     ];
   }
 
@@ -71,8 +82,27 @@ export class Sense {
     this.attached = [];
   }
 
+  /**
+   * An operator message from an operator surface: sensed as a `human_inbound`
+   * from the operator (verbatim). Returns the buffer item, or null without text.
+   */
+  handleOperator(raw: OperatorMessageEvent): BufferItem | null {
+    if (!raw || typeof raw.botId !== 'string' || typeof raw.text !== 'string') return null;
+    const text = raw.text.trim();
+    if (!text) return null;
+    const event: HumanInboundEvent = {
+      botId: raw.botId,
+      channelKind: raw.channelKind,
+      chatId: 'operator',
+      userId: 'operator',
+      timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : this.deps.now(),
+      text: text.slice(0, 1000),
+    };
+    return this.handle(event, { isOperator: true, name: 'the operator' });
+  }
+
   /** Score one event; returns the buffer item when it scored anything. */
-  handle(raw: SensedEvent): BufferItem | null {
+  handle(raw: SensedEvent, knownSender?: SenderInfo): BufferItem | null {
     if (!raw || typeof raw !== 'object' || typeof raw.botId !== 'string') return null;
     if (raw.botId === WATCHER_BOT_ID) return null;
     const nowMs = this.deps.now();
@@ -80,9 +110,11 @@ export class Sense {
 
     let event: SensedEvent = raw;
     let senderName: string | undefined;
+    let fromOperator = false;
     if (isHumanInbound(raw)) {
-      const who = this.deps.sender?.(raw) ?? { isOperator: false };
+      const who = knownSender ?? this.deps.sender?.(raw) ?? { isOperator: false };
       senderName = who.name;
+      fromOperator = who.isOperator;
       event = privateView(raw, who.isOperator);
     }
 
@@ -129,6 +161,7 @@ export class Sense {
       reasons: score.reasons,
       noticedAt,
       touched: score.touched,
+      ...(fromOperator ? { fromOperator: true as const } : {}),
     };
     this.deps.buffer.push(item);
     return item;
@@ -154,6 +187,14 @@ export class Sense {
     this.windowCount = 0;
     this.windowTop = null;
     return row;
+  }
+
+  private safeHandleOperator(event: OperatorMessageEvent): void {
+    try {
+      this.handleOperator(event);
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher sense: failed to handle an operator message');
+    }
   }
 
   private safeHandle(event: SensedEvent): void {

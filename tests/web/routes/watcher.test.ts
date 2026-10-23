@@ -92,6 +92,32 @@ describe('watcher routes', () => {
     expect((await post(a, '/api/watcher/start')).status).toBe(404);
   });
 
+  it('every 404 while the watcher is off says enabled: false, so the page can show the off state', async () => {
+    const { config } = setup(false);
+    const a = app(config, undefined);
+    for (const path of [
+      '/api/watcher/graph',
+      '/api/watcher/log',
+      '/api/watcher/birth',
+      '/api/watcher/neurons/n-1',
+    ])
+      expect(await (await a.request(path)).json()).toEqual({
+        enabled: false,
+        error: 'The watcher is off',
+      });
+    for (const path of ['/api/watcher/start', '/api/watcher/stop'])
+      expect(await (await post(a, path)).json()).toEqual({
+        enabled: false,
+        error: 'The watcher is off',
+      });
+  });
+
+  it('a tenant 404 never reveals whether the watcher is on', async () => {
+    const { config, watcher } = setup();
+    const body = await (await app(config, watcher, 't1').request('/api/watcher/graph')).json();
+    expect(body).toEqual({ error: 'Not found' });
+  });
+
   it('a tenant gets 404 on every route', async () => {
     const { config, watcher } = setup();
     const a = app(config, watcher, 't1');

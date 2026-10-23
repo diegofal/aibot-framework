@@ -34,6 +34,7 @@ export const DEFAULT_PERMISSIONS: Record<string, ToolPermissionEntry> = {
   core_memory_replace: { agentLoop: 'free', conversation: 'free' },
   core_memory_search: { agentLoop: 'free', conversation: 'free' },
   save_memory: { agentLoop: 'free', conversation: 'free' },
+  fleet_memory_search: { agentLoop: 'free', conversation: 'free' },
   manage_goals: { agentLoop: 'free', conversation: 'free' },
   web_search: { agentLoop: 'free', conversation: 'free' },
   web_fetch: { agentLoop: 'free', conversation: 'free' },

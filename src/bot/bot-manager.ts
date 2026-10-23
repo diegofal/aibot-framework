@@ -59,6 +59,7 @@ import { createFleetWorkerPool } from '../workers/wiring';
 import { ActivityStream } from './activity-stream';
 import { type AgentFeedback, AgentFeedbackStore } from './agent-feedback-store';
 import { AgentLoop, type AgentLoopResult, type AgentLoopState } from './agent-loop';
+import { OPERATOR_MESSAGE_HOOK, type OperatorMessageEvent } from './agent-loop-utils';
 import { BackendCircuitBreaker, DEFAULT_CIRCUIT_BREAKER_CONFIG } from './agent-retry-engine';
 import { AskHumanStore, type PendingQuestionInfo, type RunAnswerRouter } from './ask-human-store';
 import {
@@ -407,6 +408,7 @@ export class BotManager {
       // users never steer: only operator surfaces call this.
       recordOperatorMessage: (botId: string, text: string) => {
         this.curiosityService?.recordOperatorMessage(botId, text);
+        this.emitOperatorMessage(botId, 'telegram', text);
       },
       // An ask_human answered from Telegram: the loop that asked should resume
       // now, as it does when the answer comes from the dashboard.
@@ -1588,7 +1590,28 @@ export class BotManager {
    * authenticated dashboard thread). Becomes a curiosity directive.
    */
   recordOperatorMessage(botId: string, text: string): boolean {
+    this.emitOperatorMessage(botId, 'dashboard', text);
     return this.curiosityService.recordOperatorMessage(botId, text);
+  }
+
+  /** `operator_message` on the shared hooks (the watcher senses it); a listener that throws is swallowed. */
+  private emitOperatorMessage(
+    botId: string,
+    channelKind: OperatorMessageEvent['channelKind'],
+    text: string
+  ): void {
+    if (typeof text !== 'string' || !text.trim()) return;
+    const event: OperatorMessageEvent = {
+      botId,
+      channelKind,
+      timestamp: Date.now(),
+      text: text.slice(0, 1000),
+    };
+    try {
+      this.hookEmitter.emit(OPERATOR_MESSAGE_HOOK, event);
+    } catch (err) {
+      this.logger.warn({ err, botId }, 'operator_message listener threw');
+    }
   }
 
   /** Curiosity DNA state for every bot (knowledge map, navigator, dispatches, taste). */
@@ -1617,6 +1640,11 @@ export class BotManager {
   /** The shared lifecycle hook emitter (`human_inbound` rides on it); the watcher senses it. */
   getHooks(): HookEmitter {
     return this.hookEmitter;
+  }
+
+  /** The fleet-wide circuit breaker per backend; the watcher consults it before every LLM call. */
+  getCircuitBreaker(): BackendCircuitBreaker | undefined {
+    return this.botContext?.circuitBreaker;
   }
 
   /** The fleet contact directory; the watcher reads people from it at birth. */

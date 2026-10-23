@@ -10,7 +10,8 @@
  *   GET  /birth            birth.json, or {} before birth
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
- * sees the whole fleet). With the watcher off every route but GET / is 404.
+ * sees the whole fleet). With the watcher off every route but GET / is 404
+ * with `{ enabled: false, error }`.
  */
 import { Hono } from 'hono';
 import type { Config } from '../../config';
@@ -41,6 +42,8 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     (deps.config.watcher as WatcherConfig | undefined) ?? WATCHER_DEFAULTS;
   const live = (): Watcher | undefined => (cfg().enabled ? deps.watcher() : undefined);
   const notFound = { error: 'Not found' };
+  /** Every 404 while the watcher is off: the page switches to its off state on `enabled: false`. */
+  const off = { enabled: false, error: 'The watcher is off' };
 
   app.use('*', async (c, next) => {
     if (!isAdminOrSingleTenant(getTenantId(c))) return c.json(notFound, 404);
@@ -54,19 +57,19 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 
   app.post('/start', async (c) => {
     const w = live();
-    if (!w) return c.json({ enabled: false, error: 'The watcher is off' }, 404);
+    if (!w) return c.json(off, 404);
     return c.json({ enabled: true, ...(await w.start()) });
   });
 
   app.post('/stop', async (c) => {
     const w = live();
-    if (!w) return c.json({ enabled: false, error: 'The watcher is off' }, 404);
+    if (!w) return c.json(off, 404);
     return c.json({ enabled: true, ...(await w.stop()) });
   });
 
   app.get('/graph', (c) => {
     const w = live();
-    if (!w) return c.json(notFound, 404);
+    if (!w) return c.json(off, 404);
     const snap = w.graph.snapshot();
     const max = cfg().graph.maxNeurons;
     const neurons =
@@ -78,7 +81,7 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 
   app.get('/log', (c) => {
     const w = live();
-    if (!w) return c.json(notFound, 404);
+    if (!w) return c.json(off, 404);
     const date = c.req.query('date');
     if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return c.json({ error: 'date must be YYYY-MM-DD' }, 400);
@@ -93,7 +96,7 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 
   app.get('/neurons/:id', (c) => {
     const w = live();
-    if (!w) return c.json(notFound, 404);
+    if (!w) return c.json(off, 404);
     const neuron = w.graph.get(c.req.param('id'));
     if (!neuron) return c.json(notFound, 404);
     const edges = w.graph.edgesOf(neuron.id);
@@ -108,7 +111,7 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 
   app.get('/birth', (c) => {
     const w = live();
-    if (!w) return c.json(notFound, 404);
+    if (!w) return c.json(off, 404);
     return c.json(w.readBirth() ?? {});
   });
 

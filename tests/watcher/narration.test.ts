@@ -11,6 +11,13 @@ import {
   narrateMetBot,
   narrateMetPerson,
   narrateNoEmbeddings,
+  narrateNoticeCapped,
+  narrateNoticeFailed,
+  narrateNoticeLearned,
+  narrateNoticePass,
+  narrateNoticePaused,
+  narrateNoticeRecognised,
+  narrateNoticeUnparsable,
   narrateNoticed,
   narrateRemembered,
   narrateResumeBirth,
@@ -21,6 +28,7 @@ import {
   narrateStageFailed,
   narrateUnreadable,
   narrateWake,
+  quoteModelText,
 } from '../../src/watcher/narration';
 
 describe('narration', () => {
@@ -287,5 +295,67 @@ describe('formatting', () => {
     expect(formatAgo(12 * 60_000)).toBe('12 min');
     expect(formatAgo(6 * 3_600_000)).toBe('6 h');
     expect(formatAgo(3 * 86_400_000)).toBe('3 d');
+  });
+});
+
+describe('notice narration (phase 2)', () => {
+  test('quoteModelText quotes, collapses whitespace and clips model output', () => {
+    expect(quoteModelText('  a\n  "b"  ')).toBe(`"a 'b'"`);
+    expect(quoteModelText('x'.repeat(300))).toBe(`"${'x'.repeat(199)}…"`);
+  });
+
+  test('narrateNoticeLearned', () => {
+    expect(
+      narrateNoticeLearned({
+        text: 'The Acme invoice is due on Friday',
+        kind: 'fact',
+        confidence: 'high',
+        bots: ['Jarvis', 'Scout'],
+      })
+    ).toBe(
+      'Learned: "The Acme invoice is due on Friday" (fact, confidence high; from Jarvis and Scout).'
+    );
+    expect(narrateNoticeLearned({ text: 'Invoices', kind: 'topic', bots: ['Jarvis'] })).toBe(
+      'Learned: "Invoices" (topic; from Jarvis).'
+    );
+  });
+
+  test('narrateNoticeRecognised', () => {
+    expect(narrateNoticeRecognised({ text: 'Invoices', activations: 4 })).toBe(
+      'Recognised again: "Invoices" (4 activations).'
+    );
+  });
+
+  test('narrateNoticePass, with and without anything kept', () => {
+    expect(narrateNoticePass({ events: 5, kept: 2, recognised: 1, dropped: 2 })).toBe(
+      'Noticed 5 events: kept 2, recognised 1, let 2 go.'
+    );
+    expect(narrateNoticePass({ events: 3, kept: 0, recognised: 0, dropped: 3 })).toBe(
+      'Noticed 3 events; nothing worth keeping.'
+    );
+  });
+
+  test('narrateNoticeFailed', () => {
+    expect(narrateNoticeFailed({ events: 4, error: 'spawn claude ENOENT' })).toBe(
+      'Could not notice: the model call failed ("spawn claude ENOENT"). I kept the 4 events for the next pass.'
+    );
+  });
+
+  test('narrateNoticeUnparsable', () => {
+    expect(narrateNoticeUnparsable({ events: 1 })).toBe(
+      "Could not read the model's answer as JSON. I kept the 1 event for the next pass."
+    );
+  });
+
+  test('narrateNoticeCapped', () => {
+    expect(narrateNoticeCapped({ maxPerDay: 288 })).toBe(
+      "Reached today's noticing budget (288 calls). I keep sensing and will notice again tomorrow."
+    );
+  });
+
+  test('narrateNoticePaused', () => {
+    expect(narrateNoticePaused({ backend: 'claude-cli' })).toBe(
+      'Claude CLI is rate-limited across the fleet (circuit open). Noticing is paused until it recovers.'
+    );
   });
 });

@@ -6,15 +6,28 @@ import { abortErrorFrom } from './abort';
  * Every Claude CLI call spawns a process plus an MCP bridge; cycles,
  * conversations, feedback, curiosity and (later) task workers all go through
  * `claudeGenerate` / `claudeGenerateWithTools`, which acquire a slot here.
- * Waiters are served by priority (`interactive` > `loop` > `worker`), FIFO
+ * Waiters are served by priority (`interactive` > `loop` > `worker` >
+ * `watcher`, the fleet watcher's own calls, which never delay a bot), FIFO
  * within a priority. A waiter whose signal aborts leaves the queue and rejects
  * with `LLMAbortedError`.
  */
-export type CliPriority = 'interactive' | 'loop' | 'worker';
+export type CliPriority = 'interactive' | 'loop' | 'worker' | 'watcher';
 
 export const DEFAULT_CLAUDE_CLI_MAX_CONCURRENT = 3;
 
-const PRIORITY_RANK: Record<CliPriority, number> = { interactive: 0, loop: 1, worker: 2 };
+const PRIORITY_RANK: Record<CliPriority, number> = {
+  interactive: 0,
+  loop: 1,
+  worker: 2,
+  watcher: 3,
+};
+
+const zeroByPriority = (): Record<CliPriority, number> => ({
+  interactive: 0,
+  loop: 0,
+  worker: 0,
+  watcher: 0,
+});
 
 export interface CliSemaphoreStats {
   limit: number;
@@ -36,7 +49,7 @@ export type CliRelease = () => void;
 export class CliSemaphore {
   private limit: number;
   private active = 0;
-  private activeBy: Record<CliPriority, number> = { interactive: 0, loop: 0, worker: 0 };
+  private activeBy: Record<CliPriority, number> = zeroByPriority();
   private queue: Waiter[] = [];
   private seq = 0;
 
@@ -94,7 +107,7 @@ export class CliSemaphore {
   }
 
   stats(): CliSemaphoreStats {
-    const queuedByPriority: Record<CliPriority, number> = { interactive: 0, loop: 0, worker: 0 };
+    const queuedByPriority = zeroByPriority();
     for (const w of this.queue) queuedByPriority[w.priority]++;
     return {
       limit: this.limit,

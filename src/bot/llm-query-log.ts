@@ -20,7 +20,9 @@ export interface LlmQueryEntry {
     | 'curiosity:navigator'
     | 'curiosity:extractor'
     | 'curiosity:editor'
-    | 'worker';
+    | 'worker'
+    | 'watcher:notice'
+    | 'watcher:integrate';
   model: string;
   backend: string;
   temperature?: number;

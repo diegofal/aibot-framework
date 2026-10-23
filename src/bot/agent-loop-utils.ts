@@ -293,6 +293,26 @@ export interface HumanInboundEvent {
   text?: string;
 }
 
+/**
+ * A message from the operator on an operator surface: the private Telegram
+ * chat `operator.telegramChatId` (`ConversationPipeline.handleConversation`)
+ * or a dashboard thread (`POST /api/conversations/:botId/:id/messages`).
+ * Emitted by `BotManager` next to the curiosity directive, on the same raw
+ * `HookEmitter`. Neither surface emits `human_inbound` (Telegram is counted
+ * through `recordHumanMessage`, the dashboard is not a channel), so the
+ * watcher listens here to learn from what the operator says; nothing else
+ * subscribes, so no engagement signal is counted twice.
+ */
+export const OPERATOR_MESSAGE_HOOK = 'operator_message';
+
+export interface OperatorMessageEvent {
+  botId: string;
+  channelKind: 'telegram' | 'dashboard';
+  timestamp: number;
+  /** Clipped to 1000 chars, like `human_inbound`. */
+  text: string;
+}
+
 export type FeedbackSource = 'ask_human' | 'agent_feedback' | 'human_message';
 
 /** A human signal recorded on the bot's schedule (the stores it comes from are consumed destructively). */

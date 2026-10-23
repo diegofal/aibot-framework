@@ -13,6 +13,7 @@ import {
   formatDuration,
   formatTokens,
   isWatcherMade,
+  isWatcherOff,
   kindLabel,
   legendHtml,
   logListHtml,
@@ -628,5 +629,17 @@ describe('small formatters', () => {
     for (const k of NEURON_KINDS) expect(html).toContain(`</i>${k}</span>`);
     expect(html).toContain('from a bot');
     expect(html).toContain("the watcher's own");
+  });
+});
+
+describe('isWatcherOff', () => {
+  it('is true only for an { enabled: false } answer (GET / or any 404 while off)', () => {
+    expect(isWatcherOff({ enabled: false })).toBe(true);
+    expect(isWatcherOff({ enabled: false, error: 'The watcher is off' })).toBe(true);
+    expect(isWatcherOff({ enabled: true, running: true })).toBe(false);
+    expect(isWatcherOff({ error: 'Not found' })).toBe(false);
+    expect(isWatcherOff(null)).toBe(false);
+    expect(isWatcherOff(undefined)).toBe(false);
+    expect(isWatcherOff('nope')).toBe(false);
   });
 });

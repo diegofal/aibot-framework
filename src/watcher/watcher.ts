@@ -4,15 +4,20 @@
  * `src/index.ts` only when `config.watcher.enabled`. Every change it makes is
  * re-emitted as a `WatcherEvent` (`event`, and under its own type name) for
  * `/ws/watcher`. Nothing throws out of `start()` or `stop()`: a failing stage
- * is a log row and `state().lastError`. No LLM calls in this phase.
+ * is a log row and `state().lastError`. Phase 2: tier 1 noticing (`notice.ts`)
+ * on a timer that starts only once birth (or the wake resync) is done and only
+ * with `notice.enabled`; every LLM call goes through `instrumented` (daily
+ * budget + fleet breaker, query log under `__watcher__`).
  */
 import { EventEmitter } from 'node:events';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
+import type { LlmQueryEntry } from '../bot/llm-query-log';
 import type { ChannelStatus } from '../bot/telegram-errors';
 import type { UserDirectory } from '../bot/user-directory';
 import type { ChannelKind } from '../channel/types';
 import type { Config } from '../config';
 import type { Logger } from '../logger';
+import type { OllamaClient } from '../ollama';
 import {
   type BirthDeps,
   beginBirth,
@@ -21,10 +26,19 @@ import {
   relayout,
   runResync,
 } from './birth';
+import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
 import { Graph, type GraphChange } from './graph';
+import {
+  type InstrumentOptions,
+  type InstrumentedClient,
+  type WatcherTierClient,
+  createWatcherClients,
+  instrumented,
+} from './llm';
 import { WatcherLog } from './log';
 import { narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
+import { type NoticeOutcome, Noticer } from './notice';
 import { bufferFile, watcherDir, watcherLogDir } from './paths';
 import { type SenderInfo, Sense } from './sense';
 import {
@@ -40,6 +54,15 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
+/** How often the notice timer asks whether a pass is due (`Noticer.due`). */
+export const NOTICE_CHECK_MS = 30_000;
+
+/** The fleet breaker as the watcher uses it (`BackendCircuitBreaker`). */
+export interface WatcherBreaker {
+  isOpen(backend: string): boolean;
+  recordFailure(backend: string, error: unknown): unknown;
+  recordSuccess(backend: string): void;
+}
 
 type Listenable = Pick<EventEmitter, 'on' | 'off'>;
 
@@ -57,6 +80,12 @@ export interface WatcherDeps {
   embed?: (text: string) => Promise<number[]>;
   now?: () => number;
   readCycles?: BirthDeps['readCycles'];
+  /** Tier clients (`createWatcherClients`); without `notice` there is no noticing. */
+  llm?: Partial<Record<WatcherTier, WatcherTierClient>>;
+  /** The shared LLM query log; every watcher call is one entry under `__watcher__`. */
+  queryLog?: { append(entry: LlmQueryEntry): void };
+  /** The fleet circuit breaker (`BotContext.circuitBreaker`). */
+  breaker?: WatcherBreaker;
 }
 
 export class Watcher extends EventEmitter {
@@ -64,6 +93,8 @@ export class Watcher extends EventEmitter {
   readonly log: WatcherLog;
   readonly buffer = new WorkingBuffer();
   readonly dir: string;
+  /** Daily LLM budget, shared by every tier. */
+  readonly budget: DailyBudget;
   private readonly sense: Sense;
   private readonly logger: Logger;
   private readonly now: () => number;
@@ -73,6 +104,9 @@ export class Watcher extends EventEmitter {
   private lastError?: string;
   private background: Promise<void> = Promise.resolve();
   private timers: ReturnType<typeof setInterval>[] = [];
+  private noticeTimer: ReturnType<typeof setInterval> | null = null;
+  private noticeRun: Promise<NoticeOutcome | null> | null = null;
+  private readonly noticer?: Noticer;
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -103,6 +137,82 @@ export class Watcher extends EventEmitter {
       sender: (e) => this.sender(e),
       logger: this.logger,
     });
+    this.budget = new DailyBudget({
+      dir: this.dir,
+      now: this.now,
+      limits: () => this.cfg(),
+      isCircuitOpen: (tier) => {
+        const backend = deps.llm?.[tier]?.backend;
+        try {
+          return !!backend && !!deps.breaker?.isOpen(backend);
+        } catch {
+          return false;
+        }
+      },
+    });
+    const notice = this.tierClient('notice');
+    if (notice) {
+      this.noticer = new Noticer({
+        graph: this.graph,
+        buffer: this.buffer,
+        log: this.log,
+        client: notice,
+        budget: this.budget,
+        config: () => this.cfg(),
+        now: this.now,
+        botName: (id) => this.botName(id),
+        ...(deps.embed ? { embed: deps.embed } : {}),
+        logger: this.logger,
+      });
+    }
+  }
+
+  /** A tier's client wrapped with budget, breaker and query log (phase 3 asks for `integrate`). */
+  tierClient(tier: WatcherTier): InstrumentedClient | undefined {
+    const client = this.deps.llm?.[tier];
+    if (!client) return undefined;
+    const opts: InstrumentOptions = {
+      tier,
+      caller: tier === 'notice' ? 'watcher:notice' : 'watcher:integrate',
+      budget: this.budget,
+      now: this.now,
+      ...(this.deps.queryLog ? { queryLog: this.deps.queryLog } : {}),
+      ...(this.deps.breaker ? { breaker: this.deps.breaker } : {}),
+    };
+    return instrumented(client, opts);
+  }
+
+  /** True while the notice timer runs (after birth, with `notice.enabled`). */
+  get noticing(): boolean {
+    return this.noticeTimer !== null;
+  }
+
+  /** What `fleet_memory_search` reads: the graph while the watcher runs. */
+  fleetMemory(): { graph: Graph; embed?: (text: string) => Promise<number[]> } | undefined {
+    if (!this.running) return undefined;
+    return { graph: this.graph, ...(this.deps.embed ? { embed: this.deps.embed } : {}) };
+  }
+
+  /**
+   * One notice pass now (the timer calls it when due). Null when noticing is
+   * off or there is no notice client. Never throws.
+   */
+  noticeNow(): Promise<NoticeOutcome | null> {
+    const noticer = this.noticer;
+    if (!noticer || !this.cfg().notice.enabled || !this.running) return Promise.resolve(null);
+    if (this.noticeRun) return this.noticeRun;
+    this.setPhase('notice');
+    this.noticeRun = noticer
+      .run()
+      .catch((err): NoticeOutcome | null => {
+        this.fail(err);
+        return null;
+      })
+      .finally(() => {
+        this.noticeRun = null;
+        if (this.running && !this.stopping) this.setPhase('sense');
+      });
+    return this.noticeRun;
   }
 
   /** Writes the wake row and returns; birth or resync continue in the background. */
@@ -157,7 +267,9 @@ export class Watcher extends EventEmitter {
       this.sense.detach();
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
+      this.stopNoticeTimer();
       await this.background;
+      await this.noticeRun;
       this.sense.tick();
       this.graph.compact();
       this.buffer.persist(bufferFile(this.dir));
@@ -226,8 +338,27 @@ export class Watcher extends EventEmitter {
     return work()
       .catch((err) => this.fail(err))
       .finally(() => {
-        if (this.running && !this.stopping) this.setPhase('sense');
+        if (this.running && !this.stopping) {
+          this.setPhase('sense');
+          this.startNoticeTimer();
+        }
       });
+  }
+
+  /** Begins only after birth or resync; checks `notice.enabled` on every tick too. */
+  private startNoticeTimer(): void {
+    if (this.noticeTimer || !this.noticer || !this.cfg().notice.enabled) return;
+    const timer = setInterval(() => {
+      if (!this.running || this.stopping) return;
+      if (this.cfg().notice.enabled && this.noticer?.due()) void this.noticeNow();
+    }, NOTICE_CHECK_MS);
+    (timer as { unref?: () => void }).unref?.();
+    this.noticeTimer = timer;
+  }
+
+  private stopNoticeTimer(): void {
+    if (this.noticeTimer) clearInterval(this.noticeTimer);
+    this.noticeTimer = null;
   }
 
   private startTimers(): void {
@@ -274,6 +405,7 @@ export class Watcher extends EventEmitter {
       contact = undefined;
     }
     const isOperator =
+      e.channelKind === 'dashboard' ||
       contact?.metadata?.role === 'operator' ||
       (e.channelKind === 'telegram' && opChat !== undefined && String(opChat) === String(address));
     return {
@@ -325,6 +457,12 @@ export interface FleetWatcherSource {
   getChannelState(botId: string): ChannelStatus | undefined;
   getUserDirectory(): Pick<UserDirectory, 'list' | 'findByChannel'>;
   getOllamaClient(): { embed(text: string, model: string): Promise<{ embedding: number[] }> };
+  /** Phase 2: query log, breaker and tool registry (optional so older fakes still fit). */
+  getLlmQueryLog?(): { append(entry: LlmQueryEntry): void };
+  getCircuitBreaker?(): WatcherBreaker | undefined;
+  getToolRegistry?(): {
+    setFleetMemory(source: () => ReturnType<Watcher['fleetMemory']>): void;
+  };
 }
 
 /**
@@ -341,7 +479,9 @@ export function createFleetWatcher(
   const model = (config.soul as { search?: { embeddingModel?: string } } | undefined)?.search
     ?.embeddingModel;
   const ollama = manager.getOllamaClient();
-  return new Watcher({
+  const breaker = manager.getCircuitBreaker?.();
+  const queryLog = manager.getLlmQueryLog?.();
+  const watcher = new Watcher({
     config: () => config,
     logger,
     activityStream: manager.getActivityStream(),
@@ -350,5 +490,14 @@ export function createFleetWatcher(
     ...(model
       ? { embed: async (text: string) => (await ollama.embed(text, model)).embedding }
       : {}),
+    llm: createWatcherClients(config, { logger, ollama: ollama as OllamaClient }),
+    ...(queryLog ? { queryLog } : {}),
+    ...(breaker ? { breaker } : {}),
   });
+  try {
+    manager.getToolRegistry?.().setFleetMemory(() => watcher.fleetMemory());
+  } catch (err) {
+    logger.warn({ err }, 'Watcher: could not register fleet_memory_search');
+  }
+  return watcher;
 }

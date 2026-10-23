@@ -114,6 +114,8 @@ export interface BufferItem {
   /** ISO time tier 0 saw the event (metric 2 compares it with the event's own time). */
   noticedAt: string;
   touched: string[];
+  /** The operator wrote it (only then may notice keep its words as a fact). */
+  fromOperator?: true;
 }
 
 export type LinkStatus = 'ok' | 'no-embeddings' | 'pending';

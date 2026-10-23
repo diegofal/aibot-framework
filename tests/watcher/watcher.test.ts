@@ -3,8 +3,10 @@ import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HUMAN_INBOUND_HOOK } from '../../src/bot/agent-loop-utils';
+import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-loop-utils';
+import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
 import type { Config } from '../../src/config';
+import type { LLMClient } from '../../src/core/llm-client';
 import { graphFiles } from '../../src/watcher/paths';
 import { WATCHER_DEFAULTS, type WatcherEvent } from '../../src/watcher/types';
 import { Watcher, type WatcherDeps, createFleetWatcher } from '../../src/watcher/watcher';
@@ -30,13 +32,13 @@ function soul(id: string, name: string) {
   return dir;
 }
 
-function make(overrides: Partial<WatcherDeps> = {}) {
+function make(overrides: Partial<WatcherDeps> = {}, watcherCfg: Record<string, unknown> = {}) {
   const config = {
     bots: [{ id: 'b1', name: 'b1', soulDir: soul('b1', 'Jarvis'), enabled: true }],
     paths: { data: join(root, 'data') },
     soul: {},
     operator: { telegramChatId: 42 },
-    watcher: { ...WATCHER_DEFAULTS, enabled: true },
+    watcher: { ...WATCHER_DEFAULTS, enabled: true, ...watcherCfg },
   } as unknown as Config;
   const activityStream = new EventEmitter();
   const hooks = new EventEmitter();
@@ -228,6 +230,140 @@ describe('Watcher', () => {
   });
 });
 
+function noticeClient(reply: string | (() => string)) {
+  const prompts: string[] = [];
+  const client = {
+    backend: 'claude-cli',
+    generate: async () => ({ text: '' }),
+    chat: async (messages: Array<{ content: string }>) => {
+      prompts.push(messages.map((m) => m.content).join('\n'));
+      return {
+        text: typeof reply === 'string' ? reply : reply(),
+        usage: {
+          model: 'claude-haiku-5-5',
+          promptTokens: 10,
+          completionTokens: 5,
+          totalTokens: 15,
+        },
+      };
+    },
+  } as unknown as LLMClient;
+  return { client, prompts };
+}
+
+const noticeOn = { notice: { ...WATCHER_DEFAULTS.notice, enabled: true } };
+
+describe('Watcher noticing (phase 2)', () => {
+  test('the notice timer starts only after birth, and only when notice is enabled', async () => {
+    const { client } = noticeClient('{"keep":[]}');
+    const llm = { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' as const } };
+    const on = make({ llm }, noticeOn);
+    await on.watcher.start();
+    expect(on.watcher.noticing).toBe(false);
+    await on.watcher.idle();
+    expect(on.watcher.noticing).toBe(true);
+    await on.watcher.stop();
+    expect(on.watcher.noticing).toBe(false);
+
+    const off = make({ llm });
+    await off.watcher.start();
+    await off.watcher.idle();
+    expect(off.watcher.noticing).toBe(false);
+    expect(await off.watcher.noticeNow()).toBeNull();
+    await off.watcher.stop();
+  });
+
+  test('an operator message becomes a watcher neuron, logged under __watcher__', async () => {
+    let firstId = '';
+    const { client, prompts } = noticeClient(() =>
+      JSON.stringify({
+        keep: [
+          {
+            text: 'The boiler is serviced in May',
+            kind: 'fact',
+            confidence: 'high',
+            from: [firstId],
+          },
+        ],
+      })
+    );
+    const entries: LlmQueryEntry[] = [];
+    const { watcher, hooks, events } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        queryLog: { append: (e) => entries.push(e) },
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'The boiler is serviced in May',
+    });
+    const first = watcher.buffer.items()[0];
+    expect(first.fromOperator).toBe(true);
+    firstId = first.id;
+    const out = await watcher.noticeNow();
+    expect(out?.status).toBe('noticed');
+    expect(prompts[0]).toContain('from the operator');
+    const n = watcher.graph.list().find((x) => x.text === 'The boiler is serviced in May');
+    expect(n).toMatchObject({ kind: 'fact', createdBy: 'watcher', support: { bots: ['b1'] } });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ botId: '__watcher__', caller: 'watcher:notice' });
+    expect(watcher.budget.used('notice').calls).toBe(1);
+    expect(
+      events.some((e) => e.type === 'watcher:neuron' && (e.data as { id: string }).id === n?.id)
+    ).toBe(true);
+    expect(watcher.state().phase).toBe('sense');
+    await watcher.stop();
+  });
+
+  test('an open fleet breaker stops the call before it is made', async () => {
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const { watcher, activityStream } = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        breaker: { isOpen: () => true, recordFailure: () => ({}), recordSuccess: () => {} },
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    activityStream.emit('activity', { type: 'worker:waiting', botId: 'b1', timestamp: t });
+    expect((await watcher.noticeNow())?.status).toBe('breaker');
+    expect(prompts).toHaveLength(0);
+    await watcher.stop();
+  });
+
+  test('a dashboard-channel human_inbound counts as the operator', async () => {
+    const { watcher, hooks } = make();
+    await watcher.start();
+    await watcher.idle();
+    hooks.emit(HUMAN_INBOUND_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      chatId: 'x',
+      timestamp: t,
+      text: 'Pay the Acme invoice',
+    });
+    expect(watcher.buffer.items()[0].fromOperator).toBe(true);
+    await watcher.stop();
+  });
+
+  test('fleetMemory() is the graph while running, undefined when stopped', async () => {
+    const { watcher } = make();
+    expect(watcher.fleetMemory()).toBeUndefined();
+    await watcher.start();
+    expect(watcher.fleetMemory()?.graph).toBe(watcher.graph);
+    await watcher.stop();
+    expect(watcher.fleetMemory()).toBeUndefined();
+  });
+});
+
 describe('createFleetWatcher', () => {
   const manager = (embedCalls: string[]) => ({
     getActivityStream: () => new EventEmitter() as never,
@@ -260,6 +396,39 @@ describe('createFleetWatcher', () => {
     expect(w).toBeInstanceOf(Watcher);
     expect(await (w as unknown as { deps: WatcherDeps }).deps.embed?.('hi')).toEqual([1, 2]);
     expect(calls).toEqual(['nomic:hi']);
+  });
+
+  test('wires the notice client, query log, breaker and fleet_memory_search', async () => {
+    const config = {
+      bots: [],
+      paths: { data: root },
+      soul: {},
+      agentLoop: { claudeTimeout: 1000 },
+      watcher: { ...WATCHER_DEFAULTS, enabled: true },
+    } as unknown as Config;
+    const breaker = { isOpen: () => false, recordFailure: () => ({}), recordSuccess: () => {} };
+    const queryLog = { append: () => {} };
+    let source: (() => unknown) | undefined;
+    const w = createFleetWatcher(config, noopLogger, {
+      ...manager([]),
+      getCircuitBreaker: () => breaker,
+      getLlmQueryLog: () => queryLog,
+      getToolRegistry: () => ({
+        setFleetMemory: (s: () => unknown) => {
+          source = s;
+        },
+      }),
+    }) as Watcher;
+    const deps = (w as unknown as { deps: WatcherDeps }).deps;
+    expect(deps.llm?.notice?.model).toBe('claude-haiku-5-5');
+    expect(deps.llm?.integrate?.model).toBe('claude-opus-5-5');
+    expect(deps.breaker).toBe(breaker);
+    expect(deps.queryLog).toBe(queryLog);
+    expect(source).toBeDefined();
+    expect(source?.()).toBeUndefined();
+    await w.start();
+    expect((source?.() as { graph: unknown }).graph).toBe(w.graph);
+    await w.stop();
   });
 
   test('no embed without an embedding model', () => {

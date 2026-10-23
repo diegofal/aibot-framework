@@ -39,13 +39,13 @@ export interface HttpDeps {
   token?: string;
 }
 
-function headers(deps: HttpDeps): Record<string, string> {
+export function headers(deps: HttpDeps): Record<string, string> {
   const h: Record<string, string> = { 'content-type': 'application/json' };
   if (deps.token) h.Authorization = `Bearer ${deps.token}`;
   return h;
 }
 
-function url(deps: HttpDeps, path: string): string {
+export function url(deps: HttpDeps, path: string): string {
   return `${(deps.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '')}${path}`;
 }
 
