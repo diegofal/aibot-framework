@@ -17,6 +17,7 @@ import { mountBall } from './watcher-ball.js';
 import {
   SPAWN_PACE,
   applyWatcherEvent,
+  ballPlanFor,
   birthDate,
   canStartReplay,
   createWatcherModel,
@@ -281,9 +282,15 @@ function onEffect(effect) {
     case 'archive':
       if (ballLive) page.ball.update(effect.id);
       break;
-    case 'pulse':
-      if (ballLive) page.ball.pulse(effect.id);
+    case 'pulse': {
+      const plan = ballLive ? ballPlanFor(page.model, effect) : null;
+      if (plan) {
+        page.ball.pulse(plan.pulse);
+        if (plan.flashEdge) page.ball.flashEdge(plan.flashEdge.from, plan.flashEdge.to);
+        page.ball.pauseRotation(plan.pauseRotateMs);
+      }
       break;
+    }
     case 'edge':
       if (ballLive) page.ball.edgesChanged();
       break;

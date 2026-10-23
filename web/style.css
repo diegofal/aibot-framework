@@ -9632,6 +9632,19 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-canvas:active {
   cursor: grabbing;
 }
+.watcher-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  color: var(--stage-ink);
+  opacity: 0.45;
+  font-size: var(--fs-xs);
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.watcher-ball.engaged .watcher-hint {
+  opacity: 0;
+}
 @keyframes watcher-fade-in {
   from {
     opacity: 0;

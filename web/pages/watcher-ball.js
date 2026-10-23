@@ -16,12 +16,15 @@
  */
 import {
   SPAWN_PACE,
+  autoRotates,
   drainCount,
+  edgeFlashLevel,
   edgeVisible,
   neuronBrightness,
   neuronColour,
   neuronPosition,
   neuronRadius,
+  wheelZooms,
 } from './watcher-helpers.js';
 
 const THREE_URL = '/vendor/three.module.js';
@@ -119,6 +122,11 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   tip.className = 'watcher-tip';
   tip.hidden = true;
   host.appendChild(tip);
+
+  const hint = document.createElement('div');
+  hint.className = 'watcher-hint';
+  hint.textContent = 'Click the ball, then scroll to zoom (or Ctrl + scroll)';
+  host.appendChild(hint);
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 50);
@@ -300,6 +308,49 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   scene.add(lines);
   let lastEdgeBuild = 0;
 
+  // The edge from a pulsed goal/topic to its bot, brightened for a moment.
+  const flashGeometry = new THREE.BufferGeometry();
+  const flashMaterial = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+  const flashLines = new THREE.LineSegments(flashGeometry, flashMaterial);
+  flashLines.frustumCulled = false;
+  scene.add(flashLines);
+  /** `{ from, to, at }` with `at` in performance.now() ms. */
+  let flashes = [];
+
+  function flashEdge(from, to) {
+    if (!slotOf.has(from) || !slotOf.has(to)) return;
+    flashes = flashes.filter((f) => !(f.from === from && f.to === to));
+    flashes.push({ from, to, at: performance.now() });
+  }
+
+  function drawFlashes(now) {
+    if (!flashes.length) return;
+    flashes = flashes.filter((f) => edgeFlashLevel(now - f.at) > 0);
+    const pos = [];
+    const col = [];
+    for (const f of flashes) {
+      const level = edgeFlashLevel(now - f.at);
+      for (const id of [f.from, f.to]) {
+        const i = slotOf.get(id);
+        if (i === undefined) continue;
+        pos.push(arr.position[i * 3], arr.position[i * 3 + 1], arr.position[i * 3 + 2]);
+        col.push(
+          Math.min(1, arr.aColor[i * 3] * 0.4 + 0.6) * level,
+          Math.min(1, arr.aColor[i * 3 + 1] * 0.4 + 0.6) * level,
+          Math.min(1, arr.aColor[i * 3 + 2] * 0.4 + 0.6) * level
+        );
+      }
+    }
+    flashGeometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    flashGeometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  }
+
   function rebuildEdges() {
     const pos = [];
     const col = [];
@@ -394,12 +445,17 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
 
   let drag = null;
   let lastInput = 0;
+  let pausedUntil = 0;
+  // The wheel zooms only once the ball was clicked (until the pointer leaves).
+  let engaged = false;
   let hoverAt = null;
   const local = (e) => {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
   const onDown = (e) => {
+    engaged = true;
+    host.classList.add('engaged');
     drag = { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY };
     lastInput = performance.now();
     canvas.setPointerCapture?.(e.pointerId);
@@ -432,8 +488,12 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   const onLeave = () => {
     hoverAt = null;
     tip.hidden = true;
+    engaged = false;
+    host.classList.remove('engaged');
   };
   const onWheel = (e) => {
+    // Not engaged: let the page scroll.
+    if (!wheelZooms({ engaged, ctrlKey: e.ctrlKey, metaKey: e.metaKey })) return;
     e.preventDefault();
     orbit.dist = Math.min(8, Math.max(1.3, orbit.dist * Math.exp(e.deltaY * 0.001)));
     lastInput = performance.now();
@@ -487,8 +547,16 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
       carry = 0;
     }
     if (moving.size) stepMoves();
-    if (!drag && now - lastInput > AUTO_ROTATE_IDLE_MS)
+    if (
+      autoRotates(now, {
+        lastInputMs: lastInput,
+        pausedUntilMs: pausedUntil,
+        dragging: !!drag,
+        idleMs: AUTO_ROTATE_IDLE_MS,
+      })
+    )
       orbit.theta += (dt / 1000) * AUTO_ROTATE_RAD_PER_S;
+    drawFlashes(now);
     placeCamera();
 
     if (now - lastBrightness > BRIGHTNESS_REFRESH_MS) {
@@ -542,6 +610,12 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     move,
     archive: update,
     pulse,
+    /** Brighten the edge between two shown neurons for `EDGE_FLASH_MS`. */
+    flashEdge,
+    /** Hold auto-rotation still for `ms` (a pulse, so the eye can find it). */
+    pauseRotation(ms) {
+      pausedUntil = Math.max(pausedUntil, performance.now() + ms);
+    },
     edgesChanged() {
       edgesDirty = true;
     },
@@ -551,6 +625,7 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
     /** Empty the ball (before a replay). */
     clear() {
       queue.length = 0;
+      flashes = [];
       moving.clear();
       slotOf.clear();
       idAt.length = 0;
@@ -572,6 +647,9 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
       material.dispose();
       edgeGeometry.dispose();
       edgeMaterial.dispose();
+      flashGeometry.dispose();
+      flashMaterial.dispose();
+      hint.remove();
       for (const r of rings) r.geometry.dispose();
       ringMat.dispose();
       renderer.dispose();

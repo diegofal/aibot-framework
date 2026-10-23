@@ -674,3 +674,65 @@ export function neuronSheetBody(detail, nowMs = Date.now(), { textOf = () => nul
       : '<div class="text-dim">No connections yet.</div>'
   }</div>`;
 }
+
+/* ── Activity on the ball ─────────────────────────────────────────── */
+
+/** How long auto-rotation holds still after a pulse, so the eye can find it. */
+export const PULSE_ROTATE_PAUSE_MS = 2000;
+/** How long the edge from a pulsed neuron to its bot stays brightened. */
+export const EDGE_FLASH_MS = 1200;
+
+/**
+ * The `owned_by` edge from neuron `id` to the bot (`entity`) that owns it,
+ * or null. The server activates that bot with its goal or topic; the page
+ * brightens this edge between the two.
+ */
+export function ownerEdgeOf(model, id) {
+  if (!model?.edges || !model.neurons || typeof id !== 'string') return null;
+  for (const e of model.edges.values()) {
+    if (e?.rel !== 'owned_by' || e.from !== id) continue;
+    if (model.neurons.get(e.to)?.kind === 'entity') return e;
+  }
+  return null;
+}
+
+/**
+ * What one model effect does to the ball beyond its own bookkeeping: for a
+ * pulse, `{ pulse, flashEdge: { from, to } | null, pauseRotateMs }`; null for
+ * every effect that touches no neuron the page has (log rows such as the
+ * sense summary, state, none).
+ */
+export function ballPlanFor(model, effect) {
+  if (!effect || effect.kind !== 'pulse' || !model?.neurons?.has(effect.id)) return null;
+  const edge = ownerEdgeOf(model, effect.id);
+  return {
+    pulse: effect.id,
+    flashEdge: edge ? { from: edge.from, to: edge.to } : null,
+    pauseRotateMs: PULSE_ROTATE_PAUSE_MS,
+  };
+}
+
+/** Auto-rotate this frame? Not while dragging, after recent input, or in a pulse pause. */
+export function autoRotates(
+  nowMs,
+  { lastInputMs = 0, pausedUntilMs = 0, dragging = false, idleMs }
+) {
+  if (dragging) return false;
+  if (nowMs - lastInputMs <= idleMs) return false;
+  return nowMs >= pausedUntilMs;
+}
+
+/** Brightness (1 → 0, linear) of a flashed edge `elapsedMs` after the flash. */
+export function edgeFlashLevel(elapsedMs) {
+  if (!(elapsedMs >= 0) || elapsedMs >= EDGE_FLASH_MS) return 0;
+  return 1 - elapsedMs / EDGE_FLASH_MS;
+}
+
+/**
+ * Does the wheel zoom the ball? Only once the ball is engaged (clicked, until
+ * the pointer leaves) or with Ctrl/Cmd held; otherwise the page scrolls.
+ */
+export function wheelZooms(input) {
+  if (!input) return false;
+  return !!(input.engaged || input.ctrlKey || input.metaKey);
+}
