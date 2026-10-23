@@ -1029,3 +1029,61 @@ describe('Watcher start that fails', () => {
     await watcher.stop();
   });
 });
+
+describe('Watcher stop during birth (cancellation is per run)', () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const rowsAfterSleep = (w: Watcher) => {
+    const rows = w.log.recent(500);
+    const sleepSeq = Math.max(...rows.filter((r) => r.op === 'sleep').map((r) => r.seq));
+    return rows.filter((r) => r.seq > sleepSeq);
+  };
+
+  test('a birth abandoned by stop never writes after the sleep row', async () => {
+    let embedCalls = 0;
+    const { watcher } = make({
+      // Slow and deaf to the signal: outlives stop's bound.
+      embed: async (): Promise<number[]> => {
+        embedCalls++;
+        await sleep(150);
+        return [1, 0];
+      },
+      stopTimeoutMs: 30,
+    });
+    await watcher.start();
+    for (let i = 0; i < 100 && embedCalls === 0; i++) await sleep(5);
+    expect(embedCalls).toBeGreaterThan(0);
+    await watcher.stop();
+    const callsAtStop = embedCalls;
+    await sleep(500);
+    expect(rowsAfterSleep(watcher)).toEqual([]);
+    expect(watcher.readBirth()?.finishedAt).toBeUndefined();
+    expect(watcher.readBirth()?.done).not.toContain('link');
+    expect(embedCalls).toBe(callsAtStop);
+    expect(watcher.state().phase).toBe('sleep');
+  });
+
+  test('a start after a stop that abandoned a hung birth returns promptly and is born', async () => {
+    let hang = true;
+    let embedCalls = 0;
+    const { watcher } = make({
+      embed: (): Promise<number[]> => {
+        embedCalls++;
+        return hang ? new Promise(() => {}) : Promise.resolve([1, 0]);
+      },
+      stopTimeoutMs: 30,
+    });
+    await watcher.start();
+    for (let i = 0; i < 100 && embedCalls === 0; i++) await sleep(5);
+    expect(embedCalls).toBeGreaterThan(0);
+    await watcher.stop();
+    hang = false;
+    const started = Date.now();
+    const state = await watcher.start();
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(state.running).toBe(true);
+    await watcher.idle();
+    expect(watcher.readBirth()?.finishedAt).toBeDefined();
+    expect(watcher.state().phase).toBe('sense');
+    await watcher.stop();
+  });
+});

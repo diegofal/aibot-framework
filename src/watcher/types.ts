@@ -237,12 +237,30 @@ export function isHumanInbound(event: SensedEvent): event is HumanInboundEvent {
 }
 
 /**
- * `Neuron.meta` key set to `'true'` when an operator message (a verified
- * operator surface) is part of what supports the neuron, directly (notice) or
- * through the neurons an insight stands on (integrate). `fleet_memory_search`
- * shows such neurons only to the operator.
+ * `Neuron.meta` key set to `'true'` when operator material is part of what
+ * supports the neuron, directly (notice) or through what an insight stands on
+ * (integrate). Operator material is an operator message AND every bot-activity
+ * event (cycles, tools, surprises, workers, goals, tasks): what the operator's
+ * bots work on is the operator's. `fleet_memory_search` shows such neurons only
+ * to the operator.
  */
 export const OPERATOR_SOURCED = 'operatorSourced';
+
+/** A buffer item that is a non-operator human message (already reduced to topic words by tier 0). */
+export function isPublicHumanItem(item: Pick<BufferItem, 'event' | 'fromOperator'>): boolean {
+  return isHumanInbound(item.event) && item.fromOperator !== true;
+}
+
+/**
+ * Operator-sourced unless every item is a non-operator human message (public
+ * content is only topic words, and it is the caller's own channel). No items
+ * at all is operator-sourced too: conservative.
+ */
+export function restsOnOperatorMaterial(
+  items: ReadonlyArray<Pick<BufferItem, 'event' | 'fromOperator'>>
+): boolean {
+  return items.length === 0 || items.some((i) => !isPublicHumanItem(i));
+}
 
 export function isOperatorSourced(n: Pick<Neuron, 'meta'>): boolean {
   return n.meta?.[OPERATOR_SOURCED] === 'true';

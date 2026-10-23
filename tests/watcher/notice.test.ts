@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
 import type { LLMClient } from '../../src/core/llm-client';
+import { createFleetMemorySearchTool } from '../../src/tools/fleet-memory-search';
 import { DailyBudget } from '../../src/watcher/budget';
 import { WorkingBuffer } from '../../src/watcher/buffer';
 import { Graph } from '../../src/watcher/graph';
@@ -140,6 +141,24 @@ const operatorSays = (botId: string, text: string): SensedEvent => ({
   timestamp: t,
   text,
 });
+
+/** A public user's message, already reduced to topic words by tier 0. */
+const userSays = (botId: string, text: string): SensedEvent => ({
+  botId,
+  channelKind: 'web',
+  chatId: 'w-anon',
+  userId: 'w-anon',
+  timestamp: t,
+  text,
+});
+
+const surprise = (botId: string): SensedEvent =>
+  ({
+    type: 'curiosity:surprise',
+    botId,
+    timestamp: t,
+    data: { summary: 'the tax deadline moved', surprises: ['tax deadline moved to May'] },
+  }) as SensedEvent;
 
 const toolError = (botId: string, cycleId?: string): SensedEvent => ({
   type: 'tool:error',
@@ -536,13 +555,62 @@ describe('Noticer provenance (phase 3)', () => {
     expect(n.meta?.operatorSourced).toBe('true');
   });
 
-  test('a neuron only bot activity supports is not operatorSourced', async () => {
+  // What the operator's bots work on (cycles, tools, surprises, goals) is
+  // operator material: only the operator may read it back.
+  test('a neuron bot activity supports is operatorSourced', async () => {
     const e = item(toolError('b1', 'c-1'));
     const s = setup({ reply: keepOf('wiley.com blocks the fetcher', [e.id], 'pattern') });
     s.buffer.push(e);
     const out = await s.noticer.run();
     const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  test('a neuron a curiosity surprise supports is operatorSourced', async () => {
+    const e = item(surprise('b1'));
+    const s = setup({ reply: keepOf('Jarvis learned the tax deadline moved', [e.id]) });
+    s.buffer.push(e);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  test('a neuron only non-operator messages support is not operatorSourced', async () => {
+    const a = item(userSays('b1', 'weather'));
+    const b = item(userSays('b1', 'umbrella'));
+    const s = setup({ reply: keepOf('Users of Jarvis ask about the weather', [a.id, b.id]) });
+    s.buffer.push(a);
+    s.buffer.push(b);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
     expect(n.meta?.operatorSourced).toBeUndefined();
+  });
+
+  test('a user message plus bot activity is operatorSourced', async () => {
+    const a = item(userSays('b1', 'weather'));
+    const b = item(surprise('b1'));
+    const s = setup({ reply: keepOf('Jarvis looks into the weather', [a.id, b.id]) });
+    s.buffer.push(a);
+    s.buffer.push(b);
+    const out = await s.noticer.run();
+    const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
+    expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  test('fleet_memory_search never shows an anonymous caller what a surprise taught', async () => {
+    const e = item(surprise('b1'));
+    const s = setup({ reply: keepOf('Jarvis learned the tax deadline moved to May', [e.id]) });
+    s.buffer.push(e);
+    expect((await s.noticer.run()).status).toBe('noticed');
+    const tool = createFleetMemorySearchTool(() => ({ graph: s.graph }));
+    const query = { query: 'tax deadline moved', _botId: 'b1' };
+    const anon = await tool.execute(
+      { ...query, _requester: { isOperator: false, channelKind: 'web', address: 'w-anon' } },
+      quiet as never
+    );
+    expect(anon.content).not.toContain('tax deadline');
+    const op = await tool.execute({ ...query, _actor: 'operator' }, quiet as never);
+    expect(op.content).toContain('tax deadline');
   });
 
   test('records the earliest supporting event time as eventAt (latency to notice)', async () => {

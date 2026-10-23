@@ -556,10 +556,37 @@ describe('Integrator.run', () => {
     expect(s.graph.list().find((x) => x.kind === 'insight')?.meta?.operatorSourced).toBe('true');
   });
 
-  test('without operator material nothing is operator-sourced', async () => {
+  // A cycle is what the operator's bot works on: operator material.
+  test('bot activity shown to the model marks what the pass creates', async () => {
     const s = setup({ reply: full });
     await ran(s);
-    expect(s.graph.list().find((x) => x.kind === 'insight')?.meta?.operatorSourced).toBeUndefined();
+    expect(s.graph.list().find((x) => x.kind === 'insight')?.meta?.operatorSourced).toBe('true');
+  });
+
+  test('only non-operator messages and unmarked neurons: nothing is operator-sourced', async () => {
+    const s = setup({ reply: full });
+    s.integrator.observe(
+      item(
+        {
+          botId: 'b1',
+          channelKind: 'web',
+          chatId: 'w-anon',
+          userId: 'w-anon',
+          timestamp: t - 60_000,
+          text: 'acme leads',
+        },
+        1.5
+      )
+    );
+    s.integrator.observeNotice({
+      status: 'noticed',
+      created: [s.n.leadA, s.n.leadB],
+      recognised: [],
+    });
+    await s.integrator.run();
+    const insight = s.graph.list().find((x) => x.kind === 'insight');
+    expect(insight).toBeDefined();
+    expect(insight?.meta?.operatorSourced).toBeUndefined();
   });
 
   test('integrate off (config) makes run idle without a call', async () => {

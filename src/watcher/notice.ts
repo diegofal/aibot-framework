@@ -10,7 +10,10 @@
  * non-operator text to topic words; tool args and results never reach it) and
  * what a kept item becomes: its support (bots, cycles) is built from the
  * buffer items it names, never from what the model claims, and a "fact" that
- * only non-operator messages support is kept as a topic. Every row is
+ * only non-operator messages support is kept as a topic. A neuron is
+ * `operatorSourced` unless every item behind it is a non-operator message
+ * (`restsOnOperatorMaterial`: bot activity — cycles, tools, surprises, workers,
+ * goals, tasks — is operator material). Every row is
  * code-written; model text appears only quoted. Budget and breaker are
  * consulted by the instrumented client before every call; a capped day logs
  * one row, an open circuit one row per episode. The buffer is drained only
@@ -48,6 +51,8 @@ import {
   type Vec3,
   type WatcherConfig,
   isHumanInbound,
+  isPublicHumanItem,
+  restsOnOperatorMaterial,
 } from './types';
 
 /** Most buffer items one pass shows the model (the most salient first). */
@@ -339,7 +344,7 @@ export class Noticer {
     const support = from.map((id) => items.get(id) as BufferItem);
 
     // Privacy: a fact needs an operator message or a bot's own activity behind it.
-    const onlyPublic = support.every((i) => isHumanInbound(i.event) && i.fromOperator !== true);
+    const onlyPublic = support.every(isPublicHumanItem);
     const kind: NoticeKeepKind = onlyPublic && keep.kind !== 'topic' ? 'topic' : keep.kind;
 
     const same = graph.findSimilarText(text, NOTICE_DEDUPE_TEXT)[0];
@@ -400,7 +405,7 @@ export class Noticer {
         source: 'notice',
         model,
         ...(eventAt ? { eventAt } : {}),
-        ...(support.some((i) => i.fromOperator === true) ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        ...(restsOnOperatorMaterial(support) ? { [OPERATOR_SOURCED]: 'true' } : {}),
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

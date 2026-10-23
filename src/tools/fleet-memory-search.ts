@@ -16,7 +16,8 @@ import type { Logger } from '../logger';
  *   every live neuron;
  * - anyone else (the bot's own runs, its users, collaboration, MCP): only
  *   neurons that are not operator-sourced (`meta.operatorSourced`: operator
- *   messages, and everything birth read from operator-owned material — memory,
+ *   messages, what the bots work on — cycles, tools, surprises, workers, goals,
+ *   tasks —, and everything birth read from operator-owned material — memory,
  *   goals, contacts) AND either supported by the calling bot itself
  *   (`support.bots` has `_botId`) or a general fleet entity (`kind: entity`,
  *   the bots themselves, minus tenant bots). What only another bot or the

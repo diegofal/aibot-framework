@@ -5,9 +5,13 @@
  * row under `__watcher__` (Work → Sent to you), and never karma.
  */
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ToolAuditEntry } from '../../src/bot/tool-audit-log';
 import type { Config } from '../../src/config';
 import { ProactiveThrottle } from '../../src/tools/send-proactive-message';
+import { Broadcaster } from '../../src/watcher/broadcast';
 import {
   WATCHER_QUESTION_PREFIX,
   deliverWatcherQuestion,
@@ -94,15 +98,20 @@ describe('deliverWatcherQuestion', () => {
     expect(throttle.check('__watcher__').allowed).toBe(true);
   });
 
-  test('without an operator chat it fails without sending', async () => {
-    const { deps, sent } = setup();
+  // Like the no-route case: a failure here would be retried and every retry
+  // would use one of the bot's 3 broadcasts a day, capping the other kinds.
+  test('without an operator chat the dashboard is the channel: delivered, audited, counted', async () => {
+    const { deps, sent, audit, throttle } = setup();
     const out = await deliverWatcherQuestion(
       { ...deps, operatorChatId: () => undefined },
       'b1',
       'x'
     );
-    expect(out.ok).toBe(false);
+    expect(out.ok).toBe(true);
+    expect(out.detail).toContain('Sent to you');
     expect(sent).toEqual([]);
+    expect(audit[0]).toMatchObject({ botId: '__watcher__', success: true });
+    expect(throttle.check('__watcher__').allowed).toBe(false);
   });
 });
 
@@ -150,5 +159,37 @@ describe('fleetBroadcastDelivery.question', () => {
       'x'
     );
     expect(out?.ok).toBe(false);
+  });
+});
+
+describe('question broadcasts without an operator Telegram chat (cap)', () => {
+  test('a question lands once; repeats are duplicates and other kinds are not capped', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'watcher-q-'));
+    try {
+      const { deps } = setup();
+      const noChat = { ...deps, operatorChatId: (): number | undefined => undefined };
+      const b = new Broadcaster({
+        dir,
+        now: () => NOW,
+        delivery: {
+          question: (botId: string, text: string) => deliverWatcherQuestion(noChat, botId, text),
+          wake: async () => ({ ok: true }),
+        },
+      });
+      const q = {
+        botId: 'b1',
+        kind: 'question' as const,
+        text: 'Who owns Acme?',
+        insightId: 'n-1',
+      };
+      expect((await b.send(q)).status).toBe('delivered');
+      expect((await b.send(q)).status).toBe('duplicate');
+      expect((await b.send(q)).status).toBe('duplicate');
+      expect(b.countToday('b1')).toBe(1);
+      const wake = await b.send({ botId: 'b1', kind: 'wake', text: '', insightId: 'n-2' });
+      expect(wake.status).toBe('delivered');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -14,7 +14,9 @@
  * the cap; a failed delivery still counts toward the daily cap, but is not a
  * duplicate: only a delivered (or still in flight) broadcast blocks another
  * of the same kind for the same insight, so a failed one may be retried.
- * Never throws.
+ * A question with no Telegram route or no operator chat is not a failure: it
+ * lands in Work → Sent to you (`deliverWatcherQuestion`), so it is never
+ * retried into the cap. Never throws.
  *
  * The planner sees what was delivered and not shown yet (`pendingFor`, 24 h)
  * in its "## Fleet broadcast" section; the cycle row names what it served

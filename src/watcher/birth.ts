@@ -86,7 +86,10 @@ export interface BirthDeps {
   embed?: (text: string) => Promise<number[]>;
   /** Cycle-log rows of a bot; defaults to `<data>/agent-cycles`. */
   readCycles?: (botId: string, sinceMs: number, nowMs: number) => AgentCycleRecord[];
-  /** Checked between stages and link batches (the watcher is stopping). */
+  /**
+   * True once this run was cancelled (its own stop signal; never reset). Checked
+   * between stages, link batches and around every embedding: a cancelled run writes nothing more.
+   */
   isCancelled?: () => boolean;
 }
 
@@ -167,6 +170,7 @@ export async function continueBirth(deps: BirthDeps, record: BirthRecord): Promi
     try {
       await STAGES[stage](ctx);
     } catch (err) {
+      if (deps.isCancelled?.()) return record;
       deps.log.say('birth', 'birth:failed', narrateStageFailed(stage, err));
       deps.logger.warn({ err, stage }, 'Watcher birth: stage failed');
     }
@@ -193,12 +197,14 @@ export async function runResync(
   const ctx: StageCtx = { ...deps, mode: 'resync', record, created: {} };
   const before = new Set(deps.graph.list().map((n) => n.id));
   for (const stage of ['fleet', 'people', 'goals'] as const) {
+    if (deps.isCancelled?.()) return { bots: 0, goals: 0, people: 0 };
     try {
       await STAGES[stage](ctx);
     } catch (err) {
       deps.log.say('birth', 'resync:failed', narrateStageFailed(stage, err));
     }
   }
+  if (deps.isCancelled?.()) return { bots: 0, goals: 0, people: 0 };
   const fresh = deps.graph.list().filter((n) => !before.has(n.id));
   placeNew(deps.graph, fresh);
   const result = {
@@ -737,13 +743,18 @@ async function stageLink(ctx: StageCtx): Promise<void> {
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
     await mapLimit(batch, concurrency, async (n) => {
+      // A cancelled run neither starts another embedding nor stores one that
+      // settled after the stop: its writes belong to no live run.
+      if (ctx.isCancelled?.()) return;
       try {
         const vec = await ctx.embed?.(`${n.kind}: ${n.text}`);
+        if (ctx.isCancelled?.()) return;
         if (Array.isArray(vec) && vec.length > 0) ctx.graph.setEmbedding(n.id, vec);
       } catch (err) {
         failure ??= err;
       }
     });
+    if (ctx.isCancelled?.()) return;
     if (failure && !embeddedAny && ctx.graph.embeddedIds().length === 0) {
       const msg = failure instanceof Error ? failure.message : String(failure);
       ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(msg));

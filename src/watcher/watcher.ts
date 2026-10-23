@@ -583,12 +583,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    */
   async start(): Promise<WatcherState> {
     if (this.running) return this.state();
-    // A birth a failed start left behind stops between stages; never run two.
-    await this.background;
+    // A birth or resync that a stop (or a failed start) abandoned is already
+    // cancelled through its own run signal and drops every write once its
+    // in-flight embedding settles. Give it the stop bound to wind down, never
+    // longer: an embedding that never answers must not hang the next start.
+    await this.waitBounded(this.background);
     if (this.running) return this.state();
     this.running = true;
     this.stopping = false;
     this.lastError = undefined;
+    // A fresh signal per run: the abandoned run keeps its aborted one forever.
     if (this.stopCtrl.signal.aborted) this.stopCtrl = new AbortController();
     try {
       this.graph.load();
@@ -603,13 +607,13 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       if (!record || !record.done.includes('wake')) {
         this.setPhase('birth');
         const fresh = beginBirth(deps);
-        this.background = this.runBackground(() =>
+        this.background = this.runBackground(deps, () =>
           continueBirth(deps, fresh).then(() => undefined)
         );
       } else if (!record.finishedAt) {
         this.setPhase('birth');
         this.log.say('birth', 'wake', narrateResumeBirth(record.stage));
-        this.background = this.runBackground(() =>
+        this.background = this.runBackground(deps, () =>
           continueBirth(deps, record).then(() => undefined)
         );
       } else {
@@ -624,7 +628,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
           })
         );
         this.setPhase('birth');
-        this.background = this.runBackground(() => runResync(deps).then(() => undefined));
+        this.background = this.runBackground(deps, () => runResync(deps).then(() => undefined));
       }
       this.sense.attach(this.deps.activityStream, this.deps.hooks);
       this.startTimers();
@@ -696,6 +700,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.outcomesRun,
       this.introspectRun,
     ].filter((p): p is Promise<never> => !!p);
+    if (!(await this.waitBounded(Promise.allSettled(work)))) {
+      this.logger.warn(
+        { boundMs: this.deps.stopTimeoutMs ?? WATCHER_STOP_TIMEOUT_MS },
+        'Watcher: in-flight work did not stop in time'
+      );
+    }
+  }
+
+  /** Wait for `work` at most `stopTimeoutMs`; true when it settled in time. Never throws. */
+  private async waitBounded(work: Promise<unknown>): Promise<boolean> {
     const bound = this.deps.stopTimeoutMs ?? WATCHER_STOP_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<'timeout'>((resolve) => {
@@ -703,12 +717,13 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     });
     try {
       const outcome = await Promise.race([
-        Promise.allSettled(work).then(() => 'done' as const),
+        work.then(
+          () => 'done' as const,
+          () => 'done' as const
+        ),
         timeout,
       ]);
-      if (outcome === 'timeout') {
-        this.logger.warn({ boundMs: bound }, 'Watcher: in-flight work did not stop in time');
-      }
+      return outcome === 'done';
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -749,6 +764,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   private birthDeps(): BirthDeps {
+    const signal = this.stopCtrl.signal;
     let directory: BirthDeps['userDirectory'];
     try {
       directory = this.deps.botManager.getUserDirectory();
@@ -766,15 +782,21 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       ...(directory ? { userDirectory: directory } : {}),
       ...(this.deps.embed ? { embed: this.deps.embed } : {}),
       ...(this.deps.readCycles ? { readCycles: this.deps.readCycles } : {}),
-      isCancelled: () => this.stopping,
+      // Bound to this run's signal, not to `stopping`: stop clears `stopping`
+      // when it returns, which would un-cancel a birth it left behind.
+      isCancelled: () => signal.aborted,
     };
   }
 
-  private runBackground(work: () => Promise<void>): Promise<void> {
+  private runBackground(deps: BirthDeps, work: () => Promise<void>): Promise<void> {
     return work()
-      .catch((err) => this.fail(err))
+      .catch((err) => {
+        if (!deps.isCancelled?.()) this.fail(err);
+      })
       .finally(() => {
-        if (this.running && !this.stopping) {
+        // A run that was cancelled never moves the phase nor starts timers:
+        // the watcher is asleep, or a newer run owns them.
+        if (this.running && !this.stopping && !deps.isCancelled?.()) {
           this.setPhase('sense');
           this.startNoticeTimer();
           this.startIntegrateTimer();
@@ -1029,7 +1051,8 @@ export interface WatcherQuestionDeps {
  * Ask the operator a question broadcast's text, without the bot's executor (so
  * no karma, no use of the bot's own cooldown, nothing in its audit): the shared
  * proactive throttle keyed `__watcher__` (the fleet cap is shared), the bot's
- * Telegram route (none = kept for the dashboard, like `send_proactive_message`),
+ * Telegram route (none, or no `operator.telegramChatId` = kept for the
+ * dashboard, like `send_proactive_message`),
  * and one tool-audit row under `__watcher__` that `/api/proactive` lists in
  * Work → Sent to you. A refusal is audited as `policy`; only a delivery that
  * landed is counted against the throttle. Never throws.
@@ -1064,20 +1087,28 @@ export async function deliverWatcherQuestion(
   const gate = deps.throttle.check(WATCHER_BOT_ID);
   if (!gate.allowed) return finish(false, gate.reason, 'policy');
   const chatId = deps.operatorChatId();
-  if (chatId === undefined || chatId === null || !Number.isFinite(Number(chatId))) {
-    return finish(false, 'The operator has no Telegram chat configured (operator.telegramChatId).');
-  }
+  // No operator Telegram chat is the same case as no route: the dashboard is
+  // the channel, so the question has landed (Work → Sent to you). Reporting a
+  // failure would make it retryable, and every retry would use one of the
+  // bot's daily broadcasts, capping the other kinds for nothing. The rule for
+  // the cap stays the one in broadcast.ts: a real failure (throttle, Telegram
+  // error) still counts.
+  const hasChat = chatId !== undefined && chatId !== null && Number.isFinite(Number(chatId));
   let route: TelegramRoute | undefined;
-  try {
-    route = deps.telegram(botId);
-  } catch {
-    route = undefined;
+  if (hasChat) {
+    try {
+      route = deps.telegram(botId);
+    } catch {
+      route = undefined;
+    }
   }
   if (!route) {
     deps.throttle.record(WATCHER_BOT_ID);
     return finish(
       true,
-      'Not sent by Telegram: no Telegram connection for this bot. The operator sees it in the dashboard (Work → Sent to you).'
+      hasChat
+        ? 'Not sent by Telegram: no Telegram connection for this bot. The operator sees it in the dashboard (Work → Sent to you).'
+        : 'Not sent by Telegram: the operator has no Telegram chat configured (operator.telegramChatId). The operator sees it in the dashboard (Work → Sent to you).'
     );
   }
   try {

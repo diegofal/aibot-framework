@@ -16,8 +16,9 @@
  * of them, a prediction gets a `dueAt` from its horizon, a broadcast must name
  * a known bot and a usable insight, and `attending` keeps only known ids.
  * Everything a pass creates is `operatorSourced` when anything the model saw
- * was (an operator event, or a neuron already marked): `fleet_memory_search`
- * then shows it only to the operator.
+ * was (an event other than a non-operator human message — bot activity counts —,
+ * or a neuron already marked): `fleet_memory_search` then shows it only to the
+ * operator.
  *
  * One pass at a time (`run` shares the one in flight); pending is cleared only
  * for what the pass read, and only after a readable answer. Rows are
@@ -60,6 +61,7 @@ import {
   type Vec3,
   type WatcherConfig,
   isOperatorSourced,
+  isPublicHumanItem,
 } from './types';
 
 /** Never two attempts closer than this, whatever triggers them. */
@@ -396,8 +398,10 @@ export class Integrator {
     for (const n of [...fresh, ...neighbourhood, ...goals, ...insights, ...predictions]) {
       shown.set(n.id, n);
     }
+    // Same rule as notice: any event that is not a non-operator human message
+    // (bot activity is operator material) marks what the pass creates.
     const sawOperator =
-      events.some((i) => i.fromOperator === true) ||
+      events.some((i) => !isPublicHumanItem(i)) ||
       [...shown.values()].some((n) => isOperatorSourced(n));
 
     const prompt = buildIntegratePrompt(input);
