@@ -1,8 +1,41 @@
 # Watcher: implementation plan, phases 0 to 4
 
-**Status:** planned (2026-10-23), nothing built. Design and metrics live in `watcher-consciousness-plan.md`; this file is the build order. Every file:line anchor below was read on 2026-10-23 against `main` at `6658980`.
+**Status:** implemented (2026-10-23), phases 0 to 4 on `feat/watcher`; not deployed yet. Deviations as built: "As built" below. Originally planned the same day, nothing built then. Design and metrics live in `watcher-consciousness-plan.md`; this file is the build order. Every file:line anchor below was read on 2026-10-23 against `main` at `6658980`.
 **Workflow per phase:** one worktree `../aibot-watcher-p<N>` on branch `feat/watcher-p<N>` from `main` (working agreements §3, own `bun install`). Implementation by Opus, test first. Local gate `bun run lint && bun run typecheck && bun test`. PR. Review by Fable. Fixes by Opus. Sign-off, fast-forward merge, then `docker compose up -d --build` (ask before deploying: it restarts the fleet). After phase 1, verify birth live from the Watcher page.
 **Scope control:** anything that surfaces outside the phase's list goes to `docs/technical-debt.md` or the next phase, never into the same PR.
+
+---
+
+## As built (2026-10-23): deviations from this plan
+
+Phases 0 to 4 are implemented on the integration branch `feat/watcher` (commits `e604f27` phase 0, `c6e093d` page, `3fa183c` phase 1, `902d476` phase 2, `06e844f` phase 3, `8e5dbd5` phase 4). Collected from the code and the commit messages; the CHANGELOG entry "The fleet watcher (phases 0–4)" is the record.
+
+**Workflow**
+- One integration branch and worktree (`D:\aibot-watcher`, `feat/watcher`) with one commit per phase, instead of one worktree, PR and deploy per phase. No deploy was done: "Verification after merge" for phases 1, 3 and 4 is still pending.
+- The phase 1 page landed as its own commit (`c6e093d`); Three.js is r186 (`three.module.js` + `three.core.js`, pinned with sha256 in `web/vendor/README.md`).
+
+**Phase 2**
+- Operator messages never emitted `human_inbound` (the Telegram operator chat and dashboard threads are not channels), so the watcher could not tell the operator apart. `BotManager` now emits `operator_message` (`OPERATOR_MESSAGE_HOOK` in `agent-loop-utils.ts`) on both surfaces; sense keeps its words and flags `BufferItem.fromOperator`. Sense trusts only that hook and the operator's private Telegram chat; a directory role or a `human_inbound` claiming `dashboard` is not trusted.
+- `BotManager.getCircuitBreaker`; the canary plants and checks through dashboard threads (an operator surface).
+- Every 404 while the watcher is off is `{ enabled: false, error }`, and the page switches to its off state on any of them.
+
+**Phase 3**
+- `DailyBudget.reserve` holds a slot until `record`, so concurrent triggers cannot pass the cap (the plan only said "a cap that cannot be exceeded by a retry loop").
+- Broadcast caps: 3 per bot per UTC day and one per insight and kind, counted from `broadcasts.jsonl` (restart-safe) and written before delivery is awaited.
+- Privacy beyond the plan: neurons record `meta.operatorSourced`; `fleet_memory_search` returns them only to the verified operator. Broadcasts can still carry such text to a bot: `docs/technical-debt.md`, "Watcher broadcasts can carry operator-sourced insight text to a bot".
+- `isLoopCaller` excludes `watcher:*` callers, so the goal drawer never rebuilds a bot cycle from a watcher call.
+
+**Phase 4**
+- `interoception` is composed inside the `Watcher` (`Watcher.interoception()`) from its own budget, buffer and integrator plus readers that `createFleetWatcher` supplies (`karmaScores`, `semaphore` = `getClaudeCliStats`, `runningCycle`); `WatcherDeps.interoception` stays as an override. Operator silence comes from the operator items sense sees (and the restored buffer), so it is null until the operator writes after a restart.
+- `attention().items` reads the buffer **and** what integrate has pending: notice drains the buffer on every pass, so the buffer alone is usually empty.
+- `drivenBy` keeps only the "How I am" keys the prompt showed; without an interoception record it is not written.
+- Introspection asks the watcher's model over its own recent log (the code-written rows, up to 20), not the state. Decided: the notice tier client, so it is cheap and shares the notice daily cap, the breaker and the query log, under a new caller `watcher:introspect`. A refused or failed call writes no row; an unparsable answer is a row with score 0. Scoring: phase against the current phase; tool is always null for the watcher; goal is the best match among the attended neurons (or the top items when nothing is attended); cause against what those neurons and items say.
+- The daily sampler draws 3 times over what is left of the UTC day, persists the plan (`introspection-schedule.json`), and fires missed samples once, not as a burst. It runs only with `notice.enabled`.
+- "## Your current state" carries the bot's presence as the watcher's own tracker sees it, its running cycle (`AgentLoop.runningCycle`, through the new `BotManager.getRunningCycle`) and the fleet focus without operator-sourced neurons. It is published through `BotContext.watcherSelfState` (`BotManager.setWatcherSelfState`) and is absent while the watcher sleeps.
+- Phase 0's gap (no goal or cause for bots) is closed: `GET /api/agents/:id/presence` gains `cycle` (additive), read by `scripts/watcher/introspect.ts`; the script also takes `--subject watcher` (the server appends the row) and `--subject bot:<id>`.
+- `GET /api/watcher/self` also returns the introspection history and `subjects`; `POST /api/watcher/introspect` answers 409 / 429 / 502 for unavailable / refused / failed. Metric 3 gains `subjects` (`summarizeIntrospection`).
+- No Why for introspection rows (they carry their own field verdicts).
+- Not built: the watcher's own soul dir (`<data>/watcher/soul/`, identity, memory and traits) from the consciousness plan's self-model section.
 
 ---
 

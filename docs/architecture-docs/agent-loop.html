@@ -673,6 +673,17 @@
           </p>
         </div>
 
+        <div class="card">
+          <h3>Fleet Watcher Sections</h3>
+          <p>
+            With the <a href="watcher.html">fleet watcher</a> on, both planner prompts carry two more blocks before Workers / Standing goals / Tasks:
+            <code>## Your current state</code> (<code>buildSelfStateSection</code>: the bot's live phase, tool and since, its running cycle's goal and plan,
+            and what the fleet is attending to; empty without the watcher) and <code>## Fleet broadcast</code> (<code>buildFleetBroadcastSection</code>:
+            broadcasts delivered since the last planner call, plus the optional <code>serves_broadcast</code> field). A watcher that fails only drops its block.
+            The cycle row records <code>broadcastIds</code> and <code>servesBroadcast</code>.
+          </p>
+        </div>
+
         <!-- ============================================================ -->
         <!-- 5b. Planner Backend -->
         <!-- ============================================================ -->

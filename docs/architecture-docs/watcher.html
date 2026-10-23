@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fleet Watcher - AIBot Framework</title>
+  <link rel="stylesheet" href="shared.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- Hamburger (mobile) -->
+    <button class="hamburger" id="hamburger" aria-label="Toggle navigation">&#9776;</button>
+
+    <!-- Backdrop (mobile) -->
+    <div class="sidebar-backdrop" id="backdrop"></div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-logo">
+        AIBot Framework
+        <small>Architecture Docs</small>
+      </div>
+      <nav>
+        <div class="nav-group">Pages</div>
+        <a href="index.html">Overview</a>
+        <a href="architecture.html">Architecture</a>
+        <a href="bot-core.html">Bot Core Modules</a>
+        <a href="data-flows.html">Data Flows</a>
+        <a href="tools-skills.html">Tools &amp; Skills</a>
+        <a href="memory-soul.html">Memory &amp; Soul</a>
+        <a href="agent-loop.html">Agent Loop</a>
+        <a href="web-dashboard.html">Web Dashboard</a>
+        <a href="operator-api.html">Operator API</a>
+        <a href="configuration.html">Configuration</a>
+        <a href="simplifications.html">Simplifications</a>
+        <a href="multi-tenancy.html">Multi-Tenancy</a>
+        <a href="use-cases.html">Use Cases</a>
+        <a href="testing-guide.html">Testing Guide</a>
+        <a href="backlog.html">Backlog</a>
+        <a href="productions.html">Productions Architecture</a>
+        <a href="watcher.html" class="active">Fleet Watcher</a>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="content">
+
+        <h1>Fleet Watcher</h1>
+        <p>One always-on workspace per fleet, in the same process as the bots (<code>src/watcher/</code>). The bots stay on cycles as specialists; the watcher senses every event, keeps what matters as neurons in a graph, integrates across bots, broadcasts back, and keeps a self-model it can be asked about. <strong>Off by default</strong>: <code>watcher.enabled</code>, and each LLM tier has its own switch (<code>notice.enabled</code>, <code>integrate.enabled</code>). Plans: <code>docs/plans/watcher-consciousness-plan.md</code> (design and metrics) and <code>docs/plans/watcher-implementation-plan.md</code> (build order and deviations as built).</p>
+
+        <div class="card">
+          <h2>Tiers</h2>
+          <table>
+            <thead>
+              <tr><th>Tier</th><th>When</th><th>What it does</th><th>Model / cost</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>0 &mdash; sense</strong></td><td>Every activity event, <code>human_inbound</code>, <code>operator_message</code></td><td>Salience and reasons, touches neurons, fills the working buffer. A message from anyone but the operator is reduced to topic words</td><td>No LLM</td></tr>
+              <tr><td><strong>Birth</strong></td><td>First start (resumable, <code>birth.json</code>); a resync on later starts</td><td>Nine stages: wake, fleet, people, goals, knowledge, shared memory, history, link (embeddings, <code>related</code> edges), done</td><td>Embeddings only (<code>OllamaClient.embed</code>)</td></tr>
+              <tr><td><strong>1 &mdash; notice</strong></td><td>Timer, when the buffer is salient enough</td><td>Keeps facts, topics, surprises, questions, patterns, people; support built by code from the cited events</td><td><code>claude-haiku-5-5</code> (or Ollama), <code>notice.maxPerDay</code></td></tr>
+              <tr><td><strong>2 &mdash; integrate</strong></td><td>Salience bar or heartbeat, never within 10 min of the last attempt</td><td>Cross-bot insights, contradictions, predictions; broadcasts; names what it attends to and which interoceptive variables drove it</td><td><code>claude-opus-5-5</code>, <code>integrate.maxPerDay</code> + <code>maxTokensPerDay</code></td></tr>
+              <tr><td><strong>Introspection</strong></td><td>Manual, or 3 random times a day (with <code>notice.enabled</code>)</td><td>Asks the watcher what it is doing over its own log and scores the answer against its attention</td><td>Notice tier (budget and caller <code>watcher:introspect</code>)</td></tr>
+            </tbody>
+          </table>
+          <p>Every call goes through <code>instrumented()</code> (<code>src/watcher/llm.ts</code>): the daily budget reserves a slot first (concurrent triggers cannot pass the cap), the fleet circuit breaker is consulted, the Claude CLI semaphore priority is <code>watcher</code> (below conversation, loop and worker), and one LLM query log entry is written under <code>__watcher__</code> with model, tokens and cost.</p>
+        </div>
+
+        <div class="card">
+          <h2>Back to the bots</h2>
+          <ul>
+            <li><strong>Broadcasts</strong> (<code>broadcast.ts</code>, <code>broadcasts.jsonl</code>) &mdash; wake (run the next cycle now), directive (curiosity directive, source <code>watcher</code>), goal (written to GOALS.md, actor <code>watcher</code>), question (to the operator through <code>send_proactive_message</code>). At most 3 per bot per UTC day and one per insight and kind. The planner shows them as <code>## Fleet broadcast</code>; the plan names one in <code>serves_broadcast</code> and the cycle row records <code>broadcastIds</code> / <code>servesBroadcast</code>.</li>
+            <li><strong><code>fleet_memory_search</code></strong> &mdash; bots query the graph; never the graph in a prompt. Neurons supported by an operator message (<code>meta.operatorSourced</code>) are shown only to the operator.</li>
+            <li><strong><code>## Your current state</code></strong> (phase 4) &mdash; in both planner prompts and the conversation system prompt while the watcher runs: the bot's live phase, tool and since (from the watcher's own presence tracker), its running cycle (goal and plan), and what the fleet is attending to (never operator-sourced neurons).</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h2>Self-model (phase 4)</h2>
+          <table>
+            <thead>
+              <tr><th>Piece</th><th>Content</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>interoception()</code></td><td><code>fleetKarmaAvg</code>, <code>breakerOpen</code>, <code>semaphore</code>, <code>budgetUsedToday</code>, <code>operatorSilenceHours</code>, <code>bufferSalience</code>, <code>lastIntegrateAgoMs</code>. Shown to integrate as <code>## How I am</code>; its answer names <code>drivenBy</code>, kept on the <code>integrate:pass</code> log row</td></tr>
+              <tr><td><code>attention()</code></td><td>Phase, top 5 buffer and pending items with the neurons they touch, and the focus the last integrate pass named (<code>focusNeuronIds</code>). Shown to integrate as <code>## What I am attending to</code></td></tr>
+              <tr><td>Introspection</td><td><code>introspection.jsonl</code> rows (<code>subject: 'watcher'</code> or <code>bot:&lt;id&gt;</code>) with field verdicts (phase, tool, goal, cause), score, model, tokens and cost. Metric 3 is the mean score per subject</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>State on disk (<code>&lt;paths.data&gt;/watcher/</code>)</h2>
+          <pre><code>neurons.jsonl  edges.jsonl  embeddings.jsonl  graph.json   # append-only, compacted
+log/YYYY-MM-DD.jsonl                                       # first-person log, written by code
+birth.json  buffer.json  integrate.json  taste.json
+budget-YYYY-MM-DD.json                                     # calls and tokens per tier, per UTC day
+broadcasts.jsonl                                           # last line per id wins
+introspection.jsonl  introspection-schedule.json
+baseline-*.json  canaries.jsonl                            # phase 0 scripts</code></pre>
+          <p>Readers never throw. Birth reads shared memory only, never <code>memory/users/&lt;id&gt;/</code>.</p>
+        </div>
+
+        <div class="card">
+          <h2>API and page</h2>
+          <p>All of <code>/api/watcher</code> is admin or single tenant (404 for tenants); with the watcher off every route but <code>GET /</code> answers 404 <code>{ enabled: false }</code>.</p>
+          <table>
+            <thead>
+              <tr><th>Route</th><th>Answer</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GET /api/watcher</code>, <code>POST /start</code>, <code>POST /stop</code></td><td><code>WatcherState</code> (running, phase, counts, edges, linkStatus, attending)</td></tr>
+              <tr><td><code>GET /graph</code>, <code>GET /log</code>, <code>GET /neurons/:id</code>, <code>GET /birth</code></td><td>Graph snapshot, log rows, one neuron with its edges and Why, birth record</td></tr>
+              <tr><td><code>GET /metrics?window=7d|30d</code></td><td>8 metrics and 4 guards, computed from records only</td></tr>
+              <tr><td><code>GET /broadcasts</code>, <code>POST /neurons/:id/signal</code></td><td>Broadcasts with Why; 👍/👎 on insights, contradictions, predictions and broadcasts</td></tr>
+              <tr><td><code>GET /self</code></td><td><code>{ running, interoception, attention, introspection, subjects }</code></td></tr>
+              <tr><td><code>POST /introspect</code></td><td>200 scored, 409 unavailable (asleep or no notice model), 429 refused (budget or breaker), 502 failed</td></tr>
+              <tr><td><code>/ws/watcher</code></td><td>Every <code>watcher:*</code> event; history on connect; 403 for tenants</td></tr>
+              <tr><td><code>GET /api/agents/:id/presence</code></td><td>Gains <code>cycle</code> (running cycle id, plan, goal), additive; the bot introspection harness scores goal and cause from it</td></tr>
+            </tbody>
+          </table>
+          <p>Page <code>#/watcher</code> (Insights): the graph as a 3D ball (Three.js vendored in <code>web/vendor/</code>, imported only by <code>watcher-ball.js</code>), the live log, replay of birth or any day, the metric strip, insights and broadcasts with signals, and the cards <em>How I am</em>, <em>Attending to</em> and <em>Introspection</em> (with an "Ask me now" button). With nothing selected the ball highlights what the watcher attends to.</p>
+        </div>
+
+        <div class="card">
+          <h2>Scripts</h2>
+          <ul>
+            <li><code>bun scripts/watcher/baseline.ts</code> &mdash; the phase 0 baseline report.</li>
+            <li><code>bun scripts/watcher/canary.ts</code> &mdash; plant a fact through one bot, check recall through another.</li>
+            <li><code>bun scripts/watcher/introspect.ts --bot &lt;id&gt;</code> or <code>--subject watcher</code> &mdash; ask and score; appends <code>introspection.jsonl</code> (the watcher route appends server-side).</li>
+          </ul>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const hamburger = document.getElementById('hamburger');
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('backdrop');
+    hamburger?.addEventListener('click', () => sidebar?.classList.toggle('open'));
+    backdrop?.addEventListener('click', () => sidebar?.classList.remove('open'));
+  </script>
+</body>
+</html>
