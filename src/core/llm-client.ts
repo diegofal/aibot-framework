@@ -111,6 +111,40 @@ export class OllamaLLMClient implements LLMClient {
 }
 
 /**
+ * Flatten a conversation into one prompt for the Claude CLI. The system
+ * message goes to `--system-prompt` (replacing the CLI's default prompt);
+ * images ride along as image blocks (the most recent `MAX_CLI_IMAGES`), and
+ * the text only notes where they were attached.
+ */
+export function flattenForClaudeCli(messages: ChatMessage[]): {
+  prompt: string;
+  system?: string;
+  images: string[];
+} {
+  const parts: string[] = [];
+  const images: string[] = [];
+  let system: string | undefined;
+
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      system = msg.content;
+    } else if (msg.role === 'tool') {
+      parts.push(`Tool Result: ${msg.content}`);
+    } else {
+      const label = msg.role === 'user' ? 'User' : 'Assistant';
+      let text = msg.content;
+      if (msg.images && msg.images.length > 0) {
+        images.push(...msg.images);
+        text += `\n[${msg.images.length} image(s) attached]`;
+      }
+      parts.push(`${label}: ${text}`);
+    }
+  }
+
+  return { prompt: parts.join('\n\n'), system, images: images.slice(-MAX_CLI_IMAGES) };
+}
+
+/**
  * Wraps claudeGenerate(). chat() formats messages into a single prompt.
  * Tool calling handled natively via MCP bridge (claudeGenerateWithTools).
  */
@@ -152,37 +186,9 @@ export class ClaudeCliLLMClient implements LLMClient {
     return { text: result.response, usage: result.usage };
   }
 
-  /**
-   * Flatten the conversation into one prompt for the CLI. Images ride along as
-   * image blocks (the most recent `MAX_CLI_IMAGES`); the text only notes where
-   * they were attached.
-   */
-  private buildPrompt(messages: ChatMessage[]): {
-    prompt: string;
-    system?: string;
-    images: string[];
-  } {
-    const parts: string[] = [];
-    const images: string[] = [];
-    let system: string | undefined;
-
-    for (const msg of messages) {
-      if (msg.role === 'system') {
-        system = msg.content;
-      } else if (msg.role === 'tool') {
-        parts.push(`Tool Result: ${msg.content}`);
-      } else {
-        const label = msg.role === 'user' ? 'User' : 'Assistant';
-        let text = msg.content;
-        if (msg.images && msg.images.length > 0) {
-          images.push(...msg.images);
-          text += `\n[${msg.images.length} image(s) attached]`;
-        }
-        parts.push(`${label}: ${text}`);
-      }
-    }
-
-    return { prompt: parts.join('\n\n'), system, images: images.slice(-MAX_CLI_IMAGES) };
+  /** Kept for callers/tests that read the flattened prompt off the client. */
+  private buildPrompt(messages: ChatMessage[]) {
+    return flattenForClaudeCli(messages);
   }
 
   async chat(messages: ChatMessage[], opts?: LLMChatOptions): Promise<LLMResponse> {

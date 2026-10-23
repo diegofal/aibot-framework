@@ -152,14 +152,37 @@ async function probeCredentials(
   return process.platform === 'darwin' ? 'unknown' : 'missing';
 }
 
+/**
+ * Oldest CLI the no-tools flags (`--tools ""`, `--setting-sources ""`,
+ * `NO_TOOLS_LEAN_FLAGS` in `src/claude-cli.ts`) were verified on: the one
+ * pinned in the Dockerfile. An older CLI that lacks a flag fails every
+ * no-tools call with `unknown option`.
+ */
+export const LEAN_FLAGS_MIN_VERSION = '2.1.289';
+
+/** Numeric compare of dotted versions (`2.1.289` > `2.1.29`). */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 /** One-line human summary for the boot log. */
 export function formatPreflight(result: ClaudeCliPreflight): string {
   if (!result.available) {
     return `Claude CLI unavailable: ${result.reason ?? 'unknown reason'}`;
   }
   const version = result.version ? `v${result.version}` : 'unknown version';
+  const old =
+    result.version && compareVersions(result.version, LEAN_FLAGS_MIN_VERSION) < 0
+      ? ` — older than ${LEAN_FLAGS_MIN_VERSION}, the version the no-tools flags (--tools "", --setting-sources "") were verified on; if no-tools calls fail with "unknown option", upgrade the CLI`
+      : '';
   if (result.credentials === 'missing') {
-    return `Claude CLI ${version} installed but not logged in — run "claude auth login" (config dir: ${result.configDir})`;
+    return `Claude CLI ${version} installed but not logged in — run "claude auth login" (config dir: ${result.configDir})${old}`;
   }
-  return `Claude CLI ${version} ready (config dir: ${result.configDir})`;
+  return `Claude CLI ${version} ready (config dir: ${result.configDir})${old}`;
 }

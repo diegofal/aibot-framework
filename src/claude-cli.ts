@@ -478,6 +478,58 @@ export function resolveClaudeBin(path: string, which: WhichFn = (cmd) => Bun.whi
 }
 
 /**
+ * Flags every no-tools call carries. `--tools ""` loads none of the CLI's
+ * native tools and `--setting-sources ""` reads no user/project/local
+ * settings (hooks, CLAUDE.md-driven config). Measured on CLI 2.1.289 with
+ * Haiku: a default call cached ~28k tokens ($0.081); with these flags ~9k
+ * ($0.046); with our own `--system-prompt` too, 565 tokens ($0.0046).
+ * Never used on the MCP path: there `--allowedTools` / `--disallowedTools`
+ * scope the tools and `--tools ""` would hide the bridge.
+ */
+export const NO_TOOLS_LEAN_FLAGS: readonly string[] = ['--tools', '', '--setting-sources', ''];
+
+/** argv (+ stdin) for a no-tools `claude -p` call. Pure; `bin` is already resolved. */
+export function buildClaudeGenerateArgs(
+  bin: string,
+  prompt: string,
+  opts: Pick<ClaudeGenerateOptions, 'model' | 'systemPrompt' | 'images'>
+): { args: string[]; stdin?: string } {
+  const input = buildClaudePromptInput(prompt, opts.images);
+  const args = [bin, ...input.args, SKIP_PERMISSIONS_FLAG, ...NO_TOOLS_LEAN_FLAGS];
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.systemPrompt) args.push('--system-prompt', opts.systemPrompt);
+  return input.stdin === undefined ? { args } : { args, stdin: input.stdin };
+}
+
+/** argv (+ stdin) for an MCP-bridge call. Pure. */
+export function buildClaudeToolsArgs(
+  bin: string,
+  prompt: string,
+  opts: Pick<ClaudeGenerateOptions, 'model' | 'systemPrompt' | 'images'> & {
+    mcpConfigPath: string;
+    allowedTools: string[];
+    disallowedNativeTools?: string[];
+  }
+): { args: string[]; stdin?: string } {
+  const input = buildClaudePromptInput(prompt, opts.images);
+  const args = [
+    bin,
+    ...input.args,
+    '--mcp-config',
+    opts.mcpConfigPath,
+    '--no-session-persistence',
+    '--allowedTools',
+    opts.allowedTools.join(','),
+  ];
+  if (opts.disallowedNativeTools && opts.disallowedNativeTools.length > 0) {
+    args.push('--disallowedTools', opts.disallowedNativeTools.join(','));
+  }
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.systemPrompt) args.push('--system-prompt', opts.systemPrompt);
+  return input.stdin === undefined ? { args } : { args, stdin: input.stdin };
+}
+
+/**
  * Spawn Claude CLI in prompt mode and return the text output + usage.
  * Uses --output-format json to capture token usage metadata.
  * Throws on timeout, non-zero exit, or empty output so callers can fall back.
@@ -502,14 +554,8 @@ async function runClaudeGenerate(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const input = buildClaudePromptInput(prompt, opts.images);
-  const args = [resolveClaudeBin(claudePath), ...input.args, SKIP_PERMISSIONS_FLAG];
-  if (opts.model) {
-    args.push('--model', opts.model);
-  }
-  if (opts.systemPrompt) {
-    args.push('--system-prompt', opts.systemPrompt);
-  }
+  const input = buildClaudeGenerateArgs(resolveClaudeBin(claudePath), prompt, opts);
+  const args = input.args;
 
   const proc = Bun.spawn(args, {
     cwd: tmpdir(), // Isolated dir — no CLAUDE.md, no auto-memory leakage
@@ -734,25 +780,12 @@ async function runClaudeGenerateWithTools(
     // Claude CLI names MCP tools as "mcp__<server>__<tool>".
     const allowedTools = mcpDefs.map((t) => `mcp__aibot-tools__${t.name}`);
 
-    const input = buildClaudePromptInput(prompt, opts.images);
-    const args = [
-      claudePath,
-      ...input.args,
-      '--mcp-config',
+    const input = buildClaudeToolsArgs(claudePath, prompt, {
+      ...opts,
       mcpConfigPath,
-      '--no-session-persistence',
-      '--allowedTools',
-      allowedTools.join(','),
-    ];
-    if (opts.disallowedNativeTools && opts.disallowedNativeTools.length > 0) {
-      args.push('--disallowedTools', opts.disallowedNativeTools.join(','));
-    }
-    if (opts.model) {
-      args.push('--model', opts.model);
-    }
-    if (opts.systemPrompt) {
-      args.push('--system-prompt', opts.systemPrompt);
-    }
+      allowedTools,
+    });
+    const args = input.args;
 
     opts.logger.info(
       { toolCount: opts.tools.length, callbackPort },
