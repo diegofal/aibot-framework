@@ -212,7 +212,9 @@ describe('areas and visibility', () => {
       'hygiene',
       'karma',
       'activity',
+      'watcher',
     ]);
+    expect(visibleTabs(insights, TENANT).map((t) => t.id)).not.toContain('watcher');
 
     const settings = AREAS.find((a) => a.id === 'settings');
     expect(visibleTabs(settings, SINGLE).map((t) => t.id)).toEqual(['settings', 'integrations']);
@@ -440,5 +442,16 @@ describe('Work → Workers (C20)', () => {
     expect(matchRoute('#/work/workers')?.route.handler).toBe('workers');
     const work = AREAS.find((a) => a.id === 'work');
     expect(work?.tabs.find((t) => t.id === 'workers')?.href).toBe('#/work/workers');
+  });
+});
+
+describe('Insights → Watcher (watcher phase 1)', () => {
+  it('#/watcher is an admin Insights tab with its own handler', () => {
+    expect(matchRoute('#/watcher')?.route.handler).toBe('watcher');
+    expect(areaFor('#/watcher')).toBe('insights');
+    const insights = AREAS.find((a) => a.id === 'insights');
+    const tab = insights?.tabs.find((t) => t.id === 'watcher');
+    expect(tab).toMatchObject({ href: '#/watcher', admin: true });
+    expect(activeTab(insights, '#/watcher')?.id).toBe('watcher');
   });
 });
