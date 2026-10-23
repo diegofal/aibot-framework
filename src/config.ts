@@ -1553,6 +1553,14 @@ export function writeJsonFileAtomic(path: string, value: unknown): void {
 }
 
 /**
+ * `${VAR}` references expanded from the environment, the way `loadConfig`
+ * does — for validating a raw block that is then written back unexpanded.
+ */
+export function expandEnvReferences(obj: unknown): unknown {
+  return substituteEnvVars(obj);
+}
+
+/**
  * The one way to rewrite config.json in place: read it raw (its `${VAR}`
  * references stay as written, never the expanded secrets), hand the object to
  * `mutate`, then write it atomically (`writeJsonFileAtomic`). Returns what

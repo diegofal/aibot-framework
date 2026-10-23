@@ -4,10 +4,11 @@
  * to the live config object and persisted into the config file the process
  * loaded. The file is read raw (its `${VAR}` references stay as written),
  * only the patched fields change, the merged `watcher` block must pass
- * `WatcherConfigSchema`, and the file is rewritten through `patchConfigFile`
- * (atomic, no `.bak`).
+ * `WatcherConfigSchema` once its `${VAR}` references are expanded (as
+ * `loadConfig` does; the file keeps the references), and the file is
+ * rewritten through `patchConfigFile` (atomic, no `.bak`).
  */
-import { type Config, WatcherConfigSchema, patchConfigFile } from '../config';
+import { type Config, WatcherConfigSchema, expandEnvReferences, patchConfigFile } from '../config';
 import { WATCHER_DEFAULTS, type WatcherConfig } from './types';
 
 export type WatcherTierName = 'notice' | 'integrate';
@@ -72,7 +73,8 @@ export function persistWatcherConfigPatch(
         if (!p) continue;
         watcher[tier] = { ...(isPlainObject(watcher[tier]) ? watcher[tier] : {}), ...p };
       }
-      const check = WatcherConfigSchema.safeParse(watcher);
+      // Validated as loadConfig will see it (`${VAR}` expanded), written raw.
+      const check = WatcherConfigSchema.safeParse(expandEnvReferences(watcher));
       if (!check.success) {
         invalid = `The watcher block of the config file would not validate: ${check.error.issues
           .map((i) => `${i.path.join('.')}: ${i.message}`)

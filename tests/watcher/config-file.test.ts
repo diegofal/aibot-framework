@@ -34,6 +34,45 @@ describe('parseWatcherConfigPatch', () => {
 });
 
 describe('persistWatcherConfigPatch', () => {
+  test('validates ${VAR} references expanded, writes them back raw', () => {
+    const path = join(dir, 'c.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        apiKey: '${SECRET}',
+        watcher: { notice: { backend: '${WATCHER_BACKEND}' } },
+      })
+    );
+    const prev = process.env.WATCHER_BACKEND;
+    process.env.WATCHER_BACKEND = 'ollama';
+    try {
+      expect(persistWatcherConfigPatch(path, { notice: { enabled: true } })).toEqual({ ok: true });
+    } finally {
+      if (prev === undefined) Reflect.deleteProperty(process.env, 'WATCHER_BACKEND');
+      else process.env.WATCHER_BACKEND = prev;
+    }
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
+      apiKey: '${SECRET}',
+      watcher: { notice: { backend: '${WATCHER_BACKEND}', enabled: true } },
+    });
+  });
+  test('a reference that expands to an invalid value is still a 400', () => {
+    const path = join(dir, 'c.json');
+    const raw = JSON.stringify({ watcher: { notice: { backend: '${WATCHER_BACKEND}' } } });
+    writeFileSync(path, raw);
+    const prev = process.env.WATCHER_BACKEND;
+    process.env.WATCHER_BACKEND = 'nope';
+    try {
+      expect(persistWatcherConfigPatch(path, { notice: { enabled: true } })).toMatchObject({
+        ok: false,
+        status: 400,
+      });
+    } finally {
+      if (prev === undefined) Reflect.deleteProperty(process.env, 'WATCHER_BACKEND');
+      else process.env.WATCHER_BACKEND = prev;
+    }
+    expect(readFileSync(path, 'utf-8')).toBe(raw);
+  });
   test('an unreadable file is a 500 and nothing is written', () => {
     const path = join(dir, 'missing.json');
     const res = persistWatcherConfigPatch(path, { notice: { enabled: true } });
