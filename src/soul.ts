@@ -115,10 +115,19 @@ export function stripMarkdownEmphasis(value: string): string {
 /**
  * The `name:` field of an IDENTITY.md text, also when written in markdown
  * (`**Name:** X`, `- **name**: X`, a backticked value); null without one.
+ * Only the top identity block counts: lines before the first `##` section, or
+ * inside leading `## Identity` (`Identidad`, `Who I am`) sections. A `name:`
+ * bullet under any other section ("## People I serve\n- name: Diego") is
+ * someone else's name, and so is everything after it.
  */
 export function parseIdentityName(raw: string | null | undefined): string | null {
   if (!raw) return null;
   for (const line of raw.split('\n')) {
+    const section = /^\s*##+\s*(.*)$/.exec(line);
+    if (section) {
+      if (/\b(?:identity|identidad|who\s+i\s+am|who\s+am\s+i)\b/i.test(section[1])) continue;
+      return null;
+    }
     const match = line.match(/^[\s>*_-]*(?:\*\*|__)?name(?:\*\*|__)?\s*:(.+)$/i);
     if (!match) continue;
     const name = stripMarkdownEmphasis(match[1]);

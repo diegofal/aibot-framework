@@ -69,3 +69,23 @@ describe('identity name written in markdown', () => {
     expect(stripMarkdownEmphasis('snake_case_name')).toBe('snake_case_name');
   });
 });
+
+describe('identity name: only the top identity block', () => {
+  test('a name: bullet under another section is not the bot name', () => {
+    expect(parseIdentityName('# Identity\n\n## People I serve\n- name: Diego\n')).toBeNull();
+    expect(parseIdentityName('## People I serve\n- **Name:** Diego\n')).toBeNull();
+  });
+
+  test('the name before the first ## section wins over a later one', () => {
+    expect(
+      parseIdentityName('# Identity\n\n**Name:** Finny\n\n## People I serve\n- name: Diego\n')
+    ).toBe('Finny');
+  });
+
+  test('a ## Identity section at the top is the identity block', () => {
+    expect(
+      parseIdentityName('# Me\n\n## Identity\n- **name**: `Finny`\n\n## People\n- name: Diego\n')
+    ).toBe('Finny');
+    expect(parseIdentityName('## People\n- name: Diego\n\n## Identity\nname: Finny\n')).toBeNull();
+  });
+});
