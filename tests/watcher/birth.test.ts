@@ -607,3 +607,26 @@ describe('birth: bot names written in markdown', () => {
     expect(n?.text).not.toContain('`');
   });
 });
+
+describe('birth: bookkeeping lines of the daily logs', () => {
+  test('operational traces are not facts; the real fact next to them is', async () => {
+    const { d, graph } = deps();
+    writeFileSync(
+      join(root, 'souls', 'b1', 'memory', '2026-10-02.md'),
+      [
+        '- [08:00] ask_human 264a4318 enviada: el recordatorio ÚNICO del dry run GitHub t-cff5b1 …',
+        '- [08:01] task_progress: drafted section 2',
+        '- [08:02] t-cff5b1',
+        '- [08:03] https://example.com/x',
+        '- [08:04] The supplier in Rosario closes on Mondays',
+        '',
+      ].join('\n')
+    );
+    await continueBirth(d, beginBirth(d));
+    const texts = graph
+      .list()
+      .filter((n) => n.meta?.source === 'memory/2026-10-02.md')
+      .map((n) => n.text);
+    expect(texts).toEqual(['The supplier in Rosario closes on Mondays']);
+  });
+});

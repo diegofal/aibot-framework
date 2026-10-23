@@ -551,6 +551,34 @@ function stageKnowledge(ctx: StageCtx): void {
 }
 
 const DAILY_LINE = /^\s*-\s*\[\d{1,2}:\d{2}\]\s+(.+)$/;
+
+/** Operational traces a bot's daily log carries next to real facts. */
+const BOOKKEEPING_MARKS: RegExp[] = [
+  /\bask_human\s+[0-9a-f]{6,}\b/i,
+  /\benviad[ao]s?\b/i,
+  /\[agent-loop\]/i,
+  /\[error\]/i,
+  /\bcron-[\w-]+/i,
+  /\bsend_proactive/i,
+  /\btask_progress\b/i,
+];
+const URL_RE = /<?https?:\/\/\S+>?/gi;
+const ID_RE = /\b[tg]-[0-9a-f]{6,8}\b/gi;
+
+/**
+ * A daily-log line that is bookkeeping, not a fact: an `ask_human <id>` /
+ * "enviada" trace, an `[agent-loop]` / `[error]` row, a `cron-…` run, a
+ * `send_proactive` / `task_progress` call, or a line that is only task/goal
+ * ids or only URLs. Birth's memory stage skips these. Pure.
+ */
+export function isBookkeepingLine(text: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t) return true;
+  if (BOOKKEEPING_MARKS.some((re) => re.test(t))) return true;
+  const rest = t.replace(URL_RE, ' ').replace(ID_RE, ' ');
+  return !/\p{L}{2,}/u.test(rest);
+}
+
 const BULLET = /^\s*[-*]\s+(.+)$/;
 
 function stageMemory(ctx: StageCtx): void {
@@ -585,6 +613,7 @@ function stageMemory(ctx: StageCtx): void {
         if (!m) continue;
         const tagged = /^\[([^\]]+)\]\s+(.+)$/.exec(m[1].trim());
         if (tagged && /agent-loop|error/i.test(tagged[1])) continue;
+        if (isBookkeepingLine(m[1])) continue;
         facts.push({
           text: (tagged ? tagged[2] : m[1]).trim(),
           source: `memory/${file}`,
