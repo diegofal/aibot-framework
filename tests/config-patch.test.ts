@@ -3,7 +3,16 @@
  * config.json (and bots.json): raw read, mutate, atomic write, no `.bak`.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { patchConfigFile, persistBots, writeJsonFileAtomic } from '../src/config';
@@ -64,6 +73,32 @@ describe('writeJsonFileAtomic', () => {
     writeJsonFileAtomic(path, [{ id: 'b1' }]);
     expect(readFileSync(path, 'utf-8')).toBe('[\n  {\n    "id": "b1"\n  }\n]\n');
     expect(readdirSync(dir)).toEqual(['bots.json']);
+  });
+
+  // File modes are meaningless on Windows: there only the call path is exercised.
+  const posix = process.platform !== 'win32';
+  const modeOf = (path: string) => statSync(path).mode & 0o777;
+
+  test('keeps the mode of the file it replaces (a 0600 config stays 0600)', () => {
+    const path = join(dir, 'config.json');
+    writeFileSync(path, '{"token":"inline-secret"}');
+    chmodSync(path, 0o600);
+    patchConfigFile(path, (raw) => {
+      raw.x = 1;
+    });
+    expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({ token: 'inline-secret', x: 1 });
+    if (posix) expect(modeOf(path)).toBe(0o600);
+    chmodSync(path, 0o640);
+    writeJsonFileAtomic(path, { y: 2 });
+    if (posix) expect(modeOf(path)).toBe(0o640);
+    expect(readdirSync(dir)).toEqual(['config.json']);
+  });
+
+  test('a new file is created 0600', () => {
+    const path = join(dir, 'bots.json');
+    writeJsonFileAtomic(path, []);
+    if (posix) expect(modeOf(path)).toBe(0o600);
+    expect(readFileSync(path, 'utf-8')).toBe('[]\n');
   });
 
   test('persistBots goes through it', () => {

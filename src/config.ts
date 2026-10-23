@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 
@@ -1535,10 +1535,20 @@ export function botsPathFromConfigPath(configPath: string): string {
 /**
  * Write `value` as pretty JSON (trailing newline) atomically: a sibling
  * `<path>.tmp` renamed over `path`, so a crash never leaves half a file.
+ * The replacement keeps the mode of the file it replaces (a 0600 config with
+ * inline secrets stays 0600, not the umask's 0644); a new file is 0600.
  */
 export function writeJsonFileAtomic(path: string, value: unknown): void {
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+  let mode = 0o600;
+  try {
+    mode = statSync(path).mode & 0o777;
+  } catch {
+    // no file yet: a file that holds config starts private
+  }
+  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf-8', mode });
+  // `mode` on create is masked by the umask, and a stale tmp keeps its own.
+  chmodSync(tmp, mode);
   renameSync(tmp, path);
 }
 
