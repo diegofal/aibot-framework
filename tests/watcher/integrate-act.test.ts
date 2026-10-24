@@ -434,10 +434,34 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
   });
 
   test('the agenda pass time is kept in the state', async () => {
-    const s = setup(() => ({}), { heartbeatMs: HOUR, salienceBar: 100, agendaEveryMs: 6 * HOUR });
+    // A readable answer: an unparsable one no longer uses up the agenda slot.
+    const s = setup(() => ({ insights: [] }), {
+      heartbeatMs: HOUR,
+      salienceBar: 100,
+      agendaEveryMs: 6 * HOUR,
+    });
     t += HOUR;
     await s.integrator.run();
     expect(s.integrator.state().lastAgendaAt).toBe(new Date(t).toISOString());
+  });
+
+  test('a breaker-refused agenda pass does not use up the agenda slot: due again after the min gap', async () => {
+    const refused = {
+      backend: 'claude-cli',
+      model: 'claude-opus-5-5',
+      chat: async () => ({ ok: false as const, reason: 'breaker' as const }),
+    };
+    const s = setup(
+      () => ({}),
+      { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaEveryMs: 6 * HOUR },
+      { client: refused }
+    );
+    t += HOUR;
+    expect(s.integrator.due()).toBe(true);
+    expect((await s.integrator.run()).status).toBe('breaker');
+    expect(s.integrator.state().lastAgendaAt).toBeUndefined();
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.due()).toBe(true);
   });
 
   test('an empty agenda and 2 pending (below minItems): not due', () => {

@@ -168,7 +168,7 @@ export interface IntegrateState {
   pending: { items: BufferItem[]; neurons: string[]; salience: number };
   /** Standing-agenda ids a pass addressed (`agendaCovered`); never shown again. */
   agendaCovered?: string[];
-  /** Last attempt that showed a non-empty standing agenda (rate-limits agenda-only passes). */
+  /** Last applied pass that showed a non-empty standing agenda (rate-limits agenda-only passes). */
   lastAgendaAt?: string;
 }
 
@@ -460,7 +460,6 @@ export class Integrator {
     const readSalience = pending.salience;
     const attemptIso = new Date(this.deps.now()).toISOString();
     this.st.lastAttemptAt = attemptIso;
-    if (hasAgenda) this.st.lastAgendaAt = attemptIso;
     this.persist();
 
     const botName = this.deps.botName ?? ((id: string) => id);
@@ -604,6 +603,9 @@ export class Integrator {
     this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
     this.st.attendingAt = nowIso;
     this.st.lastRunAt = nowIso;
+    // Only a pass that applied an answer uses up the agenda slot: a refused,
+    // failed, unparsable or cancelled one leaves the agenda due again.
+    if (hasAgenda) this.st.lastAgendaAt = nowIso;
     const covered = out.agendaCovered.filter((id) => agendaIds.has(id));
     if (covered.length) {
       this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...covered]).slice(
