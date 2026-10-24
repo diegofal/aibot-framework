@@ -22,9 +22,10 @@ import type { Logger } from '../logger';
  *   (`support.bots` has `_botId`) or a general fleet entity (`kind: entity`,
  *   the bots themselves, minus tenant bots). What only another bot or the
  *   watcher knows stays out.
- * A tenant bot (multi-tenant, `bots[].tenantId`) never gets an answer: the
- * graph is the instance's (`isTenantBot`; `ToolRegistry` also keeps the
- * tool out of its definitions).
+ * A customer tenant's bot (`isTenantBot`: multi-tenant on, `bots[].tenantId`
+ * set and not `__admin__`) never gets an answer: the graph is the
+ * instance's, and the admin tenant's bots are the instance's own
+ * (`ToolRegistry` also keeps the tool out of a tenant bot's definitions).
  */
 import { cosineSimilarity } from '../memory/search';
 import { type Neuron, isOperatorSourced } from '../watcher/types';

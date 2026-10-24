@@ -127,9 +127,11 @@ export interface BroadcasterDeps {
   botName?: (botId: string) => string;
   maxPerBotPerDay?: number;
   /**
-   * A tenant bot in multi-tenant mode: never a target (`invalid`), whatever
-   * proposed it. The watcher reads the whole fleet; a tenant bot must not
-   * receive admin or another tenant's material.
+   * A customer tenant's bot (`isTenantBot`: multi-tenant on, `tenantId` set
+   * and not `__admin__`): never a target (`invalid`), whatever proposed it.
+   * The watcher reads the whole fleet; a tenant bot must not receive admin or
+   * another tenant's material. The admin tenant's bots are the instance's own
+   * and stay targets.
    */
   isTenantBot?: (botId: string) => boolean;
   logger?: { warn: (obj: object, msg: string) => void };
