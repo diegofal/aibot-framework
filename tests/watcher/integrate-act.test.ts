@@ -98,7 +98,7 @@ function setup(
   const config: WatcherConfig = {
     ...WATCHER_DEFAULTS,
     enabled: true,
-    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, salienceBar: 1, ...cfg },
+    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, wakeSalience: 1, ...cfg },
   };
   const delivered: string[] = [];
   const broadcaster = new Broadcaster({
@@ -409,57 +409,109 @@ describe('insightNeedsBroadcast', () => {
   });
 });
 
-describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026-10-24)', () => {
+// Changed deliberately on 2026-10-24 (O2, docs/plans/watcher-optimizations-plan.md):
+// an agenda-only pass used to run on the heartbeat at most every
+// `integrate.agendaEveryMs` (6 h) whatever the agenda held. It now runs when
+// the agenda CHANGED since the last agenda pass (a pair or an insight the last
+// one was not shown); an unchanged agenda never wakes a pass on its own.
+// `agendaEveryMs` stays in the schema, unused.
+describe('Integrator: wakes on salience, a changed agenda or the heartbeat (O2)', () => {
   const HOUR = 3_600_000;
+  const quietCfg = { heartbeatMs: HOUR, minItems: 5, wakeSalience: 100 };
 
-  test('nothing pending and a non-empty agenda: due once, then not until integrate.agendaEveryMs', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
+  /** A second cross-bot related pair, new to the agenda. */
+  function newPair(s: ReturnType<typeof setup>) {
+    const c = s.graph.addNeuron({
+      kind: 'fact',
+      text: 'Jarvis tracks the Q3 invoices',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
     });
-    expect(s.integrator.due()).toBe(false);
-    t += HOUR;
+    const d = s.graph.addNeuron({
+      kind: 'fact',
+      text: 'Scout tracks the Q3 invoices',
+      support: { bots: ['b2'] },
+      createdBy: 'watcher',
+    });
+    return s.graph.addEdge({
+      from: c.id,
+      to: d.id,
+      rel: 'related',
+      weight: 0.9,
+      createdBy: 'watcher',
+    });
+  }
+
+  test('an agenda never passed on is a change: due at once, as agenda-changed', () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
+    expect(s.integrator.wake()).toBe('agenda-changed');
+  });
+
+  test('unchanged agenda: not due, however long; one new pair: due once', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     expect(s.integrator.due()).toBe(true);
-    const out = await s.integrator.run();
+    const out = await s.integrator.run({ trigger: 'agenda-changed' });
     expect(out.status).toBe('integrated');
     expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
-    t += HOUR;
+    t += INTEGRATE_MIN_GAP_MS;
     expect(s.integrator.due()).toBe(false);
-    t += 4 * HOUR;
+    t += 12 * HOUR;
     expect(s.integrator.due()).toBe(false);
-    t += HOUR;
-    expect(s.integrator.due()).toBe(true);
+    const fresh = newPair(s);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.wake()).toBe('agenda-changed');
+    await s.integrator.run({ trigger: 'agenda-changed' });
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${fresh.id}]`);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.due()).toBe(false);
   });
 
-  test('the agenda pass time is kept in the state', async () => {
-    // A readable answer: an unparsable one no longer uses up the agenda slot.
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
+  test('the salience pending since the last pass reaches wakeSalience: due, as salience', () => {
+    const s = setup(() => ({}), { heartbeatMs: HOUR, minItems: 5, wakeSalience: 3, agendaMax: 0 });
+    s.integrator.observe(item(1.5));
+    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(1.5));
+    expect(s.integrator.wake()).toBe('salience');
+    // The stakes may raise the line (budget pressure doubles it).
+    expect(s.integrator.wake({ wakeSalience: 6 })).toBeNull();
+  });
+
+  test('the heartbeat stays as a floor: minItems pending after heartbeatMs, as heartbeat', () => {
+    const s = setup(() => ({}), { ...quietCfg, minItems: 2, agendaMax: 0 });
+    s.integrator.observe(item(0.2));
+    s.integrator.observe(item(0.2));
+    expect(s.integrator.due()).toBe(false);
     t += HOUR;
+    expect(s.integrator.wake()).toBe('heartbeat');
+  });
+
+  test('the agenda pass time and the ids it was shown are kept in the state', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     await s.integrator.run();
     expect(s.integrator.state().lastAgendaAt).toBe(new Date(t).toISOString());
+    expect(s.integrator.state().agendaIds).toEqual([s.edge.id]);
   });
 
-  test('a breaker-refused agenda pass does not use up the agenda slot: due again after the min gap', async () => {
+  test('every pass row records its trigger (manual without one)', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
+    await s.integrator.run({ trigger: 'agenda-changed' });
+    t += INTEGRATE_MIN_GAP_MS;
+    await pass(s);
+    const passes = s.rows.filter((r) => r.op === 'integrate:pass');
+    expect(passes.map((r) => r.trigger)).toEqual(['agenda-changed', 'manual']);
+  });
+
+  test('a breaker-refused agenda pass does not use up the change: due again after the min gap', async () => {
     const refused = {
       backend: 'claude-cli',
       model: 'claude-opus-5-5',
       chat: async () => ({ ok: false as const, reason: 'breaker' as const }),
     };
-    const s = setup(
-      () => ({}),
-      { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaEveryMs: 6 * HOUR },
-      { client: refused }
-    );
-    t += HOUR;
+    const s = setup(() => ({}), quietCfg, { client: refused });
     expect(s.integrator.due()).toBe(true);
     expect((await s.integrator.run()).status).toBe('breaker');
     expect(s.integrator.state().lastAgendaAt).toBeUndefined();
+    expect(s.integrator.state().agendaIds).toBeUndefined();
     t += INTEGRATE_MIN_GAP_MS;
     expect(s.integrator.due()).toBe(true);
   });
@@ -468,14 +520,8 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
     spyOn(s.integrator as unknown as { standingAgenda: () => unknown }, 'standingAgenda');
 
   test('an agenda-only pass computes the standing agenda once: due() carries it into the pass', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
+    const s = setup(() => ({ insights: [] }), quietCfg);
     const spy = agendaSpy(s);
-    t += HOUR;
     expect(s.integrator.due()).toBe(true);
     expect((await s.integrator.run()).status).toBe('integrated');
     expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
@@ -489,28 +535,33 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  test('a direct run with nothing pending and the agenda slot used is idle without computing it', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
-    t += HOUR;
+  test('due() scans the graph at most once per minimum gap', () => {
+    const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 0 });
+    const spy = agendaSpy(s);
+    expect(s.integrator.due()).toBe(false);
+    t += 60_000;
+    expect(s.integrator.due()).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.due()).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  // Changed deliberately (was "idle without computing it"): whether a direct
+  // run with nothing pending has anything to do now depends on whether the
+  // agenda changed, which takes one scan.
+  test('a direct run with nothing pending and an unchanged agenda is idle', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     await s.integrator.run();
     t += INTEGRATE_MIN_GAP_MS;
     const spy = agendaSpy(s);
     expect((await s.integrator.run()).status).toBe('idle');
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(s.prompts).toHaveLength(1);
   });
 
   test('an agenda carried by due() goes stale: a later pass computes its own', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
-    t += HOUR;
+    const s = setup(() => ({ insights: [] }), quietCfg);
     expect(s.integrator.due()).toBe(true);
     // No run follows that due(); the graph may change before the next pass.
     s.integrator.observe(item());
@@ -521,15 +572,129 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
   });
 
   test('an empty agenda and 2 pending (below minItems): not due', () => {
-    const s = setup(() => ({}), { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaMax: 0 });
+    const s = setup(() => ({}), { ...quietCfg, agendaMax: 0 });
     s.integrator.observe(item(0.2));
     s.integrator.observe(item(0.2));
     t += HOUR;
     expect(s.integrator.due()).toBe(false);
   });
 
-  test('agendaEveryMs defaults to 6 h', () => {
+  test('agendaEveryMs is kept (deprecated, unused) with its 6 h default', () => {
     expect(WATCHER_DEFAULTS.integrate.agendaEveryMs).toBe(6 * HOUR);
+  });
+});
+
+// O3 (stakes): what the watcher feels shapes what it does.
+describe('Integrator: stakes shape the pass (O3)', () => {
+  function withQuestions(reply: Reply, sent: string[], deferNext = { value: false }) {
+    const qlog = new WatcherLog(join(dir, 'qlog'), { now: () => t });
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      log: qlog,
+      delivery: {
+        question: async (bot, text) => {
+          if (deferNext.value) return { ok: false, detail: 'throttled', deferred: true };
+          sent.push(`${bot}:${text}`);
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    return setup(reply, {}, { broadcaster });
+  }
+  const askAnswer = (s: () => ReturnType<typeof setup>) => () => ({
+    insights: [{ text: DUP, support: [s().a.id, s().b.id], confidence: 'high' }],
+    broadcasts: [{ bot: 'b1', kind: 'question', text: 'Who owns the brief?', insightIndex: 0 }],
+  });
+
+  test('operator silent: a question is deferred, logged, and its insight stays on the agenda', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    const out = await s.integrator.run({ deferQuestions: true, drivenBy: ['operatorSilence'] });
+    expect(out.status).toBe('integrated');
+    expect(sent).toEqual([]);
+    const row = s.rows.find((r) => r.op === 'integrate:question-deferred');
+    expect(row?.whyNoBroadcast).toBe('operator silent');
+    expect(row?.drivenBy).toEqual(['operatorSilence']);
+    const insight = s.graph.list().find((n) => n.kind === 'insight') as Neuron;
+    expect(insight.meta?.whyNoBroadcast).toBeUndefined();
+    expect(s.integrator.deferredQuestions().map((q) => q.insightId)).toEqual([insight.id]);
+    expect(s.rows.find((r) => r.op === 'integrate:pass')?.drivenBy).toContain('operatorSilence');
+    // Still on the agenda for the next pass.
+    t += INTEGRATE_MIN_GAP_MS;
+    s.integrator.observe(item());
+    await s.integrator.run();
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${insight.id}]`);
+  });
+
+  test('the operator writes: the deferred question goes out at once, without a pass', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    const results = await s.integrator.releaseQuestions();
+    expect(results.map((r) => r.status)).toEqual(['delivered']);
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+    expect(s.prompts).toHaveLength(1);
+    const row = s.rows.find((r) => r.op === 'integrate:question-released');
+    expect(row?.drivenBy).toEqual(['operatorPresent']);
+  });
+
+  test('a released question the throttle defers again stays deferred', async () => {
+    const sent: string[] = [];
+    const deferNext = { value: false };
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent,
+      deferNext
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    deferNext.value = true;
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['deferred']);
+    expect(s.integrator.deferredQuestions()).toHaveLength(1);
+  });
+
+  test('without deferral a question goes out in the pass', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run();
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+  });
+
+  test('fleet karma falling: the prompt opens with "Something is wrong"', async () => {
+    const s = setup(() => ({ insights: [] }));
+    s.integrator.observe(item());
+    await s.integrator.run({
+      somethingWrong: 'Fleet karma fell from 60 to 52 in 24 h.',
+      drivenBy: ['fleetKarmaFalling'],
+    });
+    expect(s.prompts[0]).toContain(
+      '## Something is wrong\nFleet karma fell from 60 to 52 in 24 h.'
+    );
+    expect(s.rows.find((r) => r.op === 'integrate:pass')?.drivenBy).toEqual(['fleetKarmaFalling']);
+    expect(s.integrator.drivenBy()).toEqual(['fleetKarmaFalling']);
   });
 });
 

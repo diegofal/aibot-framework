@@ -159,6 +159,8 @@ export interface IntegratePromptInput {
   interoception?: Record<string, unknown>;
   /** Phase 4: what I attend to now ("## What I am attending to"); absent = no section. */
   attention?: Attention;
+  /** O3 (stakes): fleet karma is falling; the prompt opens with "## Something is wrong". */
+  somethingWrong?: string;
 }
 
 const INTEGRATE_SYSTEM = [
@@ -255,6 +257,15 @@ export function buildIntegratePrompt(input: IntegratePromptInput): {
     ),
   ];
   const parts = [
+    ...(input.somethingWrong
+      ? [
+          [
+            '## Something is wrong',
+            input.somethingWrong,
+            'Before anything else, look for one cause the bots share (a tool, a backend, a rule, an instruction) and say it as an insight if you find it.',
+          ].join('\n'),
+        ]
+      : []),
     section(
       'What happened since my last thought',
       input.events.flatMap(itemLines),

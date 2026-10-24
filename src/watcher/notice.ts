@@ -1,6 +1,7 @@
 /**
- * Tier 1: noticing (phase 2). Every `notice.everyMs`, or sooner when salient
- * items pile up, the watcher shows the salient part of the working buffer and
+ * Tier 1: noticing (phase 2). When the salient items waiting add up to
+ * `notice.wakeSalience` (an operator message at once), or the oldest has
+ * waited `notice.maxWaitMs` (O2, `wake`), the watcher shows the salient part of the working buffer and
  * the neurons it touched to a cheap model and keeps what is worth remembering
  * as new neurons (`createdBy: 'watcher'`), merging into an existing one when
  * the text (`textSimilarity ≥ 0.8`) or, with embeddings, the meaning
@@ -44,11 +45,13 @@ import {
   type NoticePromptItem,
   buildNoticePrompt,
 } from './prompts';
+import { noticeWake } from './sense';
 import {
   type BufferItem,
   type Confidence,
   type Neuron,
   OPERATOR_SOURCED,
+  type PassTrigger,
   type Vec3,
   type WatcherConfig,
   isHumanInbound,
@@ -59,8 +62,6 @@ import {
 
 /** Most buffer items one pass shows the model (the most salient first). */
 export const NOTICE_MAX_ITEMS = 20;
-/** Early pass when the salient items' total reaches this many times `notice.salienceBar`. */
-export const NOTICE_EARLY_FACTOR = 5;
 /** Never two passes closer than this, early or not. */
 export const NOTICE_MIN_GAP_MS = 60_000;
 /** Text similarity at which a kept item is the same as an existing neuron. */
@@ -110,6 +111,10 @@ export type NoticeOutcome =
 /** Per-run cancellation (the watcher run's signal): a cancelled pass writes nothing more. */
 export interface PassOptions {
   isCancelled?: () => boolean;
+  /** O2: what woke the pass (on its pass row; default `manual`). */
+  trigger?: PassTrigger;
+  /** O3: the stakes rules that shaped the pass (on its pass row). */
+  drivenBy?: string[];
 }
 
 export interface NoticeDeps {
@@ -209,15 +214,28 @@ export class Noticer {
     this.lastRunAt = deps.now();
   }
 
-  /** A pass is due on the cadence, or early when salient items pile up. */
+  /** A pass is due when `wake` says why. */
   due(): boolean {
+    return this.wake() !== null;
+  }
+
+  /**
+   * Why a pass should run now (O2, `noticeWake`): salience (`wakeSalience`,
+   * possibly raised by the stakes; an operator message at once) or age
+   * (`notice.maxWaitMs`); never within `NOTICE_MIN_GAP_MS` of the last pass.
+   */
+  wake(opts: { wakeSalience?: number } = {}): Extract<PassTrigger, 'salience' | 'age'> | null {
     const cfg = this.deps.config().notice;
-    const salient = this.deps.buffer.salient(cfg.salienceBar);
-    if (salient.length === 0) return false;
-    const since = this.deps.now() - this.lastRunAt;
-    if (since >= cfg.everyMs) return true;
-    const total = salient.reduce((s, i) => s + i.salience, 0);
-    return since >= NOTICE_MIN_GAP_MS && total >= NOTICE_EARLY_FACTOR * cfg.salienceBar;
+    const nowMs = this.deps.now();
+    if (nowMs - this.lastRunAt < NOTICE_MIN_GAP_MS) return null;
+    return noticeWake({
+      items: this.deps.buffer.items(),
+      bar: cfg.salienceBar,
+      wakeSalience: opts.wakeSalience ?? cfg.wakeSalience,
+      maxWaitMs: cfg.maxWaitMs,
+      nowMs,
+      sinceMs: this.lastRunAt,
+    });
   }
 
   /**
@@ -228,7 +246,7 @@ export class Noticer {
   run(opts: PassOptions = {}): Promise<NoticeOutcome> {
     if (this.inFlight && !this.inFlightCancelled()) return this.inFlight;
     const isCancelled = opts.isCancelled ?? (() => false);
-    const run: Promise<NoticeOutcome> = this.pass(isCancelled)
+    const run: Promise<NoticeOutcome> = this.pass(isCancelled, opts)
       .catch((err): NoticeOutcome => {
         if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher notice: pass failed');
@@ -248,7 +266,7 @@ export class Noticer {
    * log: after a stop the buffer was persisted and the graph compacted, so a
    * write here would land after the sleep row or in the next run's state.
    */
-  private async pass(isCancelled: () => boolean): Promise<NoticeOutcome> {
+  private async pass(isCancelled: () => boolean, opts: PassOptions = {}): Promise<NoticeOutcome> {
     const { graph, buffer, log } = this.deps;
     const cfg = this.deps.config();
     const items = buffer
@@ -326,6 +344,8 @@ export class Noticer {
         ...(created.length || recognised.length
           ? { neuronIds: [...created, ...recognised].map((n) => n.id) }
           : {}),
+        trigger: opts.trigger ?? 'manual',
+        ...(opts.drivenBy?.length ? { drivenBy: [...opts.drivenBy] } : {}),
       }
     );
     return { status: 'noticed', created, recognised };

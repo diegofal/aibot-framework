@@ -7,7 +7,7 @@ import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-l
 import { WorkingBuffer } from '../../src/watcher/buffer';
 import { Graph, type GraphChange } from '../../src/watcher/graph';
 import { WatcherLog } from '../../src/watcher/log';
-import { Sense, inboundSender } from '../../src/watcher/sense';
+import { NOTICE_URGENT_SALIENCE, Sense, inboundSender, noticeWake } from '../../src/watcher/sense';
 import { WATCHER_DEFAULTS, type WatcherLogRow } from '../../src/watcher/types';
 
 let dir: string;
@@ -603,5 +603,114 @@ describe('Sense novelty dedupe', () => {
     });
     expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
     expect(buffer.size()).toBe(1);
+  });
+});
+
+// O2 (docs/plans/watcher-optimizations-plan.md): notice wakes on salience, not on a timer.
+describe('noticeWake and salience:crossed', () => {
+  const bar = WATCHER_DEFAULTS.notice.salienceBar;
+  const at = (ms: number) => new Date(ms).toISOString();
+  const it = (salience: number, noticedAt: number, fromOperator = false) => ({
+    salience,
+    noticedAt: at(noticedAt),
+    ...(fromOperator ? { fromOperator: true as const } : {}),
+  });
+  const base = { bar, wakeSalience: 1.0, maxWaitMs: 1_800_000 };
+
+  test('accumulated salience reaches wakeSalience: salience', () => {
+    expect(noticeWake({ ...base, nowMs: t, items: [it(0.5, t), it(0.4, t)] })).toBeNull();
+    expect(noticeWake({ ...base, nowMs: t, items: [it(0.5, t), it(0.5, t)] })).toBe('salience');
+  });
+
+  test('items below the bar never count', () => {
+    const items = Array.from({ length: 20 }, () => it(0.3, t - 3_600_000));
+    expect(noticeWake({ ...base, nowMs: t, items })).toBeNull();
+  });
+
+  test('the oldest salient item waited maxWaitMs: age', () => {
+    expect(noticeWake({ ...base, nowMs: t, items: [it(0.5, t - 1_799_999)] })).toBeNull();
+    expect(noticeWake({ ...base, nowMs: t, items: [it(0.5, t - 1_800_000)] })).toBe('age');
+  });
+
+  test('the wait counts from the later of the item and the last pass', () => {
+    const items = [it(0.5, t - 3_600_000)];
+    expect(noticeWake({ ...base, nowMs: t, items, sinceMs: t - 60_000 })).toBeNull();
+    expect(noticeWake({ ...base, nowMs: t, items, sinceMs: t - 1_800_000 })).toBe('age');
+  });
+
+  test('an operator message, or an item at NOTICE_URGENT_SALIENCE, wakes at once', () => {
+    expect(noticeWake({ ...base, nowMs: t, items: [it(0.5, t, true)] })).toBe('salience');
+    expect(noticeWake({ ...base, nowMs: t, items: [it(NOTICE_URGENT_SALIENCE, t)] })).toBe(
+      'salience'
+    );
+    // Budget pressure doubles wakeSalience; the operator still wakes it.
+    expect(noticeWake({ ...base, wakeSalience: 100, nowMs: t, items: [it(0.5, t, true)] })).toBe(
+      'salience'
+    );
+  });
+
+  test('Sense calls onCrossed after a batch that crosses, never before', () => {
+    const crossed: string[] = [];
+    const now = () => t;
+    const graph = new Graph(join(dir, 'g2'), { now });
+    graph.load();
+    const sense = new Sense({
+      graph,
+      buffer: new WorkingBuffer(),
+      log: new WatcherLog(join(dir, 'log2'), { now }),
+      now,
+      config: () => WATCHER_DEFAULTS,
+      defer: (fn) => fn(),
+      onCrossed: (trigger) => crossed.push(trigger),
+    });
+    const stream = new EventEmitter();
+    const hooks = new EventEmitter();
+    sense.attach(stream, hooks);
+    stream.emit('activity', {
+      type: 'worker:waiting',
+      botId: 'b1',
+      timestamp: t,
+      data: { question: 'which supplier should I pick' },
+    });
+    expect(crossed).toEqual([]);
+    stream.emit('activity', {
+      type: 'tool:error',
+      botId: 'b2',
+      timestamp: t,
+      data: { error: 'x' },
+    });
+    expect(crossed).toEqual(['salience']);
+  });
+
+  test('an operator message crosses on its own', () => {
+    const crossed: string[] = [];
+    const now = () => t;
+    const graph = new Graph(join(dir, 'g3'), { now });
+    graph.load();
+    const sense = new Sense({
+      graph,
+      buffer: new WorkingBuffer(),
+      log: new WatcherLog(join(dir, 'log3'), { now }),
+      now,
+      config: () => WATCHER_DEFAULTS,
+      defer: (fn) => fn(),
+      onCrossed: (trigger) => crossed.push(trigger),
+    });
+    const stream = new EventEmitter();
+    const hooks = new EventEmitter();
+    sense.attach(stream, hooks);
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'telegram',
+      text: 'stop the outreach',
+      timestamp: t,
+    });
+    expect(crossed).toEqual(['salience']);
+  });
+
+  test('wakeSalience 1.0 and maxWaitMs 30 min are the defaults', () => {
+    expect(WATCHER_DEFAULTS.notice.wakeSalience).toBe(1.0);
+    expect(WATCHER_DEFAULTS.notice.maxWaitMs).toBe(1_800_000);
+    expect(WATCHER_DEFAULTS.integrate.wakeSalience).toBe(3.0);
   });
 });
