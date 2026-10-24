@@ -523,6 +523,42 @@ describe('Graph.mergeInto (hygiene watcher-graph)', () => {
     expect(g2.get(dup.id)?.archivedAt).toBeDefined();
   });
 
+  // Review 2026-10-24: a dropped neuron kept its meta.key, so findByKey still
+  // answered with the archived drop, and activate() revived it.
+  test("a dropped neuron's key moves to a keeper without one, durably", () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('Jarvis the assistant bot'));
+    const drop = g.addNeuron(fact('Jarvis, the assistant bot', { meta: { key: 'bot:b1' } }));
+    g.mergeInto(keep.id, [drop.id]);
+    expect(g.findByKey('bot:b1')?.id).toBe(keep.id);
+    expect(g.get(keep.id)?.meta?.key).toBe('bot:b1');
+    expect(g.get(drop.id)?.meta?.key).toBeUndefined();
+    expect(graph().findByKey('bot:b1')?.id).toBe(keep.id);
+    g.compact();
+    expect(graph().findByKey('bot:b1')?.id).toBe(keep.id);
+  });
+
+  test("a keeper with its own key still answers for the drop's key", () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('the boiler service', { meta: { key: 'topic:boiler' } }));
+    const drop = g.addNeuron(fact('the boiler service.', { meta: { key: 'topic:boilers' } }));
+    g.mergeInto(keep.id, [drop.id]);
+    expect(g.findByKey('topic:boilers')?.id).toBe(keep.id);
+    expect(g.findByKey('topic:boiler')?.id).toBe(keep.id);
+    expect(graph().findByKey('topic:boilers')?.id).toBe(keep.id);
+  });
+
+  test('activating a merged drop fires its keeper and never revives the drop', () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('the api rate limit is 60 per minute', { activations: 1 }));
+    const drop = g.addNeuron(fact('the api rate limit is 60 per minute.', { activations: 1 }));
+    g.mergeInto(keep.id, [drop.id]);
+    const fired = g.activate(drop.id);
+    expect(fired?.id).toBe(keep.id);
+    expect(fired?.activations).toBe(3);
+    expect(g.get(drop.id)?.archivedAt).toBeDefined();
+  });
+
   test('undefined when the keeper is missing or archived; archived drops are skipped', () => {
     const g = graph();
     const a = g.addNeuron(fact('alpha beta'));

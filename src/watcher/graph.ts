@@ -181,7 +181,18 @@ export class Graph {
 
   findByKey(key: string): Neuron | undefined {
     const id = this.byKey.get(key);
-    return id ? this.neurons.get(id) : undefined;
+    return id ? this.resolveMerged(id) : undefined;
+  }
+
+  /** The neuron, or the keeper a merge folded it into (following a chain of merges). */
+  private resolveMerged(id: string): Neuron | undefined {
+    let n = this.neurons.get(id);
+    for (let hops = 0; n?.archivedAt && n.meta?.mergedInto && hops < 10; hops++) {
+      const next = this.neurons.get(n.meta.mergedInto);
+      if (!next) break;
+      n = next;
+    }
+    return n;
   }
 
   list(): Neuron[] {
@@ -251,9 +262,12 @@ export class Graph {
     return edge;
   }
 
-  /** One activation now. An archived neuron that fires again is live again. Written in a batch. */
+  /**
+   * One activation now. An archived neuron that fires again is live again; a
+   * merged drop never is: its keeper fires instead. Written in a batch.
+   */
   activate(id: string): Neuron | undefined {
-    const n = this.neurons.get(id);
+    const n = this.resolveMerged(id);
     if (!n) return undefined;
     const { archivedAt: _gone, ...rest } = n;
     const next: Neuron = { ...rest, activations: n.activations + 1, lastActivatedAt: this.iso() };
@@ -361,7 +375,9 @@ export class Graph {
    * activations become the sum, its support the union, every edge of a
    * dropped neuron is re-created on the keeper (`addEdge` dedupes; edges
    * between the merged neurons are not re-pointed onto the keeper), and each
-   * dropped neuron is archived with `meta.mergedInto`. Archived or unknown
+   * dropped neuron is archived with `meta.mergedInto`. A keeper without a
+   * `meta.key` takes a drop's; any other drop key resolves to the keeper
+   * (`findByKey`), and activating a drop fires the keeper. Archived or unknown
    * drops are skipped. Undefined when the keeper is missing or archived. Not a firing.
    */
   mergeInto(
@@ -390,11 +406,15 @@ export class Graph {
     const lastActivatedAt = [keep, ...drops]
       .map((n) => n.lastActivatedAt)
       .reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+    // A keeper without a key takes the first drop's: the key then answers
+    // for the keeper (a drop's other key does too, through `mergedInto`).
+    const movedKey = keep.meta?.key ? undefined : drops.find((d) => d.meta?.key)?.meta?.key;
     const keeper: Neuron = {
       ...keep,
       support,
       activations: keep.activations + drops.reduce((sum, d) => sum + d.activations, 0),
       lastActivatedAt,
+      ...(movedKey ? { meta: { ...(keep.meta ?? {}), key: movedKey } } : {}),
     };
     this.writeNeuron(keeper);
     let edges = 0;
@@ -416,11 +436,13 @@ export class Graph {
     const archived: Neuron[] = [];
     const at = this.iso();
     for (const drop of drops) {
-      const next: Neuron = {
-        ...drop,
-        archivedAt: at,
-        meta: { ...(drop.meta ?? {}), mergedInto: keepId },
+      const { key, ...rest } = drop.meta ?? {};
+      const meta = {
+        ...rest,
+        ...(key && key !== movedKey ? { key } : {}),
+        mergedInto: keepId,
       };
+      const next: Neuron = { ...drop, archivedAt: at, meta };
       this.writeNeuron(next);
       archived.push(next);
     }
@@ -659,7 +681,8 @@ export class Graph {
     this.neurons.set(n.id, n);
     if (!this.seq.has(n.id)) this.seq.set(n.id, this.nextSeq++);
     const key = n.meta?.key;
-    if (key) this.byKey.set(key, n.id);
+    // A merged drop's key answers for its keeper (`findByKey` follows the chain).
+    if (key) this.byKey.set(key, (n.archivedAt && n.meta?.mergedInto) || n.id);
     const wasLive = !!prev && !prev.archivedAt;
     const isLive = !n.archivedAt;
     this.live += (isLive ? 1 : 0) - (wasLive ? 1 : 0);
