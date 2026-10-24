@@ -449,3 +449,76 @@ describe('Sense: off the publisher call (hot path)', () => {
     expect(buffer.size()).toBe(1);
   });
 });
+
+describe('Sense novelty dedupe', () => {
+  const fetchFailed = (botId = 'b1') => ({
+    type: 'tool:error',
+    botId,
+    timestamp: t,
+    data: { toolName: 'web_fetch', error: 'HTTP 403 Forbidden: thelancet.com blocks bots' },
+  });
+
+  test('4 identical tool:error events in one second: one noticed row, the summary counts 4', () => {
+    const { stream, sense, rows, buffer } = setup();
+    for (let i = 0; i < 4; i++) {
+      stream.emit('activity', fetchFailed());
+      t += 250;
+    }
+    const noticed = rows.filter((r) => r.op === 'noticed');
+    expect(noticed).toHaveLength(1);
+    expect(noticed[0].text).toContain('novel');
+    expect(buffer.size()).toBe(1);
+    t += 61_000;
+    expect(sense.tick()?.text).toBe(
+      'Sensed 4 events in the last 1 min (3 repeats), top: web_fetch failed in jarvis (salience 0.5).'
+    );
+  });
+
+  test('a repeat differing only in numbers and spacing is still a repeat', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', {
+      ...fetchFailed(),
+      data: { toolName: 'web_fetch', error: 'timeout after 3001 ms' },
+    });
+    stream.emit('activity', {
+      ...fetchFailed(),
+      data: { toolName: 'web_fetch', error: 'timeout  after 2999 ms' },
+    });
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
+  });
+
+  test('after 60 s the same event is novel again', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', fetchFailed());
+    t += 61_000;
+    stream.emit('activity', fetchFailed());
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(2);
+  });
+
+  test('the same event from another bot is not a repeat', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', fetchFailed('b1'));
+    stream.emit('activity', fetchFailed('b2'));
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(2);
+  });
+
+  test('a failed tool:end of the same tool and error is a repeat of the tool:error', () => {
+    const { stream, rows, buffer } = setup();
+    stream.emit('activity', fetchFailed());
+    stream.emit('activity', {
+      type: 'tool:end',
+      botId: 'b1',
+      timestamp: t,
+      data: {
+        toolName: 'web_fetch',
+        success: false,
+        failureKind: 'blocked',
+        target: 'thelancet.com/x',
+        result: 'HTTP 403 Forbidden: thelancet.com blocks bots',
+        error: 'HTTP 403 Forbidden: thelancet.com blocks bots',
+      },
+    });
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
+    expect(buffer.size()).toBe(1);
+  });
+});

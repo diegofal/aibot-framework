@@ -221,8 +221,11 @@ export function narrateSenseSummary(input: {
   windowMs: number;
   top?: string;
   topSalience?: number;
+  /** Events that repeated one seen within the last minute (no noticed row of their own). */
+  repeats?: number;
 }): string {
-  const head = `Sensed ${plural(input.events, 'event', 'events')} in the last ${formatDuration(input.windowMs)}`;
+  const repeats = input.repeats ? ` (${plural(input.repeats, 'repeat', 'repeats')})` : '';
+  const head = `Sensed ${plural(input.events, 'event', 'events')} in the last ${formatDuration(input.windowMs)}${repeats}`;
   if (!input.top) return `${head}.`;
   return `${head}, top: ${input.top} (salience ${round1(input.topSalience ?? 0)}).`;
 }

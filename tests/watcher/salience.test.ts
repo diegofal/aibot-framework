@@ -4,7 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HumanInboundEvent } from '../../src/bot/agent-loop-utils';
 import { Graph } from '../../src/watcher/graph';
-import { decay, eventText, privateView, scoreEvent, topicWords } from '../../src/watcher/salience';
+import {
+  decay,
+  eventText,
+  privateView,
+  repeatKey,
+  scoreEvent,
+  topicWords,
+  withoutNovelty,
+} from '../../src/watcher/salience';
 import type { SensedEvent } from '../../src/watcher/types';
 
 function emptyGraph() {
@@ -137,5 +145,64 @@ describe('helpers', () => {
     expect(privateView(e, true).text).toBe(e.text);
     expect(privateView(e, false).text).toBe('please acme invoice tomorrow card');
     expect(privateView(human(), false).text).toBeUndefined();
+  });
+});
+
+describe('repeatKey / withoutNovelty', () => {
+  const ev = (type: string, data: Record<string, unknown>, botId = 'b1') =>
+    ({ type, botId, timestamp: 0, data }) as never;
+
+  test('a failed tool keys by tool and error class, ignoring numbers', () => {
+    const a = repeatKey(
+      ev('tool:error', { toolName: 'web_fetch', error: 'timeout after 3001 ms' })
+    );
+    const b = repeatKey(
+      ev('tool:end', { toolName: 'web_fetch', success: false, result: 'Timeout after 12 ms' })
+    );
+    expect(a).toBeDefined();
+    expect(a).toBe(b);
+  });
+
+  test('without error text a failure keys by failure kind and target', () => {
+    const k = repeatKey(
+      ev('tool:end', {
+        toolName: 'web_fetch',
+        success: false,
+        failureKind: 'blocked',
+        target: 'x.com',
+      })
+    );
+    expect(k).toBe('b1|fail|web_fetch|blocked|x.com');
+  });
+
+  test('other events key by type and text; no text, no key; bots differ', () => {
+    expect(repeatKey(ev('agent:result', { summary: 'Done 3' }))).toBe('b1|agent:result|done #');
+    expect(repeatKey(ev('llm:start', {}))).toBeUndefined();
+    expect(repeatKey(ev('agent:result', { summary: 'x' }, 'b2'))).not.toBe(
+      repeatKey(ev('agent:result', { summary: 'x' }))
+    );
+  });
+
+  test('human messages are never keyed', () => {
+    expect(
+      repeatKey({
+        botId: 'b1',
+        channelKind: 'rest',
+        chatId: '1',
+        userId: '1',
+        timestamp: 0,
+        text: 'hola',
+      })
+    ).toBeUndefined();
+  });
+
+  test('withoutNovelty drops the bonus and the reason, and leaves other scores alone', () => {
+    expect(withoutNovelty({ salience: 0.5, reasons: ['error', 'novel'], touched: [] })).toEqual({
+      salience: 0.3,
+      reasons: ['error'],
+      touched: [],
+    });
+    const plain = { salience: 0.3, reasons: ['error'], touched: [] };
+    expect(withoutNovelty(plain)).toBe(plain);
   });
 });

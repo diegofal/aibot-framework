@@ -84,6 +84,53 @@ export function scoreEvent(event: SensedEvent, ctx: SalienceContext): SalienceSc
   return { salience: Math.round(salience * 1000) / 1000, reasons, touched };
 }
 
+/** Within this long, the same event from the same bot is a repeat, not news. */
+export const REPEAT_WINDOW_MS = 60_000;
+
+function normaliseText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[0-9a-f]{8,}/g, '#')
+    .replace(/\d+/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
+/**
+ * What makes two events "the same" for the repeat window: a failed tool by
+ * tool + error class (the error text, or the failure kind and target), any
+ * other event by its type and normalised text. Human messages are never keyed:
+ * two people may say the same topic words. Undefined = never a repeat.
+ */
+export function repeatKey(event: SensedEvent): string | undefined {
+  if (isHumanInbound(event)) return undefined;
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const failed =
+    event.type === 'tool:error' || (event.type === 'tool:end' && data.success === false);
+  if (failed && typeof data.toolName === 'string') {
+    const err = [data.error, data.result].find(
+      (v): v is string => typeof v === 'string' && !!v.trim()
+    );
+    const cls = err
+      ? normaliseText(err)
+      : `${String(data.failureKind ?? '')}|${String(data.target ?? '')}`;
+    return `${event.botId}|fail|${data.toolName}|${cls}`;
+  }
+  const text = eventText(event);
+  return text ? `${event.botId}|${event.type}|${normaliseText(text)}` : undefined;
+}
+
+/** A repeat is not novel: the novelty bonus and its reason come off. */
+export function withoutNovelty(score: SalienceScore): SalienceScore {
+  if (!score.reasons.includes('novel')) return score;
+  return {
+    ...score,
+    salience: Math.max(0, Math.round((score.salience - NOVELTY_BONUS) * 1000) / 1000),
+    reasons: score.reasons.filter((r) => r !== 'novel'),
+  };
+}
+
 function hasSurprise(data: Record<string, unknown>): boolean {
   if (Array.isArray(data.surprises)) return data.surprises.length > 0;
   return Boolean(data.surprise);
