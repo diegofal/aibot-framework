@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMClient } from '../../src/core/llm-client';
-import { Broadcaster } from '../../src/watcher/broadcast';
+import { BROADCAST_INFLIGHT_MAX_MS, Broadcaster } from '../../src/watcher/broadcast';
 import { DailyBudget } from '../../src/watcher/budget';
 import { Graph } from '../../src/watcher/graph';
 import {
@@ -43,7 +43,11 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 type Reply = () => Record<string, unknown>;
 
-function setup(reply: Reply = () => ({}), cfg: Partial<WatcherConfig['integrate']> = {}) {
+function setup(
+  reply: Reply = () => ({}),
+  cfg: Partial<WatcherConfig['integrate']> = {},
+  deps: Record<string, unknown> = {}
+) {
   const now = () => t;
   const graph = new Graph(join(dir, 'g'), { now });
   graph.load();
@@ -67,6 +71,7 @@ function setup(reply: Reply = () => ({}), cfg: Partial<WatcherConfig['integrate'
     createdBy: 'watcher',
   });
   const rows: WatcherLogRow[] = [];
+  const warns: string[] = [];
   const log = new WatcherLog(join(dir, 'log'), { now, onRow: (r) => rows.push(r) });
   const budget = new DailyBudget({
     dir,
@@ -123,9 +128,10 @@ function setup(reply: Reply = () => ({}), cfg: Partial<WatcherConfig['integrate'
     ],
     botName: (id) => (id === 'b1' ? 'Jarvis' : id === 'b2' ? 'Scout' : id),
     broadcaster,
-    logger: quiet,
+    logger: { warn: (_o: object, msg: string) => warns.push(msg) },
+    ...deps,
   });
-  return { graph, rows, prompts, delivered, broadcaster, integrator, a, b, edge };
+  return { graph, rows, prompts, delivered, broadcaster, integrator, a, b, edge, warns };
 }
 
 let seq = 0;
@@ -400,5 +406,182 @@ describe('insightNeedsBroadcast', () => {
       false
     );
     expect(insightNeedsBroadcast(n('Scoutish words', ['b1', 'b2'], 'high'), bots)).toBe(false);
+  });
+});
+
+describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026-10-24)', () => {
+  const HOUR = 3_600_000;
+
+  test('nothing pending and a non-empty agenda: due once, then not until integrate.agendaEveryMs', async () => {
+    const s = setup(() => ({ insights: [] }), {
+      heartbeatMs: HOUR,
+      minItems: 5,
+      salienceBar: 100,
+      agendaEveryMs: 6 * HOUR,
+    });
+    expect(s.integrator.due()).toBe(false);
+    t += HOUR;
+    expect(s.integrator.due()).toBe(true);
+    const out = await s.integrator.run();
+    expect(out.status).toBe('integrated');
+    expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
+    t += HOUR;
+    expect(s.integrator.due()).toBe(false);
+    t += 4 * HOUR;
+    expect(s.integrator.due()).toBe(false);
+    t += HOUR;
+    expect(s.integrator.due()).toBe(true);
+  });
+
+  test('the agenda pass time is kept in the state', async () => {
+    const s = setup(() => ({}), { heartbeatMs: HOUR, salienceBar: 100, agendaEveryMs: 6 * HOUR });
+    t += HOUR;
+    await s.integrator.run();
+    expect(s.integrator.state().lastAgendaAt).toBe(new Date(t).toISOString());
+  });
+
+  test('an empty agenda and 2 pending (below minItems): not due', () => {
+    const s = setup(() => ({}), { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaMax: 0 });
+    s.integrator.observe(item(0.2));
+    s.integrator.observe(item(0.2));
+    t += HOUR;
+    expect(s.integrator.due()).toBe(false);
+  });
+
+  test('agendaEveryMs defaults to 6 h', () => {
+    expect(WATCHER_DEFAULTS.integrate.agendaEveryMs).toBe(6 * HOUR);
+  });
+});
+
+describe('Integrator: a broadcast and a "no broadcast" for the same insight', () => {
+  const existingInsight = (s: ReturnType<typeof setup>, text = DUP) =>
+    s.graph.addNeuron({
+      kind: 'insight',
+      text,
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      confidence: 'medium',
+    });
+
+  test('a recognised insight with a proposed broadcast does not keep its whyNoBroadcast', async () => {
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = setup(() => ({
+      insights: [
+        {
+          text: DUP,
+          support: [ref.s?.a.id, ref.s?.b.id],
+          confidence: 'medium',
+          whyNoBroadcast: 'Nobody needs to hear it',
+        },
+      ],
+      broadcasts: [{ bot: 'b2', kind: 'directive', text: 'Stop the brief', insightIndex: 0 }],
+    }));
+    ref.s = s;
+    const existing = existingInsight(s);
+    await pass(s);
+    expect(s.delivered).toEqual(['directive:b2:Stop the brief']);
+    expect(s.graph.get(existing.id)?.meta?.whyNoBroadcast).toBeUndefined();
+    const row = s.rows.find((r) => r.op === 'integrate:recognised');
+    expect(row?.whyNoBroadcast).toBeUndefined();
+  });
+
+  test('a recognised insight broadcast by insightId does not keep its whyNoBroadcast either', async () => {
+    const ref: { s?: ReturnType<typeof setup>; existing?: Neuron } = {};
+    const s = setup(() => ({
+      insights: [
+        { text: DUP, support: [ref.s?.a.id, ref.s?.b.id], whyNoBroadcast: 'Nobody needs it' },
+      ],
+      broadcasts: [{ bot: 'b1', kind: 'wake', text: '', insightId: ref.existing?.id }],
+    }));
+    ref.s = s;
+    ref.existing = existingInsight(s);
+    await pass(s);
+    expect(s.delivered).toEqual(['wake:b1']);
+    expect(s.graph.get(ref.existing.id)?.meta?.whyNoBroadcast).toBeUndefined();
+  });
+
+  test('noBroadcast for an insight broadcast in the same pass is skipped (broadcast wins), logged once', async () => {
+    const ref: { one?: Neuron; two?: Neuron } = {};
+    const s = setup(() => ({
+      noBroadcast: [
+        { insightId: ref.one?.id, why: 'The operator already chose' },
+        { insightId: ref.two?.id, why: 'Too early' },
+      ],
+      broadcasts: [
+        { bot: 'b1', kind: 'wake', text: '', insightId: ref.one?.id },
+        { bot: 'b2', kind: 'wake', text: '', insightId: ref.two?.id },
+      ],
+    }));
+    ref.one = existingInsight(s);
+    ref.two = existingInsight(s, 'Scout and Jarvis duplicate the recruiting pilot');
+    await pass(s);
+    expect(s.delivered).toEqual(['wake:b1', 'wake:b2']);
+    expect(s.graph.get(ref.one.id)?.meta?.whyNoBroadcast).toBeUndefined();
+    expect(s.graph.get(ref.two.id)?.meta?.whyNoBroadcast).toBeUndefined();
+    expect(s.rows.filter((r) => r.op === 'integrate:no-broadcast')).toHaveLength(0);
+    expect(s.warns.filter((m) => m.includes('noBroadcast'))).toHaveLength(1);
+  });
+
+  test('a broadcast that cannot be sent (unknown bot) does not cancel the noBroadcast', async () => {
+    const ref: { one?: Neuron } = {};
+    const s = setup(() => ({
+      noBroadcast: [{ insightId: ref.one?.id, why: 'The operator already chose' }],
+      broadcasts: [{ bot: 'nope', kind: 'wake', text: '', insightId: ref.one?.id }],
+    }));
+    ref.one = existingInsight(s);
+    await pass(s);
+    expect(s.graph.get(ref.one.id)?.meta?.whyNoBroadcast).toBe('The operator already chose');
+    expect(s.warns.filter((m) => m.includes('noBroadcast'))).toHaveLength(0);
+  });
+});
+
+describe('Integrator: a broadcast record left open by a dead process', () => {
+  const openRecord = (insightId: string, ageMs: number) => ({
+    id: 'b-00000aaa',
+    botId: 'b1',
+    kind: 'wake' as const,
+    text: '',
+    insightId,
+    createdAt: new Date(t - ageMs).toISOString(),
+  });
+  const withRecords = (records: () => unknown[]) => ({
+    broadcaster: { send: async () => ({ status: 'invalid' as const }), list: records },
+  });
+  const myInsightsOf = (prompt: string) =>
+    prompt.split('## My last insights')[1]?.split('\n## ')[0] ?? '';
+  const waiting = (s: ReturnType<typeof setup>) =>
+    s.graph.addNeuron({
+      kind: 'insight',
+      text: 'Two Monday briefs overlap',
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      confidence: 'medium',
+    });
+
+  test('an open record older than BROADCAST_INFLIGHT_MAX_MS counts as failed: back on the agenda', async () => {
+    const ref: { existing?: Neuron } = {};
+    const age = BROADCAST_INFLIGHT_MAX_MS + 60_000;
+    const s = setup(
+      () => ({}),
+      {},
+      withRecords(() => [openRecord(ref.existing?.id ?? '', age)])
+    );
+    ref.existing = waiting(s);
+    await pass(s);
+    expect(agendaOf(s.prompts[0] as string)).toContain(`[${ref.existing.id}]`);
+    expect(myInsightsOf(s.prompts[0] as string)).toContain('wake to Jarvis (failed)');
+  });
+
+  test('an open record younger than that is still in flight: off the agenda', async () => {
+    const ref: { existing?: Neuron } = {};
+    const s = setup(
+      () => ({}),
+      {},
+      withRecords(() => [openRecord(ref.existing?.id ?? '', 60_000)])
+    );
+    ref.existing = waiting(s);
+    await pass(s);
+    expect(agendaOf(s.prompts[0] as string)).not.toContain(`[${ref.existing.id}]`);
+    expect(myInsightsOf(s.prompts[0] as string)).toContain('wake to Jarvis (in flight)');
   });
 });

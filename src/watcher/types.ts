@@ -217,6 +217,8 @@ export interface WatcherConfig {
     minItems: number;
     /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
     agendaMax: number;
+    /** A heartbeat pass with only the standing agenda to act on runs at most this often. */
+    agendaEveryMs: number;
     maxPerDay: number;
     maxTokensPerDay: number;
   };
@@ -243,6 +245,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     heartbeatMs: 3_600_000,
     minItems: 5,
     agendaMax: 8,
+    agendaEveryMs: 21_600_000,
     maxPerDay: 24,
     maxTokensPerDay: 600_000,
   },

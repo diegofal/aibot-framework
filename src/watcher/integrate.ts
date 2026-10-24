@@ -4,8 +4,10 @@
  * item tier 0 pushed (`observe`) and every neuron notice created or recognised
  * (`observeNotice`). A pass is due when that salience reaches
  * `integrate.salienceBar`, or on the heartbeat (`integrate.heartbeatMs`) with
- * anything pending, never closer than `INTEGRATE_MIN_GAP_MS` to the previous
- * attempt, and only while `integrate.enabled`.
+ * `integrate.minItems` items pending or a non-empty standing agenda (a pass
+ * with only the agenda to act on at most every `integrate.agendaEveryMs`),
+ * never closer than `INTEGRATE_MIN_GAP_MS` to the previous attempt, and only
+ * while `integrate.enabled`.
  *
  * The model (Opus, through the instrumented client: budget reservation and
  * fleet breaker before the call, query log under `__watcher__`) sees the
@@ -28,7 +30,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path';
 import { parseLLMJson } from '../bot/llm-json-parser';
 import { mentionsWord } from '../hygiene/text-utils';
-import type { BroadcastResult, Broadcaster } from './broadcast';
+import { type BroadcastResult, type Broadcaster, isStaleOpen } from './broadcast';
 import type { DailyBudget } from './budget';
 import type { Graph } from './graph';
 import { placeWithoutEmbedding } from './layout';
@@ -64,6 +66,7 @@ import {
   type NeuronKind,
   OPERATOR_SOURCED,
   type Vec3,
+  WATCHER_DEFAULTS,
   type WatcherConfig,
   isOperatorSourced,
   isPublicHumanItem,
@@ -165,6 +168,8 @@ export interface IntegrateState {
   pending: { items: BufferItem[]; neurons: string[]; salience: number };
   /** Standing-agenda ids a pass addressed (`agendaCovered`); never shown again. */
   agendaCovered?: string[];
+  /** Last attempt that showed a non-empty standing agenda (rate-limits agenda-only passes). */
+  lastAgendaAt?: string;
 }
 
 export interface IntegrateDeps {
@@ -299,6 +304,7 @@ function readState(dir: string): IntegrateState {
         salience: typeof p.salience === 'number' && Number.isFinite(p.salience) ? p.salience : 0,
       },
       ...(Array.isArray(raw.agendaCovered) ? { agendaCovered: strList(raw.agendaCovered) } : {}),
+      ...(typeof raw.lastAgendaAt === 'string' ? { lastAgendaAt: raw.lastAgendaAt } : {}),
     };
   } catch {
     return emptyState();
@@ -311,6 +317,8 @@ export class Integrator {
   private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
   private readonly bornAt: number;
+  /** When `due` last found the standing agenda empty (the scan reads the whole graph). */
+  private emptyAgendaAt: number | undefined;
 
   constructor(private readonly deps: IntegrateDeps) {
     this.st = readState(deps.dir);
@@ -364,16 +372,40 @@ export class Integrator {
     const cfg = this.deps.config().integrate;
     if (!cfg.enabled) return false;
     const p = this.st.pending;
-    if (p.items.length === 0 && p.neurons.length === 0) return false;
     const nowMs = this.deps.now();
     const attempt = this.st.lastAttemptAt ? Date.parse(this.st.lastAttemptAt) : undefined;
     if (attempt !== undefined && nowMs - attempt < INTEGRATE_MIN_GAP_MS) return false;
-    if (p.salience >= cfg.salienceBar) return true;
+    const anyPending = p.items.length > 0 || p.neurons.length > 0;
+    if (anyPending && p.salience >= cfg.salienceBar) return true;
+    const last = this.st.lastRunAt ? Date.parse(this.st.lastRunAt) : this.bornAt;
+    if (nowMs - last < cfg.heartbeatMs) return false;
     // The heartbeat waits for enough salient items: a pass on 1-3 events had
     // nothing to integrate (live, 2026-10-24).
-    if (p.items.length < (cfg.minItems ?? 1)) return false;
-    const last = this.st.lastRunAt ? Date.parse(this.st.lastRunAt) : this.bornAt;
-    return nowMs - last >= cfg.heartbeatMs;
+    if (p.items.length >= (cfg.minItems ?? 1)) return true;
+    // ...or acts on the standing agenda, which no event brings up: a quiet
+    // fleet would otherwise never act on cross-bot pairs or waiting insights.
+    // At most every `agendaEveryMs`, so a static agenda does not burn the cap.
+    if (!this.agendaPassAllowed(nowMs)) return false;
+    return this.agendaNonEmpty(cfg.agendaMax ?? 0, nowMs);
+  }
+
+  /** An agenda-only pass runs at most once per `integrate.agendaEveryMs`. */
+  private agendaPassAllowed(nowMs: number): boolean {
+    const every =
+      this.deps.config().integrate.agendaEveryMs ?? WATCHER_DEFAULTS.integrate.agendaEveryMs;
+    const last = this.st.lastAgendaAt ? Date.parse(this.st.lastAgendaAt) : undefined;
+    return last === undefined || !Number.isFinite(last) || nowMs - last >= every;
+  }
+
+  /** Whether the standing agenda has anything; an empty answer is reused for `INTEGRATE_MIN_GAP_MS`. */
+  private agendaNonEmpty(max: number, nowMs: number): boolean {
+    if (this.emptyAgendaAt !== undefined && nowMs - this.emptyAgendaAt < INTEGRATE_MIN_GAP_MS) {
+      return false;
+    }
+    const agenda = this.standingAgenda(max, this.broadcastsByInsight());
+    const any = agenda.pairs.length > 0 || agenda.insights.length > 0;
+    this.emptyAgendaAt = any ? undefined : nowMs;
+    return any;
   }
 
   /**
@@ -408,14 +440,27 @@ export class Integrator {
     const cfg = this.deps.config();
     if (!cfg.integrate.enabled) return { status: 'idle' };
     const pending = this.st.pending;
-    if (pending.items.length === 0 && pending.neurons.length === 0) return { status: 'idle' };
+    const sentByInsight = this.broadcastsByInsight();
+    const agenda = this.standingAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight);
+    const hasAgenda = agenda.pairs.length > 0 || agenda.insights.length > 0;
+    // Nothing pending: only the agenda can justify a pass, and at most once
+    // per `agendaEveryMs` (also when `run` is called directly).
+    if (
+      pending.items.length === 0 &&
+      pending.neurons.length === 0 &&
+      !(hasAgenda && this.agendaPassAllowed(this.deps.now()))
+    ) {
+      return { status: 'idle' };
+    }
     if (isCancelled()) return { status: 'cancelled' };
 
     // Snapshot what this pass reads: anything observed meanwhile stays pending.
     const readItems = [...pending.items];
     const readNeurons = [...pending.neurons];
     const readSalience = pending.salience;
-    this.st.lastAttemptAt = new Date(this.deps.now()).toISOString();
+    const attemptIso = new Date(this.deps.now()).toISOString();
+    this.st.lastAttemptAt = attemptIso;
+    if (hasAgenda) this.st.lastAgendaAt = attemptIso;
     this.persist();
 
     const botName = this.deps.botName ?? ((id: string) => id);
@@ -442,8 +487,6 @@ export class Integrator {
     const insights = this.latest('insight', INTEGRATE_LAST_INSIGHTS);
     const predictions = this.latest('prediction', INTEGRATE_LAST_PREDICTIONS);
     const bots = this.deps.bots();
-    const sentByInsight = this.broadcastsByInsight();
-    const agenda = this.standingAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight);
     const bc = this.deps.broadcaster;
     const cap = bc?.countToday ? bc.cap : undefined;
     const interoception = this.readSelf(() => this.deps.interoception?.());
@@ -528,10 +571,13 @@ export class Integrator {
     };
     const insightByIndex: Array<Neuron | undefined> = [];
     const createdInsights: Neuron[] = [];
+    const proposedIds = new Set(
+      out.broadcasts.map((b) => b.insightId).filter((id): id is string => !!id)
+    );
     for (const [index, i] of out.insights.entries()) {
       if (isCancelled()) return { status: 'cancelled' };
       const proposed = out.broadcasts.some((b) => b.insightIndex === index && !b.insightId);
-      const r = await this.insight(i, ctx, isCancelled, { proposed, bots });
+      const r = await this.insight(i, ctx, isCancelled, { proposed, proposedIds, bots });
       if (isCancelled()) return { status: 'cancelled' };
       insightByIndex.push(r?.neuron);
       if (r?.created) createdInsights.push(r.neuron);
@@ -579,9 +625,26 @@ export class Integrator {
       const n = id ? (shown.get(id) ?? insightByIndex.find((x) => x?.id === id)) : undefined;
       return n?.kind === 'insight' ? n : undefined;
     };
+    const sendable = (b: IntegrateBroadcastOut) => {
+      const insight = b.insightId ? shownInsight(b.insightId) : insightByIndex[b.insightIndex];
+      const ok =
+        !!insight &&
+        botIds.has(b.bot) &&
+        (BROADCAST_KINDS as readonly string[]).includes(b.kind) &&
+        !!this.deps.broadcaster;
+      return ok ? insight : undefined;
+    };
+    // A "no broadcast" for an insight this pass also broadcasts contradicts
+    // itself: the broadcast wins and the reason is not recorded.
+    const broadcastNow = new Set(out.broadcasts.map(sendable).flatMap((n) => (n ? [n.id] : [])));
+    const contradicted: string[] = [];
     for (const nb of out.noBroadcast) {
       const insight = shownInsight(nb.insightId);
       if (!insight) continue;
+      if (broadcastNow.has(insight.id)) {
+        contradicted.push(insight.id);
+        continue;
+      }
       const why = clip(nb.why, 200);
       graph.patchMeta(insight.id, { whyNoBroadcast: why });
       log.say(
@@ -591,15 +654,15 @@ export class Integrator {
         { neuronIds: [insight.id], whyNoBroadcast: why, source: 'watcher:integrate' }
       );
     }
+    if (contradicted.length) {
+      this.deps.logger?.warn(
+        { insightIds: uniq(contradicted) },
+        'Watcher integrate: noBroadcast skipped for insights broadcast in the same pass'
+      );
+    }
     for (const b of out.broadcasts) {
-      const insight = b.insightId ? shownInsight(b.insightId) : insightByIndex[b.insightIndex];
-      if (
-        !insight ||
-        !botIds.has(b.bot) ||
-        !(BROADCAST_KINDS as readonly string[]).includes(b.kind)
-      )
-        continue;
-      if (!this.deps.broadcaster) continue;
+      const insight = sendable(b);
+      if (!insight || !this.deps.broadcaster) continue;
       if (isCancelled()) return { status: 'cancelled' };
       broadcasts.push(
         await this.deps.broadcaster.send({
@@ -728,12 +791,15 @@ export class Integrator {
       this.deps.logger?.warn({ err }, 'Watcher integrate: could not read the broadcasts');
     }
     const botName = this.deps.botName ?? ((id: string) => id);
+    const nowMs = this.deps.now();
     for (const b of all) {
+      // An open record past BROADCAST_INFLIGHT_MAX_MS was left by a process
+      // that died mid-delivery: failed, not in flight forever.
       const status: IntegrateInsightBroadcast['status'] = b.deliveredAt
         ? 'delivered'
         : b.deferred
           ? 'deferred'
-          : b.deliveryError !== undefined
+          : b.deliveryError !== undefined || isStaleOpen(b, nowMs)
             ? 'failed'
             : 'in flight';
       const list = out.get(b.insightId) ?? [];
@@ -747,7 +813,8 @@ export class Integrator {
    * Knowledge no event brings up: the strongest cross-bot `related` pairs no
    * insight stands on yet (both ends cited by one insight, edge `caused`),
    * and insights at medium confidence or more with no delivered or in-flight
-   * broadcast and no `whyNoBroadcast`. What a pass said it covered
+   * broadcast (an open record past `BROADCAST_INFLIGHT_MAX_MS` is failed) and
+   * no `whyNoBroadcast`. What a pass said it covered
    * (`agendaCovered`) never comes back. At most `max` of each.
    */
   private standingAgenda(
@@ -779,12 +846,14 @@ export class Integrator {
         continue;
       }
       if (!AGENDA_KINDS.has(n.kind)) continue;
+      let onA: Set<string> | undefined;
       for (const e of graph.edgesOf(n.id)) {
         if (e.rel !== 'related' || e.from !== n.id || covered.has(e.id)) continue;
         const m = graph.get(e.to);
         if (!live(m) || !AGENDA_KINDS.has(m.kind) || !crossBot(n, m)) continue;
-        const onA = insightsOf(n.id);
-        if ([...insightsOf(m.id)].some((id) => onA.has(id))) continue;
+        if (!onA) onA = insightsOf(n.id);
+        const on = onA;
+        if ([...insightsOf(m.id)].some((id) => on.has(id))) continue;
         pairs.push({ id: e.id, weight: e.weight, a: n, b: m });
       }
     }
@@ -838,7 +907,12 @@ export class Integrator {
     i: IntegrateInsightOut,
     ctx: ApplyCtx,
     isCancelled: () => boolean,
-    act: { proposed: boolean; bots: Array<{ id: string; name: string }> } = {
+    act: {
+      proposed: boolean;
+      /** Insights a broadcast of this pass names by `insightId`. */
+      proposedIds?: Set<string>;
+      bots: Array<{ id: string; name: string }>;
+    } = {
       proposed: false,
       bots: [],
     }
@@ -857,7 +931,9 @@ export class Integrator {
     const why = i.whyNoBroadcast ? clip(i.whyNoBroadcast, 200) : undefined;
     if (same) {
       const active = graph.activate(same.id) ?? same;
-      if (why) graph.patchMeta(active.id, { whyNoBroadcast: why });
+      // Same rule as a created insight: a proposed broadcast drops the reason.
+      const proposed = act.proposed || act.proposedIds?.has(same.id) === true;
+      if (why && !proposed) graph.patchMeta(active.id, { whyNoBroadcast: why });
       log.say(
         'integrate',
         'integrate:recognised',
@@ -865,7 +941,7 @@ export class Integrator {
         {
           neuronIds: [active.id],
           source: 'watcher:integrate',
-          ...(why && !act.proposed ? { whyNoBroadcast: why } : {}),
+          ...(why && !proposed ? { whyNoBroadcast: why } : {}),
         }
       );
       return { neuron: active, created: false };

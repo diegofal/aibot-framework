@@ -196,24 +196,6 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Hours: refuse directive/goal broadcasts from operator-sourced insights to bots with public channels, or rewrite them without the operator material.
 
-### Watcher broadcast records left open by a process exit stay in flight forever
-
-| | |
-|---|---|
-| **Added** | 2026-10-23 |
-| **Where** | `src/watcher/broadcast.ts` (`Broadcaster.send`, the record written before `deliver`) |
-| **Decided by** | lead, watcher review round 4 |
-
-**What was deferred.** `send` writes the broadcast record before delivering and closes it after. If the process exits during delivery the record stays open, and every later read treats it as in flight: it blocks another broadcast for the same insight and kind, and it counts toward that bot's daily cap.
-
-**Why it was the right call then.** The round fixed the integrate state that a cancel during a send left unconsumed; this needs a process exit mid-delivery and costs at most one blocked insight and one slot of a day's cap.
-
-**What it costs while it stands.** One insight that is never broadcast again in that kind, and one fewer broadcast for the bot on the day it happened.
-
-**The trigger.** The first broadcast record found open after a restart, or a bot that keeps hitting its daily cap with fewer delivered broadcasts than the cap.
-
-**Estimated cost to pay.** Under an hour: when reading, treat an open record older than 1 h as failed, or close open records as failed on stop.
-
 ### Watcher retries a deferred question on every integrate pass
 
 | | |

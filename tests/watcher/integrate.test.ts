@@ -345,7 +345,10 @@ describe('Integrator.run', () => {
         });
       },
     };
-    const s = setup({ reply: full, deps: { broadcaster: slow } });
+    // agendaMax 0: the insight this pass writes would otherwise wait on the
+    // standing agenda, and the restart below would run a (legitimate) agenda
+    // pass on the canned reply. This test is about pending items only.
+    const s = setup({ reply: full, deps: { broadcaster: slow }, cfg: { agendaMax: 0 } });
     s.integrator.observe(item(cycleDone('b1', t - 60_000), 1.5));
     s.integrator.observeNotice({
       status: 'noticed',

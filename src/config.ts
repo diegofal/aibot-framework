@@ -891,6 +891,8 @@ export const WatcherConfigSchema = z
         minItems: z.number().int().min(1).default(5),
         /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
         agendaMax: z.number().int().min(0).default(8),
+        /** A heartbeat pass with only the standing agenda to act on runs at most this often. */
+        agendaEveryMs: z.number().int().min(60_000).default(21_600_000),
         maxPerDay: z.number().int().min(0).default(24),
         maxTokensPerDay: z.number().int().min(0).default(600_000),
       })
