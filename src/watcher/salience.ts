@@ -4,6 +4,7 @@
  * Also the privacy rule: text from anyone but the operator is reduced to topic
  * words before the watcher stores or narrates it. Pure.
  */
+import { createHash } from 'node:crypto';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { Graph } from './graph';
 import { type SensedEvent, isHumanInbound } from './types';
@@ -87,15 +88,24 @@ export function scoreEvent(event: SensedEvent, ctx: SalienceContext): SalienceSc
 /** Within this long, the same event from the same bot is a repeat, not news. */
 export const REPEAT_WINDOW_MS = 60_000;
 
+/** Normalised text longer than this is keyed by its prefix plus a hash of the whole. */
+const KEY_TEXT_MAX = 200;
+
 /**
- * Lowercased, whitespace-collapsed, capped text. `stripDigits` (error text
- * only) also folds ids and numbers away: a port or a millisecond count is
- * noise in an error, but in a result a changed count is the news.
+ * Lowercased, whitespace-collapsed text; past `KEY_TEXT_MAX` chars, the
+ * prefix plus a sha1 (16 hex) of the whole text, so the key stays short and
+ * two texts that share a long prefix (production paths) are still two keys.
+ * `stripDigits` (error text only) also folds ids and numbers away: a port or
+ * a millisecond count is noise in an error, but in a result a changed count
+ * is the news.
  */
 function normaliseText(text: string, stripDigits = false): string {
   const lower = text.toLowerCase();
   const folded = stripDigits ? lower.replace(/[0-9a-f]{8,}/g, '#').replace(/\d+/g, '#') : lower;
-  return folded.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const normal = folded.replace(/\s+/g, ' ').trim();
+  if (normal.length <= KEY_TEXT_MAX) return normal;
+  const digest = createHash('sha1').update(normal).digest('hex').slice(0, 16);
+  return `${normal.slice(0, KEY_TEXT_MAX)}#${digest}`;
 }
 
 /**

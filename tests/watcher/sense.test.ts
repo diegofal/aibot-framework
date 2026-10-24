@@ -541,6 +541,21 @@ describe('Sense novelty dedupe', () => {
     expect(buffer.items().map((i) => i.reasons)).toEqual([['novel'], ['novel']]);
   });
 
+  test('two productions whose paths share a 200+ char prefix are both buffered', () => {
+    const { stream, buffer } = setup();
+    const dir = `productions/${'deep-research-folder/'.repeat(12)}`;
+    const saved = (file: string) => ({
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary: `Saved ${dir}${file}` },
+    });
+    stream.emit('activity', saved('brief-jarvis.md'));
+    t += 10_000;
+    stream.emit('activity', saved('brief-scout.md'));
+    expect(buffer.size()).toBe(2);
+  });
+
   test('two identical agent:result summaries within 60 s are a repeat', () => {
     const { stream, buffer } = setup();
     const result = {

@@ -163,6 +163,15 @@ describe('repeatKey / withoutNovelty', () => {
     expect(a).toBe(b);
   });
 
+  test('two texts sharing a 200+ char prefix key apart (no truncation)', () => {
+    const dir = `productions/${'deep-research-folder/'.repeat(12)}`;
+    const a = repeatKey(ev('agent:result', { summary: `Saved ${dir}brief-jarvis.md` }));
+    const b = repeatKey(ev('agent:result', { summary: `Saved ${dir}brief-scout.md` }));
+    expect(dir.length).toBeGreaterThan(200);
+    expect(a).toBeDefined();
+    expect(a).not.toBe(b);
+  });
+
   test('without error text a failure keys by failure kind and target', () => {
     const k = repeatKey(
       ev('tool:end', {

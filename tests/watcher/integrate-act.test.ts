@@ -799,3 +799,53 @@ describe('Integrator: agendaCovered retires an insight only once it acted (revie
     expect(s.integrator.state().agendaCovered).toEqual([s.edge.id]);
   });
 });
+
+describe('Integrator: a recognised insight with a stale whyNoBroadcast (gap 2026-10-24)', () => {
+  // The insight already carries a reason from an earlier pass; this pass
+  // recognises it and proposes a broadcast. The old reason must not keep it
+  // off the agenda when that broadcast does not land.
+  function stale(broadcast: Record<string, unknown>) {
+    const ref: { s?: ReturnType<typeof setup>; first: boolean } = { first: true };
+    const s = setup(() => {
+      if (!ref.first) return {};
+      ref.first = false;
+      return {
+        insights: [{ text: DUP, support: [ref.s?.a.id, ref.s?.b.id], confidence: 'medium' }],
+        broadcasts: [{ ...broadcast, insightIndex: 0 }],
+      };
+    });
+    ref.s = s;
+    const existing = s.graph.addNeuron({
+      kind: 'insight',
+      text: DUP,
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      confidence: 'medium',
+      meta: { whyNoBroadcast: 'Nobody needed it last week' },
+    });
+    return { s, id: existing.id };
+  }
+
+  test('a failed broadcast puts it back on the standing agenda', async () => {
+    // Goals are not wired in setup's broadcaster: the delivery fails.
+    const { s, id } = stale({ bot: 'b1', kind: 'goal', text: 'Merge the briefs' });
+    const out = await pass(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual(['failed']);
+    expect(s.graph.get(id)?.meta?.whyNoBroadcast).toBeUndefined();
+    t += INTEGRATE_MIN_GAP_MS;
+    await pass(s);
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${id}]`);
+  });
+
+  test('a delivered broadcast retires it', async () => {
+    const { s, id } = stale({ bot: 'b1', kind: 'wake', text: '' });
+    const out = await pass(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual([
+      'delivered',
+    ]);
+    expect(s.graph.get(id)?.meta?.whyNoBroadcast).toBeUndefined();
+    t += INTEGRATE_MIN_GAP_MS;
+    await pass(s);
+    expect(agendaOf(s.prompts[1] as string)).not.toContain(id);
+  });
+});

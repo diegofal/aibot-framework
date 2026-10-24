@@ -694,6 +694,13 @@ export class Integrator {
         'Watcher integrate: noBroadcast skipped for insights broadcast in the same pass'
       );
     }
+    // A reason left by an earlier pass on an insight this pass broadcasts is
+    // stale: the broadcast replaced it. Cleared before the sends, so a capped,
+    // deferred or failed send leaves the insight on the agenda for a retry; a
+    // delivered one retires it.
+    for (const id of broadcastNow) {
+      if (graph.get(id)?.meta?.whyNoBroadcast) graph.dropMeta(id, ['whyNoBroadcast']);
+    }
     const deliveredFor = new Set<string>();
     const retireActed = () => {
       const acted = coveredInsights.filter(
