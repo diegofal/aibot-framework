@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Hono } from 'hono';
 import { createStatsContext } from '../../src/stats/context';
-import { EMBEDDING_PROBE_TTL_MS, EmbeddingProbe } from '../../src/stats/embedding-probe';
+import {
+  EMBEDDING_PROBE_TIMEOUT_MS,
+  EMBEDDING_PROBE_TTL_MS,
+  EmbeddingProbe,
+} from '../../src/stats/embedding-probe';
 import { buildInfra } from '../../src/stats/infra-aggregator';
 import { statsRoutes } from '../../src/web/routes/stats';
 import { removeTempDir } from '../helpers/temp-dir';
@@ -72,11 +76,41 @@ describe('EmbeddingProbe', () => {
     const since = first.downSince;
     t += EMBEDDING_PROBE_TTL_MS + 1;
     expect((await p.get()).downSince).toBe(since);
+    await p.settled();
+    expect((await p.get()).downSince).toBe(since);
     up = true;
     t += EMBEDDING_PROBE_TTL_MS + 1;
+    // Changed deliberately (review 2026-10-24): a stale value is served at
+    // once and the refresh runs behind it, so the recovery shows on the next get.
+    expect((await p.get()).ok).toBe(false);
+    await p.settled();
     const back = await p.get();
     expect(back.ok).toBe(true);
     expect(back.downSince).toBeNull();
+  });
+
+  // Review 2026-10-24: /api/stats/infra awaited the probe (up to 15 s) even
+  // with a value on hand.
+  it('a stale value comes back at once while the refresh runs behind it', async () => {
+    let hang = false;
+    const { p, calls } = probe(() =>
+      hang ? new Promise<number[]>(() => {}) : Promise.resolve([1])
+    );
+    const first = await p.get();
+    hang = true;
+    t += EMBEDDING_PROBE_TTL_MS + 1;
+    const winner = await Promise.race([
+      p.get(),
+      new Promise<'waited'>((r) => setTimeout(() => r('waited'), 50)),
+    ]);
+    expect(winner).toEqual(first);
+    expect(calls).toHaveLength(2);
+    await p.get();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('the probe gives up after 3 s', () => {
+    expect(EMBEDDING_PROBE_TIMEOUT_MS).toBe(3_000);
   });
 
   it('an empty vector is down; no model configured is down without calling', async () => {
@@ -130,5 +164,37 @@ describe('infra: the ollama row carries the embedding health', () => {
     };
     expect(body.backends.find((b) => b.name === 'ollama')?.embedding?.ok).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  it('GET /api/stats/infra answers with the stale value while a refresh hangs', async () => {
+    let hang = false;
+    const p = new EmbeddingProbe({
+      model: 'nomic',
+      embed: () => (hang ? new Promise<number[]>(() => {}) : Promise.resolve([1])),
+      now: () => t,
+    });
+    await p.get();
+    hang = true;
+    t += EMBEDDING_PROBE_TTL_MS + 1;
+    const app = new Hono();
+    app.route(
+      '/api/stats',
+      statsRoutes({
+        config: fx.config,
+        botManager: {} as never,
+        logger: noopLogger,
+        now: () => fx.now,
+        embeddingProbe: p,
+      })
+    );
+    const res = await Promise.race([
+      app.request('/api/stats/infra'),
+      new Promise<'waited'>((r) => setTimeout(() => r('waited'), 200)),
+    ]);
+    expect(res).not.toBe('waited');
+    const body = (await (res as Response).json()) as {
+      backends: Array<{ name: string; embedding?: { ok: boolean } }>;
+    };
+    expect(body.backends.find((b) => b.name === 'ollama')?.embedding?.ok).toBe(true);
   });
 });

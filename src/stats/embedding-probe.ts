@@ -2,13 +2,14 @@
  * Health of the embedding service (plan `docs/plans/watcher-optimizations-plan.md`,
  * O7): Ollama was down for 11 days unnoticed and the watcher's birth ran
  * without embeddings. One `embed("probe")` per `GET /api/stats/infra`,
- * cached `EMBEDDING_PROBE_TTL_MS` (5 min); concurrent requests share the
- * call. `downSince` is the first failed check since the last good one
+ * cached `EMBEDDING_PROBE_TTL_MS` (5 min), at most `EMBEDDING_PROBE_TIMEOUT_MS`
+ * (3 s); concurrent requests share the call, and a stale value is served at
+ * once while the refresh runs behind it (only the first request waits). `downSince` is the first failed check since the last good one
  * (process-local). Never throws.
  */
 
 export const EMBEDDING_PROBE_TTL_MS = 5 * 60_000;
-export const EMBEDDING_PROBE_TIMEOUT_MS = 15_000;
+export const EMBEDDING_PROBE_TIMEOUT_MS = 3_000;
 const PROBE_TEXT = 'probe';
 
 export interface EmbeddingHealth {
@@ -42,7 +43,11 @@ export class EmbeddingProbe {
     this.now = opts.now ?? Date.now;
   }
 
-  /** The cached health, or a fresh probe when the cache is older than the TTL. */
+  /**
+   * The cached health. Older than the TTL, a refresh starts (one at a time)
+   * and the stale value still comes back at once; only the very first get
+   * waits for a probe.
+   */
   get(): Promise<EmbeddingHealth> {
     const ttl = this.opts.ttlMs ?? EMBEDDING_PROBE_TTL_MS;
     if (this.last && this.now() - this.lastAt < ttl) return Promise.resolve(this.last);
@@ -51,7 +56,12 @@ export class EmbeddingProbe {
         this.inflight = null;
       });
     }
-    return this.inflight;
+    return this.last ? Promise.resolve(this.last) : this.inflight;
+  }
+
+  /** Resolves when the refresh in flight (if any) has settled. */
+  async settled(): Promise<void> {
+    await this.inflight;
   }
 
   private async check(): Promise<EmbeddingHealth> {
