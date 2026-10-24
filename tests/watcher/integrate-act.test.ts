@@ -693,6 +693,88 @@ describe('Integrator: wakes on salience, a changed agenda or the heartbeat (O2)'
       t += 3 * HOUR;
       expect(s.integrator.wake()).toBe('agenda-changed');
     });
+
+    // Fix 2026-10-24: a send that failed DURING the agenda pass is before
+    // `agendaSettledAt` and its insight is older than the scan, so it was never
+    // news again; a quiet fleet never retried it.
+    describe('an insight whose broadcast was unsuccessful during the agenda pass', () => {
+      function withInsight(status: 'failed' | 'deferred' | 'capped' | 'delivered') {
+        const ref: { id?: string } = {};
+        let first = true;
+        const s = setup(
+          () => {
+            const out = first
+              ? {
+                  insights: [],
+                  broadcasts: [{ bot: 'b1', kind: 'wake', text: '', insightId: ref.id }],
+                }
+              : { insights: [] };
+            first = false;
+            return out;
+          },
+          { ...quietCfg, agendaMax: 8 }
+        );
+        ref.id = s.graph.addNeuron({
+          kind: 'insight',
+          text: 'Jarvis and Scout both track the Q3 invoices',
+          support: { bots: ['b1', 'b2'] },
+          confidence: 'medium',
+          createdBy: 'watcher',
+        }).id;
+        const sends: string[] = [];
+        s.broadcaster.send = (async (req: { insightId?: string }) => {
+          sends.push(req.insightId ?? '');
+          return status === 'capped' ? { status } : { status, broadcast: {} };
+        }) as never;
+        return { s, id: ref.id, sends };
+      }
+
+      for (const status of ['failed', 'deferred', 'capped'] as const) {
+        test(`${status}: not due at +10 min, due once after the floor`, async () => {
+          const { s, id, sends } = withInsight(status);
+          expect(s.integrator.wake()).toBe('agenda-changed');
+          await s.integrator.run({ trigger: 'agenda-changed' });
+          expect(sends).toEqual([id]);
+          t += 10 * 60_000;
+          expect(s.integrator.wake()).toBeNull();
+          t += 2 * HOUR;
+          expect(s.integrator.wake()).toBe('agenda-changed');
+          await s.integrator.run({ trigger: 'agenda-changed' });
+          expect(agendaOf(s.prompts[1] as string)).toContain(id);
+          // Shown again and not re-sent: the retry was used up.
+          for (const step of [INTEGRATE_MIN_GAP_MS, 3 * HOUR, 12 * HOUR]) {
+            t += step;
+            expect(s.integrator.wake()).toBeNull();
+          }
+        });
+      }
+
+      test('delivered: never due again', async () => {
+        const { s, sends } = withInsight('delivered');
+        await s.integrator.run({ trigger: 'agenda-changed' });
+        expect(sends).toHaveLength(1);
+        for (const step of [10 * 60_000, 2 * HOUR, 12 * HOUR]) {
+          t += step;
+          expect(s.integrator.wake()).toBeNull();
+        }
+      });
+
+      test('untouched backlog (shown, never sent): never due again', async () => {
+        const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 8 });
+        s.graph.addNeuron({
+          kind: 'insight',
+          text: 'Jarvis and Scout both track the Q3 invoices',
+          support: { bots: ['b1', 'b2'] },
+          confidence: 'medium',
+          createdBy: 'watcher',
+        });
+        await s.integrator.run({ trigger: 'agenda-changed' });
+        for (const step of [10 * 60_000, 2 * HOUR, 12 * HOUR]) {
+          t += step;
+          expect(s.integrator.wake()).toBeNull();
+        }
+      });
+    });
   });
 });
 

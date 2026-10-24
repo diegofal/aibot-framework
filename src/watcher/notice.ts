@@ -62,6 +62,7 @@ import {
   isHumanInbound,
   isOperatorSourced,
   isPublicHumanItem,
+  mayCarryOperatorMessage,
   restsOnOperatorMaterial,
 } from './types';
 
@@ -351,6 +352,9 @@ export class Noticer {
     // The prompt shows every touched neuron in full: if one is operator
     // material, anything the model writes may restate it (conservative).
     const shownOperator = touched.some((n) => isOperatorSourced(n));
+    // Narrower: a shown neuron that may hold the operator's words taints what
+    // the model writes, so the fast lane never quotes it to a bot.
+    const shownOperatorMessage = touched.some(mayCarryOperatorMessage);
     const res = await this.deps.client.chat(
       [
         { role: 'system', content: prompt.system },
@@ -382,7 +386,10 @@ export class Noticer {
     const used = new Set<string>();
     for (const keep of out.keep) {
       if (isCancelled()) return { status: 'cancelled' };
-      const result = await this.keep(keep, byId, res.model, isCancelled, shownOperator);
+      const result = await this.keep(keep, byId, res.model, isCancelled, {
+        shownOperator,
+        shownOperatorMessage,
+      });
       if (isCancelled()) return { status: 'cancelled' };
       if (!result) continue;
       for (const id of result.from) used.add(id);
@@ -455,7 +462,7 @@ export class Noticer {
     items: Map<string, BufferItem>,
     model: string,
     isCancelled: () => boolean,
-    shownOperator = false
+    shown: { shownOperator?: boolean; shownOperatorMessage?: boolean } = {}
   ): Promise<{ neuron: Neuron; created: boolean; from: string[] } | null> {
     const { graph, log } = this.deps;
     const text = clip(keep.text ?? '', MAX_TEXT);
@@ -496,9 +503,11 @@ export class Noticer {
           .filter((c): c is string => typeof c === 'string' && c.length > 0)
       ),
     ];
-    const operatorSourced = shownOperator || restsOnOperatorMaterial(support);
-    // An operator message behind it: the fast lane never quotes it to a bot.
-    const operatorMessage = support.some((i) => i.fromOperator === true);
+    const operatorSourced = shown.shownOperator === true || restsOnOperatorMaterial(support);
+    // An operator message behind it, or shown in the prompt: the fast lane
+    // never quotes it to a bot.
+    const operatorMessage =
+      shown.shownOperatorMessage === true || support.some((i) => i.fromOperator === true);
     if (match) {
       graph.activate(match.id);
       // What this pass's items add: their bots and cycles join the support,

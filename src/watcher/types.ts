@@ -327,3 +327,15 @@ export function restsOnOperatorMaterial(
 export function isOperatorSourced(n: Pick<Neuron, 'meta'>): boolean {
   return n.meta?.[OPERATOR_SOURCED] === 'true';
 }
+
+/**
+ * Whether a neuron may carry an operator message's words: `operatorMessage`
+ * `'true'`, or operator-sourced and either without the flag (it predates it)
+ * or not a pattern (a fact may be their words). A notice pass shown such a
+ * neuron marks what it writes `operatorMessage: 'true'`.
+ */
+export function mayCarryOperatorMessage(n: Pick<Neuron, 'kind' | 'meta'>): boolean {
+  const flag = n.meta?.[OPERATOR_MESSAGE];
+  if (flag === 'true') return true;
+  return isOperatorSourced(n) && (flag === undefined || n.kind !== 'pattern');
+}

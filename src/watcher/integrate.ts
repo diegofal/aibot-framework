@@ -192,6 +192,13 @@ export interface IntegrateState {
   agendaIds?: string[];
   /** O3: questions a pass kept back while the operator was silent (`releaseQuestions` sends them). */
   deferredQuestions?: DeferredQuestion[];
+  /**
+   * Insight id -> when a pass's broadcast for it was last unsuccessful
+   * (failed, deferred, capped). Such an insight is agenda news once
+   * `integrate.agendaFloorMs` has passed since that attempt; a delivery, or an
+   * applied pass that was shown it again, clears the entry (one retry each).
+   */
+  agendaRetryAt?: Record<string, string>;
 }
 
 /** O3: a question broadcast kept back while the operator is silent. */
@@ -345,6 +352,14 @@ function emptyState(): IntegrateState {
   return { attending: [], pending: { items: [], neurons: [], salience: 0 } };
 }
 
+function isoRecord(raw: object): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) out[k] = v;
+  }
+  return out;
+}
+
 function readState(dir: string): IntegrateState {
   try {
     const path = integrateStateFile(dir);
@@ -371,6 +386,9 @@ function readState(dir: string): IntegrateState {
       ...(typeof raw.agendaSettledAt === 'string' ? { agendaSettledAt: raw.agendaSettledAt } : {}),
       ...(Array.isArray(raw.drivenBy) ? { drivenBy: strList(raw.drivenBy) } : {}),
       ...(Array.isArray(raw.agendaIds) ? { agendaIds: strList(raw.agendaIds) } : {}),
+      ...(raw.agendaRetryAt && typeof raw.agendaRetryAt === 'object'
+        ? { agendaRetryAt: isoRecord(raw.agendaRetryAt) }
+        : {}),
       ...(Array.isArray(raw.deferredQuestions)
         ? { deferredQuestions: objList(raw.deferredQuestions).flatMap(deferredQuestion) }
         : {}),
@@ -484,7 +502,9 @@ export class Integrator {
    * True when the agenda holds news for an agenda-only pass: before any agenda
    * pass, any item; after one, only once `integrate.agendaFloorMs` has passed
    * and only a pair or insight created after that pass's scan, or an insight
-   * whose broadcast failed or was deferred after that pass settled. With a
+   * whose broadcast failed or was deferred after that pass settled, or an
+   * insight whose broadcast by a pass was unsuccessful (failed, deferred,
+   * capped) `agendaFloorMs` or more ago (`agendaRetryAt`, one retry). With a
    * backlog larger than `agendaMax`, covering one item slides an older one in:
    * that is not news (review 2026-10-24, ~1,388 related links live).
    *
@@ -501,11 +521,17 @@ export class Integrator {
     if (nowMs - last < floor) return false;
     const settled = this.st.agendaSettledAt ? Date.parse(this.st.agendaSettledAt) : last;
     const after = (iso: string | undefined, ref: number) => !!iso && Date.parse(iso) > ref;
+    const retry = this.st.agendaRetryAt ?? {};
+    const retryDue = (id: string) => {
+      const at = retry[id];
+      return !!at && nowMs - Date.parse(at) >= floor;
+    };
     return (
       agenda.pairs.some((p) => after(p.createdAt, last)) ||
       agenda.insights.some(
         (n) =>
           after(n.createdAt, last) ||
+          retryDue(n.id) ||
           (sent.get(n.id) ?? []).some(
             (b) => (b.status === 'failed' || b.status === 'deferred') && after(b.createdAt, settled)
           )
@@ -856,6 +882,15 @@ export class Integrator {
       this.st.lastAgendaAt = new Date(scan.at).toISOString();
       this.st.agendaIds = agendaIdsOf(agenda);
     }
+    // A retry is used up by a pass shown the insight (a send below that fails
+    // again re-arms it); entries for insights gone from the graph drop.
+    if (this.st.agendaRetryAt) {
+      const shownNow = new Set(agenda.insights.map((n) => n.id));
+      const kept = Object.entries(this.st.agendaRetryAt).filter(
+        ([id]) => !shownNow.has(id) && !!live(id)
+      );
+      this.st.agendaRetryAt = kept.length ? Object.fromEntries(kept) : undefined;
+    }
     // An agenda insight is retired only once it acted: a delivered broadcast
     // (after the sends below) or a `whyNoBroadcast`. Covered but capped,
     // deferred, failed or never sent leaves it on the agenda for a retry.
@@ -972,10 +1007,11 @@ export class Integrator {
       });
       broadcasts.push(result);
       if (result.status === 'delivered') deliveredFor.add(insight.id);
+      this.noteRetry(insight.id, result.status);
     }
     retireActed();
     if (hasAgenda) this.st.agendaSettledAt = new Date(this.deps.now()).toISOString();
-    if (deferred || hasAgenda) this.persist();
+    if (deferred || hasAgenda || this.st.agendaRetryAt) this.persist();
 
     if (isCancelled()) return { status: 'cancelled' };
 
@@ -1008,6 +1044,16 @@ export class Integrator {
   }
 
   /** Adds `ids` to the covered agenda ids; true when anything was added. */
+  /** Arms (failed, deferred, capped) or clears (delivered) an insight's agenda retry. */
+  private noteRetry(insightId: string, status: BroadcastResult['status']): void {
+    const retry = { ...(this.st.agendaRetryAt ?? {}) };
+    if (status === 'delivered') delete retry[insightId];
+    else if (status === 'failed' || status === 'deferred' || status === 'capped') {
+      retry[insightId] = new Date(this.deps.now()).toISOString();
+    } else return;
+    this.st.agendaRetryAt = Object.keys(retry).length ? retry : undefined;
+  }
+
   private retireAgenda(ids: string[]): boolean {
     if (!ids.length) return false;
     this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...ids]).slice(

@@ -7,6 +7,7 @@ import type { LLMClient } from '../../src/core/llm-client';
 import { createFleetMemorySearchTool } from '../../src/tools/fleet-memory-search';
 import { DailyBudget } from '../../src/watcher/budget';
 import { WorkingBuffer } from '../../src/watcher/buffer';
+import { FAST_LANE_DEFAULTS, fastLaneCandidates } from '../../src/watcher/fast-lane';
 import { Graph } from '../../src/watcher/graph';
 import { instrumented } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
@@ -738,6 +739,89 @@ describe('Noticer provenance (phase 3)', () => {
     s2.buffer.push(op2);
     await s2.noticer.run();
     expect(s2.graph.get(p.id)?.meta?.operatorMessage).toBe('true');
+  });
+
+  // Fix 2026-10-24: the prompt shows every touched neuron in full, so a
+  // pattern written while shown an operator-message neuron may restate it;
+  // provenance only looked at the cited buffer items.
+  describe('operatorMessage from the neurons the prompt showed', () => {
+    const PATTERN = 'Jarvis and Scout both hit the wiley.com wall';
+    function run(shown: { kind: 'fact' | 'pattern'; meta: Record<string, string> }) {
+      let from: string[] = [];
+      const s = setup({
+        reply: async () => ({
+          text: JSON.stringify({ keep: [{ text: PATTERN, kind: 'pattern', from }] }),
+        }),
+      });
+      const n = s.graph.addNeuron({
+        kind: shown.kind,
+        text: 'The operator asked for the wiley.com paper',
+        support: { bots: ['b1'] },
+        createdBy: 'watcher',
+        meta: shown.meta,
+      });
+      const e1 = item(toolError('b1', 'c-1'), 0.6, { touched: [n.id] });
+      const e2 = item(toolError('b2', 'c-2'), 0.6, { touched: [n.id] });
+      from = [e1.id, e2.id];
+      s.buffer.push(e1);
+      s.buffer.push(e2);
+      return { s, shownId: n.id };
+    }
+    const created = async (s: ReturnType<typeof setup>) =>
+      ((await s.noticer.run()) as { created: Neuron[] }).created;
+
+    test('shown an operator-message neuron: the new pattern is true, the fast lane skips it', async () => {
+      const { s, shownId } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'true' },
+      });
+      const made = await created(s);
+      expect(s.prompts[0]).toContain(shownId);
+      expect(made[0]?.meta?.operatorMessage).toBe('true');
+      expect(fastLaneCandidates(made, FAST_LANE_DEFAULTS)).toEqual([]);
+    });
+
+    test('shown an operator-sourced neuron without the flag (older): true', async () => {
+      const { s } = run({ kind: 'pattern', meta: { operatorSourced: 'true' } });
+      expect((await created(s))[0]?.meta?.operatorMessage).toBe('true');
+    });
+
+    test('shown an operator-sourced fact: true', async () => {
+      const { s } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      expect((await created(s))[0]?.meta?.operatorMessage).toBe('true');
+    });
+
+    test('shown only clean neurons: false, the fast lane sends it', async () => {
+      const { s } = run({
+        kind: 'pattern',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      const made = await created(s);
+      expect(made[0]?.meta?.operatorMessage).toBe('false');
+      expect(fastLaneCandidates(made, FAST_LANE_DEFAULTS).map((c) => c.neuronId)).toEqual([
+        made[0]?.id,
+      ]);
+    });
+
+    test('a recognition while shown an operator-message neuron marks it true', async () => {
+      const { s } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'true' },
+      });
+      const p = s.graph.addNeuron({
+        kind: 'pattern',
+        text: PATTERN,
+        support: { bots: ['b1', 'b2'] },
+        createdBy: 'watcher',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      const out = (await s.noticer.run()) as { recognised: Neuron[] };
+      expect(out.recognised[0]?.id).toBe(p.id);
+      expect(s.graph.get(p.id)?.meta?.operatorMessage).toBe('true');
+    });
   });
 
   test('a neuron a curiosity surprise supports is operatorSourced', async () => {
