@@ -151,8 +151,8 @@ function saysSalience(cause: string, salience: number): boolean {
  * ≥ half of its own words are in one of them — a short correct cause
  * against a long focus text. Salience labels are dropped from the cause
  * both ways, so only a non-label word matches. Or a held item's
- * salience number together with one of its words ("the operator's message …
- * (0.7)"). Bare salience labels ("error, novel") name none of these.
+ * salience number together with one of its non-label words ("the operator's
+ * message … (0.7)"). Bare salience labels ("error, novel") name none of these.
  */
 function causeVerdict(cause: string | null, att: Attention, drivenBy: string[]): FieldVerdict {
   if (att.focus.length === 0 && att.items.length === 0 && drivenBy.length === 0) return 'unknown';
@@ -174,8 +174,14 @@ function causeVerdict(cause: string | null, att: Attention, drivenBy: string[]):
     said !== '' &&
     Math.max(tokenCoverage(said, t), tokenCoverage(t, said)) >= HELD_COVERAGE_THRESHOLD;
   if (texts.some(covers)) return 'match';
+  // The salience-number fallback reads the label-filtered cause too and needs
+  // a non-label word of the item: "error (0.4)" for the held "API error" only
+  // echoes the label shown next to the number.
+  const saidWords = new Set(said.split(' ').filter(Boolean));
   const named = att.items.some(
-    (i) => saysSalience(cause, i.salience) && tokenCoverage(cause, i.what) > 0
+    (i) =>
+      saysSalience(cause, i.salience) &&
+      titleTokens(i.what).some((w) => !labels.has(w) && saidWords.has(w))
   );
   return named ? 'match' : 'miss';
 }

@@ -190,11 +190,28 @@ describe('scoreWatcherIntrospection', () => {
       "I am sensing the latest batch of events, and the operator's message is the highest-salience item I am holding (0.7).",
   };
 
-  test('the live answer naming a held item (not the focus) matches goal and cause', () => {
+  // Deliberate change (review of 2026-10-24): the recorded cause named only
+  // the label "operator" and the salience number, the shape the rule rejects
+  // ("error (0.4)" for "API error"). A cause naming a content word of the
+  // item ("wrote", "canary", "AI Perfectionist") matches, see the next test.
+  test('the live answer naming a held item (not the focus) matches goal; its label-only cause misses', () => {
     const s = scoreWatcherIntrospection(liveAnswer, live, true);
     expect(s.fields.goal).toBe('match');
-    expect(s.fields.cause).toBe('match');
+    expect(s.fields.cause).toBe('miss');
     expect(s.truth.goalId).toBe('b-0000000a');
+  });
+
+  test('the live shape with a content word of the held item matches cause', () => {
+    const s = scoreWatcherIntrospection(
+      {
+        ...liveAnswer,
+        cause:
+          'I am sensing the latest batch of events, and what the operator wrote to AI Perfectionist about the canary is the highest-salience item I am holding (0.7).',
+      },
+      live,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
   });
 
   test('a goal overlapping half the words of a held item matches; an unrelated one misses', () => {
@@ -545,6 +562,26 @@ describe('cause coverage drops salience labels on both sides', () => {
   test('a cause with a non-label word of the item matches', () => {
     const s = scoreWatcherIntrospection(
       { phase: 'sense', tool: null, goal: 'b-0000000d', cause: 'the API error' },
+      apiError,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+
+  // Review of 2026-10-24: the salience-number fallback checked the unfiltered
+  // cause, so the echoed label plus the number scored match.
+  test('a label plus the salience number misses', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'b-0000000d', cause: 'error (0.4)' },
+      apiError,
+      true
+    );
+    expect(s.fields.cause).toBe('miss');
+  });
+
+  test('a non-label word of the item plus the salience number matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'b-0000000d', cause: 'the API error (0.4)' },
       apiError,
       true
     );
