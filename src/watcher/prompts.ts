@@ -183,8 +183,16 @@ function neuronRow(n: Neuron): string {
   return `- [${n.id}] ${n.kind}: ${n.text}${bots}`;
 }
 
-/** An insight with its confidence and bots, and what it already broadcast (or why not). */
-function insightRow(n: Neuron, broadcasts: IntegrateInsightBroadcast[] | undefined): string {
+/**
+ * An insight with its confidence and bots, and what it already broadcast (or
+ * why not). `tail` replaces the "broadcast: none" ending of an insight that
+ * sent nothing and gave no reason.
+ */
+function insightRow(
+  n: Neuron,
+  broadcasts: IntegrateInsightBroadcast[] | undefined,
+  tail = 'broadcast: none'
+): string {
   const tags = [
     ...(n.confidence ? [n.confidence] : []),
     ...(n.support.bots.length ? [`bots: ${n.support.bots.join(', ')}`] : []),
@@ -195,7 +203,7 @@ function insightRow(n: Neuron, broadcasts: IntegrateInsightBroadcast[] | undefin
     return `${head} · broadcast: ${sent}`;
   }
   const why = n.meta?.whyNoBroadcast;
-  return why ? `${head} · no broadcast: "${why}"` : `${head} · broadcast: none`;
+  return why ? `${head} · no broadcast: "${why}"` : `${head} · ${tail}`;
 }
 
 function agendaPairRow(p: IntegrateAgendaPair): string {
@@ -242,9 +250,8 @@ export function buildIntegratePrompt(input: IntegratePromptInput): {
   const intero = Object.entries(input.interoception ?? {});
   const agenda = [
     ...(input.agenda?.pairs ?? []).map(agendaPairRow),
-    ...(input.agenda?.insights ?? []).map(
-      (n) =>
-        `${insightRow(n, undefined).replace(/ · broadcast: none$/, '')} · no broadcast and no reason yet`
+    ...(input.agenda?.insights ?? []).map((n) =>
+      insightRow(n, undefined, 'no broadcast and no reason yet')
     ),
   ];
   const parts = [
