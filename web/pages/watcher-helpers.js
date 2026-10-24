@@ -278,6 +278,8 @@ function relTime(iso, nowMs) {
 }
 
 const fmt = (n) => Number(n).toLocaleString('en-US');
+/** No event sensed for this long while awake reads as "fleet quiet". */
+const QUIET_AFTER_MS = 30 * 60_000;
 
 const LINK_NOTES = {
   'no-embeddings': 'no embeddings: neurons sit on shells by kind, without related links',
@@ -303,7 +305,13 @@ export function stateParts(state, nowMs = Date.now(), { busy = false, embedding 
   ];
   if (s.phase) main.push(`phase <span class="watcher-state-phase">${esc(s.phase)}</span>`);
   main.push(s.bornAt ? `born ${esc(relTime(s.bornAt, nowMs))}` : 'not born yet');
-  if (s.lastTickAt) main.push(`last tick ${esc(relTime(s.lastTickAt, nowMs))}`);
+  if (s.lastTickAt) {
+    // Sense hears every activity event of the fleet: nothing for a while
+    // while awake means the fleet itself was quiet, not that the watcher stalled.
+    const gap = nowMs - Date.parse(s.lastTickAt);
+    const quiet = running && Number.isFinite(gap) && gap >= QUIET_AFTER_MS ? ' (fleet quiet)' : '';
+    main.push(`last event sensed ${esc(relTime(s.lastTickAt, nowMs))}${quiet}`);
+  }
 
   const counts = s.counts && typeof s.counts === 'object' ? s.counts : {};
   const keys = [
@@ -444,11 +452,18 @@ export function mergeWatcherState(prev, next) {
   return { ...(next ?? {}), ...(config ? { config } : {}), enabled: true };
 }
 
-/** Colour key for the ball: one dot per kind, plus the origin pair. */
-export function legendHtml() {
+/**
+ * Colour key for the ball: one button per kind (click filters the ball to
+ * that kind, `data-legend-kind`; `active` is pressed), plus the origin pair.
+ */
+export function legendHtml(active = null) {
   const kinds = NEURON_KINDS.map(
     (k) =>
-      `<span class="watcher-legend-item"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}</span>`
+      `<button type="button" class="watcher-legend-item watcher-legend-kind${
+        k === active ? ' is-active' : ''
+      }" data-legend-kind="${k}" aria-pressed="${k === active ? 'true' : 'false'}" title="${
+        k === active ? 'Show every kind' : `Show only ${esc(kindLabel(k, 2))}`
+      }"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}</button>`
   ).join('');
   const origin = `<span class="watcher-legend-item"><i style="background:${neuronColour({
     kind: 'insight',
@@ -459,7 +474,7 @@ export function legendHtml() {
       createdBy: 'watcher',
     }
   )}"></i>the watcher's own</span>`;
-  return `<div class="watcher-legend"><div class="watcher-legend-row">${kinds}</div><div class="watcher-legend-row">${origin}</div></div>`;
+  return `<div class="watcher-legend${active ? ' is-filtered' : ''}"><div class="watcher-legend-row">${kinds}</div><div class="watcher-legend-row">${origin}</div></div>`;
 }
 
 /**

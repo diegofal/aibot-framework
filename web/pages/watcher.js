@@ -11,6 +11,9 @@
  * A pass row's "What it saw" fold loads its record (`/api/watcher/passes`);
  * the header shows the embedding service (`/api/stats/infra`, ollama row);
  * "Clean the graph" previews and applies hygiene `watcher-graph`.
+ * The Mind panel under the ball lists what the ball holds, one tab per kind
+ * (`watcher-mind-helpers.js`); a row opens its neuron, a legend kind filters
+ * the ball to that kind.
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
@@ -42,12 +45,17 @@ import {
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
+import { metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
-  SIGNAL_NEURON_KINDS,
-  broadcastRowsHtml,
-  insightRowsHtml,
-  metricsStripHtml,
-} from './watcher-metrics-helpers.js';
+  MIND_PAGE_SIZE,
+  contradictionSides,
+  kindFilterIds,
+  mindCounts,
+  mindListHtml,
+  mindRows,
+  mindTabBlurb,
+  mindTabsHtml,
+} from './watcher-mind-helpers.js';
 import {
   graphCleanSummary,
   logView,
@@ -56,6 +64,7 @@ import {
 } from './watcher-ops-helpers.js';
 import {
   attendingHtml,
+  cardHeadHtml,
   focusHighlightIds,
   howIAmHtml,
   introspectionHtml,
@@ -70,6 +79,10 @@ const LOG_MAX_PAGES = 20;
 const TITLE = '<div class="page-title">Watcher</div>';
 /** Events for unknown ids (or a reconnect) within this window share one graph refetch. */
 const GRAPH_REFETCH_DEBOUNCE_MS = 1500;
+/** Neuron events (thousands at birth) redraw the Mind panel at most this often. */
+const MIND_REDRAW_MS = 800;
+/** Broadcasts the Mind panel holds (the route's maximum). */
+const BROADCAST_LIMIT = 200;
 
 let page = null;
 /** Bumped on every destroy: a render whose awaits resolve after it gives up. */
@@ -86,6 +99,7 @@ export function destroyWatcher() {
   clearInterval(page.slowClock);
   clearTimeout(page.replay?.timer);
   clearTimeout(page.graphRefetch);
+  clearTimeout(page.mindTimer);
   page = null;
 }
 
@@ -191,21 +205,23 @@ function shell() {
         <button type="button" class="btn btn-sm" data-action="watcher-clean-graph" title="Archive bookkeeping facts and merge near-duplicates (hygiene: watcher-graph)">Clean the graph</button>
         <span class="watcher-replay-day"><input type="date" class="watcher-date" id="watcher-replay-date" aria-label="Day to replay"><button type="button" class="btn btn-sm" data-action="watcher-replay-day" data-replay-start>Replay day</button></span>
       </div>
-      <div class="watcher-overlay watcher-overlay-bottom">${legendHtml()}<div class="watcher-hint">drag to orbit · scroll to zoom · click a neuron</div></div>
+      <div class="watcher-overlay watcher-overlay-bottom"><div id="watcher-legend">${legendHtml()}</div><div class="watcher-hint">drag to orbit · click the ball, then scroll to zoom · click a neuron</div></div>
       <div class="watcher-replay" id="watcher-replay" hidden><span data-replay-label></span><button type="button" class="btn btn-sm" data-action="watcher-replay-stop">Stop replay</button></div>
+    </section>
+    <section class="watcher-mind" aria-label="What the watcher holds">
+      <div class="watcher-mind-head"><div class="watcher-log-title">Mind</div><div class="watcher-card-sub">Everything in the ball, readable: pick a kind, search, click a row to light it in the ball and see where it came from.</div></div>
+      <div id="watcher-mind-tabs"></div>
+      <div class="watcher-mind-bar"><p id="watcher-mind-blurb" class="watcher-mind-blurb"></p><input type="search" id="watcher-mind-search" class="watcher-mind-search" placeholder="Search this tab" aria-label="Search this tab"></div>
+      <div id="watcher-mind-list" class="watcher-mind-body"></div>
     </section>
     <section class="watcher-log">
       <div class="watcher-log-head"><div class="watcher-log-title">Log</div><div id="watcher-log-filter" class="watcher-log-filter"></div><button type="button" class="btn btn-sm" data-action="watcher-pause">Pause</button></div>
       <div id="watcher-log-body" class="watcher-log-body"></div>
     </section>
-    <section class="watcher-thoughts">
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">Insights</div><div id="watcher-insights"></div></div>
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">Broadcasts</div><div id="watcher-broadcasts"></div></div>
-    </section>
     <section class="watcher-thoughts watcher-self" aria-label="The watcher's self-model">
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">How I am</div><div id="watcher-how"></div></div>
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">Attending to</div><div id="watcher-attending"></div></div>
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">Introspection</div><div id="watcher-introspection"></div></div>
+      <div class="watcher-thoughts-col">${cardHeadHtml('how')}<div id="watcher-how"></div></div>
+      <div class="watcher-thoughts-col">${cardHeadHtml('attending')}<div id="watcher-attending"></div></div>
+      <div class="watcher-thoughts-col">${cardHeadHtml('introspection')}<div id="watcher-introspection"></div></div>
     </section>
   </div>`;
 }
@@ -215,20 +231,60 @@ function drawMetrics() {
   if (host && page.metrics) host.innerHTML = metricsStripHtml(page.metrics);
 }
 
-function drawInsights() {
-  const host = $('#watcher-insights');
-  if (host) host.innerHTML = insightRowsHtml([...page.model.neurons.values()], Date.now());
+/** Tabs, blurb and the active tab's list. Open folds (`[data-open-key]`) stay open. */
+function drawMind() {
+  if (!page) return;
+  clearTimeout(page.mindTimer);
+  page.mindTimer = null;
+  const m = page.mind;
+  const neurons = [...page.model.neurons.values()];
+  const tabs = $('#watcher-mind-tabs');
+  if (tabs) tabs.innerHTML = mindTabsHtml(mindCounts(neurons, page.broadcasts), m.tab);
+  const blurb = $('#watcher-mind-blurb');
+  if (blurb) blurb.textContent = mindTabBlurb(m.tab);
+  const list = $('#watcher-mind-list');
+  if (!list) return;
+  const rows = mindRows(m.tab, { neurons, broadcasts: page.broadcasts, query: m.query });
+  const edges = [...page.model.edges.values()];
+  list.innerHTML = mindListHtml(m.tab, rows, {
+    nowMs: Date.now(),
+    shown: m.shown,
+    query: m.query,
+    broadcasts: page.broadcasts,
+    sidesOf: (id) =>
+      contradictionSides(id, edges, (other) => page?.model.neurons.get(other)?.text ?? null),
+    open: m.open,
+  });
 }
 
-function drawBroadcasts() {
-  const host = $('#watcher-broadcasts');
-  if (host) host.innerHTML = broadcastRowsHtml(page.broadcasts ?? [], Date.now());
+/** A neuron event: redraw the Mind panel soon, once per burst. */
+function scheduleMind() {
+  if (!page || page.mindTimer) return;
+  page.mindTimer = setTimeout(() => drawMind(), MIND_REDRAW_MS);
+}
+
+function drawLegend() {
+  const host = $('#watcher-legend');
+  if (host) host.innerHTML = legendHtml(page.kindFilter);
+}
+
+/** Click a legend kind: light only that kind in the ball; click it again to clear. */
+function toggleKindFilter(kind) {
+  page.kindFilter = page.kindFilter === kind ? null : kind;
+  drawLegend();
+  if (!page.kindFilter) page.ball?.highlight(page.filterId ? [page.filterId] : []);
+  applyFocus();
 }
 
 function drawSelf() {
   const self = page.self;
   const how = $('#watcher-how');
-  if (how) how.innerHTML = howIAmHtml(self?.interoception);
+  if (how) {
+    how.innerHTML = howIAmHtml(self?.interoception, {
+      startedAt: page.model.state?.startedAt ?? null,
+      nowMs: Date.now(),
+    });
+  }
   const att = $('#watcher-attending');
   if (att) att.innerHTML = attendingHtml(self?.attention, Date.now());
   const intro = $('#watcher-introspection');
@@ -239,8 +295,15 @@ function drawSelf() {
   }
 }
 
-/** With no row selected and no filter, the ball lights what the watcher attends to. */
+/**
+ * With no row selected and no neuron filter, the ball lights the legend's kind
+ * when one is picked, else what the watcher attends to.
+ */
 function applyFocus() {
+  if (page.kindFilter && page.selectedSeq == null && !page.filterId) {
+    page.ball?.highlight(kindFilterIds(page.model.neurons.values(), page.kindFilter));
+    return;
+  }
   const ids = focusHighlightIds(page.self?.attention, {
     selectedSeq: page.selectedSeq,
     filterId: page.filterId,
@@ -280,14 +343,14 @@ async function refreshSlow() {
   const mine = page;
   const [metrics, broadcasts] = await Promise.all([
     api('/api/watcher/metrics?window=7d').catch(() => null),
-    api('/api/watcher/broadcasts?limit=30').catch(() => null),
+    api(`/api/watcher/broadcasts?limit=${BROADCAST_LIMIT}`).catch(() => null),
     refreshEmbedding(),
   ]);
   if (page !== mine || !page) return;
   if (metrics && !metrics.error) page.metrics = metrics;
   if (Array.isArray(broadcasts?.broadcasts)) page.broadcasts = broadcasts.broadcasts;
   drawMetrics();
-  drawBroadcasts();
+  drawMind();
   await refreshSelf();
 }
 
@@ -369,16 +432,13 @@ async function sendSignal(id, signal) {
     showToast(`Could not save the signal: ${res?.error ?? 'no answer'}`, { tone: 'danger' });
     return;
   }
-  if (res.neuron) {
-    page.model.neurons.set(res.neuron.id, res.neuron);
-    drawInsights();
-  }
+  if (res.neuron) page.model.neurons.set(res.neuron.id, res.neuron);
   if (res.broadcast) {
     page.broadcasts = (page.broadcasts ?? []).map((b) =>
       b.id === res.broadcast.id ? { ...b, ...res.broadcast } : b
     );
-    drawBroadcasts();
   }
+  if (res.neuron || res.broadcast) drawMind();
 }
 
 /* ── Live events ─────────────────────────────────────────────────── */
@@ -422,12 +482,7 @@ function onEffect(effect) {
       return;
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
-  if (
-    (effect.kind === 'spawn' || effect.kind === 'update') &&
-    SIGNAL_NEURON_KINDS.includes(page.model.neurons.get(effect.id)?.kind)
-  ) {
-    drawInsights();
-  }
+  if (['spawn', 'update', 'archive', 'edge'].includes(effect.kind)) scheduleMind();
 }
 
 /**
@@ -452,7 +507,7 @@ async function refetchGraph() {
   }
   if (out.added.length || out.updated.length || out.archived.length || out.edgesChanged) {
     drawState();
-    drawInsights();
+    drawMind();
   }
 }
 
@@ -717,12 +772,47 @@ function wire(el, signal) {
       if (signal) {
         return sendSignal(signal.dataset.signalId, signal.dataset.watcherSignal);
       }
+      const tab = e.target.closest('[data-mind-tab]');
+      if (tab) {
+        page.mind.tab = tab.dataset.mindTab;
+        page.mind.shown = MIND_PAGE_SIZE;
+        return drawMind();
+      }
+      if (action === 'watcher-mind-more') {
+        page.mind.shown += MIND_PAGE_SIZE;
+        return drawMind();
+      }
+      const legend = e.target.closest('[data-legend-kind]');
+      if (legend) return toggleKindFilter(legend.dataset.legendKind);
+      const mindOpen = e.target.closest('[data-mind-open]');
+      if (mindOpen) return openNeuron(mindOpen.dataset.mindOpen);
       const neuronLink = e.target.closest('[data-watcher-neuron]');
       if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
       const li = e.target.closest('li.watcher-row');
       if (li && !page.replay && li.dataset.neurons) selectRow(li);
     },
     { signal }
+  );
+  el.addEventListener(
+    'input',
+    (e) => {
+      if (!page || e.target?.id !== 'watcher-mind-search') return;
+      page.mind.query = e.target.value;
+      page.mind.shown = MIND_PAGE_SIZE;
+      drawMind();
+    },
+    { signal }
+  );
+  // `toggle` does not bubble: capture it to remember which Mind folds are open.
+  el.addEventListener(
+    'toggle',
+    (e) => {
+      const key = e.target?.closest?.('[data-open-key]')?.dataset.openKey;
+      if (!page || !key || !e.target.closest('#watcher-mind-list')) return;
+      if (e.target.open) page.mind.open.add(key);
+      else page.mind.open.delete(key);
+    },
+    { signal, capture: true }
   );
   // Notice / Integrate switches and daily caps (`POST /api/watcher/config`).
   el.addEventListener(
@@ -795,7 +885,7 @@ export async function renderWatcher(el) {
     api('/api/watcher/graph').catch(() => null),
     api('/api/watcher/log?limit=200').catch(() => null),
     api('/api/watcher/metrics?window=7d').catch(() => null),
-    api('/api/watcher/broadcasts?limit=30').catch(() => null),
+    api(`/api/watcher/broadcasts?limit=${BROADCAST_LIMIT}`).catch(() => null),
     api('/api/watcher/self').catch(() => null),
   ]);
   if (gen !== generation) return;
@@ -835,6 +925,9 @@ export async function renderWatcher(el) {
     passes: [],
     openPass: null,
     cleaning: false,
+    mind: { tab: 'insight', query: '', shown: MIND_PAGE_SIZE, open: new Set() },
+    mindTimer: null,
+    kindFilter: null,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -844,8 +937,7 @@ export async function renderWatcher(el) {
   drawLog();
   drawReplayBar();
   drawMetrics();
-  drawInsights();
-  drawBroadcasts();
+  drawMind();
   drawSelf();
   void refreshEmbedding();
   wire(el, page.listeners.signal);

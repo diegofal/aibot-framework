@@ -9649,19 +9649,6 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-tier-cap input {
   width: 4.5em;
 }
-.watcher-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  color: var(--stage-ink);
-  opacity: 0.45;
-  font-size: var(--fs-xs);
-  pointer-events: none;
-  transition: opacity 0.2s ease;
-}
-.watcher-ball.engaged .watcher-hint {
-  opacity: 0;
-}
 @keyframes watcher-fade-in {
   from {
     opacity: 0;
@@ -9868,11 +9855,43 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   flex-wrap: wrap;
   gap: 2px 10px;
 }
+/* One hint, bottom right, beside (never over) the legend. */
 .watcher-hint {
+  flex: 0 0 auto;
   color: var(--stage-dim);
   font-size: var(--fs-xs);
   opacity: 0.8;
   white-space: nowrap;
+  pointer-events: none;
+}
+.watcher-overlay-bottom > #watcher-legend {
+  min-width: 0;
+}
+.watcher-legend-kind {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 6px;
+  margin: 0 -6px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast), opacity var(--fast);
+}
+.watcher-legend-kind:hover {
+  color: var(--stage-ink);
+  background: rgba(124, 156, 255, 0.1);
+}
+.watcher-legend-kind:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.watcher-legend.is-filtered .watcher-legend-kind {
+  opacity: 0.45;
+}
+.watcher-legend.is-filtered .watcher-legend-kind.is-active {
+  opacity: 1;
+  color: var(--stage-ink);
+  background: rgba(124, 156, 255, 0.18);
 }
 .watcher-replay {
   position: absolute;
@@ -10287,4 +10306,258 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-field.is-miss {
   color: var(--danger);
   border-color: currentColor;
+}
+
+/* Card subtitles: what each card is for, in one muted sentence. */
+.watcher-card-head {
+  margin-bottom: var(--s1);
+}
+.watcher-card-sub {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+.watcher-metrics-head + .watcher-card-sub {
+  margin: -4px 0 var(--s2);
+}
+.watcher-self-legend {
+  font-size: var(--fs-xs);
+  margin-top: var(--s2);
+}
+.watcher-thoughts-col {
+  min-width: 0;
+}
+
+/* Mind panel: what the ball holds, one tab per kind. */
+.watcher-mind {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.watcher-mind-head {
+  padding: var(--s3) var(--s4) var(--s2);
+}
+.watcher-mind-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--s3);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.watcher-mind-tab {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--s2) var(--s2) 7px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--fast), border-color var(--fast);
+}
+.watcher-mind-tab:hover {
+  color: var(--text);
+}
+.watcher-mind-tab:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
+.watcher-mind-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.watcher-mind-count {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  background: var(--muted-bg);
+}
+.watcher-mind-tab.is-active .watcher-mind-count {
+  color: var(--text);
+  background: var(--accent-bg);
+}
+.watcher-mind-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.watcher-mind-dot.is-broadcast {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  width: 5px;
+  height: 5px;
+}
+.watcher-mind-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--border);
+}
+.watcher-mind-blurb {
+  flex: 1;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.watcher-mind-search {
+  flex: 0 0 220px;
+  padding: 5px var(--s2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+.watcher-mind-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.watcher-mind-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.watcher-mind-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.watcher-mind-row {
+  --mind-kind: var(--accent);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: var(--s2) var(--s4) var(--s2) calc(var(--s4) - 2px);
+  border-left: 2px solid color-mix(in srgb, var(--mind-kind) 55%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.watcher-mind-row:last-child {
+  border-bottom: 0;
+}
+.watcher-mind-row:hover {
+  background: var(--bg-hover);
+}
+.watcher-mind-text {
+  all: unset;
+  cursor: pointer;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.watcher-mind-text:hover {
+  color: var(--accent-hover);
+}
+.watcher-mind-text:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.watcher-mind-meta,
+.watcher-mind-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.watcher-mind-status {
+  gap: var(--s2);
+}
+.watcher-mind-meta .watcher-sep {
+  margin: 0 6px;
+  opacity: 0.5;
+}
+.watcher-mind-prob,
+.watcher-mind-bot {
+  color: var(--text);
+  font-weight: 600;
+}
+.watcher-mind-badge {
+  padding: 0 7px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  line-height: 18px;
+  background: var(--muted-bg);
+}
+.watcher-mind-badge.is-ok {
+  color: var(--ok);
+  background: var(--ok-bg);
+}
+.watcher-mind-badge.is-danger {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.watcher-mind-brier.is-bad {
+  color: var(--warn);
+}
+.watcher-mind-sides {
+  list-style: none;
+  margin: 2px 0;
+  padding: var(--s2) var(--s3);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: var(--s3);
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+.watcher-mind-vs {
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.watcher-mind-fold > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+.watcher-mind-fold-body p {
+  margin: 4px 0 0;
+  font-size: var(--fs-sm);
+}
+.watcher-mind-row .watcher-signals {
+  margin-top: 0;
+}
+.watcher-mind-row .why {
+  width: 100%;
+}
+.watcher-mind-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s2) var(--s4);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.watcher-mind-empty {
+  padding: var(--s5) var(--s4);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+@media (max-width: 720px) {
+  .watcher-mind-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .watcher-mind-search {
+    flex: auto;
+  }
+  .watcher-mind-sides {
+    grid-template-columns: 1fr;
+  }
 }

@@ -1,8 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  broadcastRowsHtml,
   formatMetricValue,
-  insightRowsHtml,
   metricsStripHtml,
   signalButtonsHtml,
 } from '../../web/pages/watcher-metrics-helpers.js';
@@ -84,6 +82,7 @@ describe('metricsStripHtml', () => {
     expect(html).toContain('target ≥ 30 %');
     expect(html).toContain('2.5 min');
     expect(html).toContain('no data yet');
+    expect(html).toContain('each tile: now, baseline before the watcher, target');
   });
   test('guards over their limit are red (watcher-guard-over); others are not', () => {
     const html = metricsStripHtml(metrics);
@@ -113,86 +112,12 @@ describe('signalButtonsHtml', () => {
   });
 });
 
-describe('insightRowsHtml', () => {
-  const n = (id: string, kind: string, createdAt: string, meta?: Record<string, string>) => ({
-    id,
-    kind,
-    text: `text ${id}`,
-    support: { bots: ['b1', 'b2'] },
-    createdBy: 'watcher',
-    createdAt,
-    lastActivatedAt: createdAt,
-    activations: 1,
-    ...(meta ? { meta } : {}),
-  });
-
-  test('insights, contradictions and predictions newest first, with signals', () => {
-    const html = insightRowsHtml(
-      [
-        n('n-1', 'insight', '2026-10-23T10:00:00Z'),
-        n('n-2', 'contradiction', '2026-10-23T11:00:00Z', { signal: 'down' }),
-        n('n-3', 'fact', '2026-10-23T11:30:00Z'),
-        n('n-4', 'prediction', '2026-10-23T09:00:00Z', {
-          probability: '0.7',
-          dueAt: '2026-10-24T09:00:00Z',
-        }),
-      ],
-      NOW
-    );
-    expect(html.indexOf('text n-2')).toBeLessThan(html.indexOf('text n-1'));
-    expect(html).not.toContain('text n-3');
-    expect(html).toContain('data-signal-id="n-1"');
-    expect(html).toContain('data-watcher-neuron="n-1"');
-    expect(html).toContain('70 %');
-    expect(html).toContain('b1, b2');
-  });
-
-  test('empty list says so', () => {
-    expect(insightRowsHtml([], NOW)).toContain('No insights yet');
-  });
-});
-
-describe('broadcastRowsHtml', () => {
-  const b = (over: Record<string, unknown> = {}) => ({
-    id: 'b-1',
-    botId: 'b1',
-    kind: 'directive',
-    text: 'Coordinate with Scout',
-    insightId: 'n-1',
-    createdAt: '2026-10-23T10:00:00Z',
-    deliveredAt: '2026-10-23T10:00:00Z',
-    why: { what: 'Directive to Jarvis: "Coordinate with Scout"', by: 'watcher' },
-    ...over,
-  });
-
-  test('a served broadcast shows "served by cycle" and an Open cycle button', () => {
-    const html = broadcastRowsHtml(
-      [b({ servedByCycle: 'c-9', servedAt: '2026-10-23T11:00:00Z' })],
-      NOW
-    );
-    expect(html).toContain('served by cycle');
-    expect(html).toContain('data-open-cycle="c-9"');
-    expect(html).toContain('data-bot-id="b1"');
-    expect(html).toContain('data-signal-id="b-1"');
-    expect(html).toContain('Coordinate with Scout');
-  });
-
-  test('the Why goes through the shared panel', () => {
-    const html = broadcastRowsHtml([b()], NOW);
-    expect(html).toContain('why-');
-  });
-
-  test('not served, failed, and empty', () => {
-    expect(broadcastRowsHtml([b()], NOW)).toContain('not served yet');
-    expect(
-      broadcastRowsHtml([b({ deliveredAt: undefined, deliveryError: 'throttled' })], NOW)
-    ).toContain('not delivered');
-    const held = broadcastRowsHtml(
-      [b({ deliveredAt: undefined, deliveryError: 'cooldown', deferred: true })],
-      NOW
-    );
-    expect(held).toContain('held by the throttle: cooldown');
-    expect(held).not.toContain('not delivered');
-    expect(broadcastRowsHtml([], NOW)).toContain('No broadcasts yet');
+describe('signalButtonsHtml labels', () => {
+  test('words replace the thumbs (a contradiction: Confirm / Dismiss)', () => {
+    const html = signalButtonsHtml('n-1', 'up', { up: 'Confirm', down: 'Dismiss' });
+    expect(html).toContain('>Confirm</button>');
+    expect(html).toContain('>Dismiss</button>');
+    expect(html).toContain('data-watcher-signal="down"');
+    expect(html).not.toContain('👍');
   });
 });

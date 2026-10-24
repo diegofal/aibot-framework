@@ -141,6 +141,8 @@ export interface WatcherState {
   bornAt?: string;
   phase: WatcherPhase;
   lastTickAt?: string;
+  /** When the current run started; absent while asleep. */
+  startedAt?: string;
   counts: Record<NeuronKind, number>;
   edges: number;
   linkStatus: LinkStatus;

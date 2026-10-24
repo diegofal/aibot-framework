@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  CARD_HEADS,
   attendingHtml,
+  cardHeadHtml,
   focusHighlightIds,
   howIAmHtml,
   introspectionHtml,
@@ -44,10 +46,32 @@ describe('howIAmHtml', () => {
       lastIntegrateAgoMs: null,
     });
     expect(html).toContain('closed');
-    expect(html).toContain('not heard from yet');
+    expect(html).toContain('no message since the watcher woke');
+    expect(html).not.toContain('not heard from yet');
     expect(html).toContain('never');
     expect(html).not.toContain('NaN');
     expect(howIAmHtml(null)).toContain('No reading yet');
+  });
+});
+
+describe('howIAmHtml: operator silence', () => {
+  test('never heard from: since when the watcher woke, when that is known', () => {
+    const quiet = { ...intero, operatorSilenceHours: null };
+    expect(howIAmHtml(quiet, { startedAt: '2026-10-23T09:00:00Z', nowMs: NOW })).toContain(
+      'no message since the watcher woke (3 h ago)'
+    );
+    expect(howIAmHtml(quiet, { nowMs: NOW })).toContain('no message since the watcher woke');
+  });
+});
+
+describe('cardHeadHtml', () => {
+  test('a title and the muted sentence that says what the card is for', () => {
+    const html = cardHeadHtml('introspection');
+    expect(html).toContain('Introspection');
+    expect(html).toContain('green = matched');
+    expect(cardHeadHtml('how')).toContain('how choosy it is');
+    expect(cardHeadHtml('attending')).toContain('working memory');
+    for (const k of Object.keys(CARD_HEADS)) expect(cardHeadHtml(k)).toContain('watcher-card-sub');
   });
 });
 
@@ -103,6 +127,9 @@ describe('introspectionHtml', () => {
     expect(html).toContain('Ask me now');
     expect(html).toContain('75 % over 1');
     expect(html).toContain('cause 0 %');
+    expect(html).toContain(
+      'phase · tool · goal · cause = how often each part of its answer matched'
+    );
     expect(html).toContain('goal —');
     expect(html).toContain('watcher-field is-match');
     expect(html).toContain('watcher-field is-miss');

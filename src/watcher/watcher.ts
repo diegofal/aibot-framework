@@ -240,6 +240,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   /** Phase 4: what every bot is doing now, from the activity stream (attached while awake). */
   readonly presence = new WatcherPresence();
   private lastOperatorAt: number | null = null;
+  /** When this run started (`start`), cleared on stop: the page's "since the watcher woke". */
+  private startedAt: string | undefined;
   /** O3: the fleet karma samples behind `fleetKarmaFalling`. */
   private readonly karmaTrend: KarmaTrend;
   /** O3: the stakes rules firing at the last `stakes()` (a rule logs one row when it starts). */
@@ -856,6 +858,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     await this.waitBounded(this.background);
     if (this.running) return this.state();
     this.running = true;
+    this.startedAt = new Date(this.now()).toISOString();
     this.stopping = false;
     this.lastError = undefined;
     // A fresh signal per run: the abandoned run keeps its aborted one forever.
@@ -1027,6 +1030,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       ...(record?.finishedAt ? { bornAt: record.finishedAt } : {}),
       phase: this.phase,
       ...(this.sense.lastTickAt ? { lastTickAt: this.sense.lastTickAt } : {}),
+      ...(this.running && this.startedAt ? { startedAt: this.startedAt } : {}),
       counts: this.graph.counts(),
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),

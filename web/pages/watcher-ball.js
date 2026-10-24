@@ -123,11 +123,6 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   tip.hidden = true;
   host.appendChild(tip);
 
-  const hint = document.createElement('div');
-  hint.className = 'watcher-hint';
-  hint.textContent = 'Click the ball, then scroll to zoom (or Ctrl + scroll)';
-  host.appendChild(hint);
-
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 50);
   const orbit = { theta: 0.6, phi: 1.2, dist: 3.1 };
