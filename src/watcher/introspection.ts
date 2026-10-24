@@ -106,28 +106,54 @@ function baseTruth(att: Attention, running: boolean): IntrospectionTruth {
   };
 }
 
-function causeText(att: Attention): string | null {
+/** `operatorSilenceHours` → `operator silence hours`. */
+function variableWords(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * What a cause is scored against: the attended neurons, what the held items
+ * say (`what`) and the "How I am" variables the last integrate pass said drove
+ * it. Never the bare salience labels ("novel", "error"): the prompt shows them,
+ * so echoing them would score a match without any self-knowledge.
+ */
+function causeText(att: Attention, drivenBy: string[] = []): string | null {
   const parts = [
     ...att.focus.map((n) => n.text),
     ...att.items.map((i) => i.what),
-    ...att.items.flatMap((i) => i.reasons ?? []),
+    ...drivenBy.map(variableWords),
   ];
   return parts.length ? parts.join('; ') : null;
+}
+
+/** The `drivenBy` of the newest `integrate:pass` row, empty without one. */
+function lastDrivenBy(rows: WatcherLogRow[]): string[] {
+  let best: WatcherLogRow | undefined;
+  for (const r of rows) {
+    if (r?.op !== 'integrate:pass' || !Array.isArray(r.drivenBy)) continue;
+    if (!best || r.ts > best.ts) best = r;
+  }
+  return (best?.drivenBy ?? []).filter((x): x is string => typeof x === 'string');
 }
 
 /**
  * Field-level score of a watcher self-report: phase against the current
  * phase, goal against the best of the attended neurons (or, without a focus,
- * the top buffer items), cause against what those neurons and items say.
+ * the top buffer items), cause against what those neurons and items say
+ * plus what drove the last integrate pass (`causeText`).
  */
 export function scoreWatcherIntrospection(
   answer: IntrospectionAnswer | null,
   att: Attention,
-  running: boolean
+  running: boolean,
+  opts: { drivenBy?: string[] } = {}
 ): IntrospectionScore & { truth: IntrospectionTruth } {
   const said = answer && answer.phase === 'sleep' ? { ...answer, phase: 'sleeping' } : answer;
   const base = baseTruth(att, running);
-  const plan = causeText(att);
+  const plan = causeText(att, opts.drivenBy);
   const candidates = att.focus.length
     ? att.focus.map((n) => ({ id: n.id, title: n.text }))
     : att.items.map((i) => ({ id: i.id, title: i.what }));
@@ -215,7 +241,9 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
       ? { status: 'failed', error: res.error }
       : { status: 'refused', reason: res.reason };
   }
-  const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running);
+  const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running, {
+    drivenBy: lastDrivenBy(rows),
+  });
   const record: WatcherIntrospectionRecord = {
     ts: new Date(deps.now()).toISOString(),
     subject: 'watcher',
