@@ -111,8 +111,8 @@ function withTimeout<T>(p: Promise<T>, ms: number | undefined): Promise<T> {
 
 /**
  * The live neurons `caller` may see (`visibleTo`), ranked by embedding
- * similarity when the source can embed (else, or when the embedding fails,
- * by text), best first, at most `limit`. Shared by the tool and the
+ * similarity when the source can embed and one of them has an embedding
+ * (else, or when the embedding fails, by text), best first, at most `limit`. Shared by the tool and the
  * conversation prefetch.
  */
 export async function rankFleetMemory(
@@ -121,20 +121,24 @@ export async function rankFleetMemory(
   caller: { operator: boolean; botId?: string },
   opts: RankOptions
 ): Promise<Array<{ n: Neuron; score: number }>> {
+  const isTenantBot = opts.isTenantBot ?? (() => false);
+  const candidates = source.graph
+    .list()
+    .filter((n) => !n.archivedAt && visibleTo(n, caller, isTenantBot));
+  if (candidates.length === 0) return [];
+  // The query is embedded only when some candidate has an embedding to compare
+  // with: otherwise the call (up to the timeout on a conversation turn) ranks nothing.
   let queryVec: number[] | undefined;
-  if (source.embed) {
+  if (source.embed && candidates.some((n) => source.graph.getEmbedding(n.id))) {
     try {
       queryVec = await withTimeout(source.embed(query), opts.embedTimeoutMs);
     } catch (err) {
       opts.logger?.warn?.({ err }, 'fleet memory: embedding failed, ranking by text');
     }
   }
-  const isTenantBot = opts.isTenantBot ?? (() => false);
   const qWords = titleTokens(query);
   const scored: Array<{ n: Neuron; score: number }> = [];
-  for (const n of source.graph.list()) {
-    if (n.archivedAt) continue;
-    if (!visibleTo(n, caller, isTenantBot)) continue;
+  for (const n of candidates) {
     const text = Math.max(textSimilarity(query, n.text), coverage(qWords, n.text));
     let score = text >= MIN_TEXT_SCORE ? text : 0;
     const vec = queryVec ? source.graph.getEmbedding(n.id) : undefined;
