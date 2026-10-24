@@ -7,9 +7,9 @@
  *
  * `plant` tells bot A a fact in a dashboard conversation thread and records it;
  * `check` asks bot B, in a thread of its own, a question that does not contain
- * the fact and records whether B's answer has it: the fact's rarest content
- * word (`canaryKeywords`, stored at plant time; `--expect` overrides) as a whole
- * word, case-insensitive. Sentence `textSimilarity` is kept in the row as a
+ * the fact and records whether B's answer has it: any of the fact's rarest
+ * content words (`canaryKeywords`, stored at plant time; `--expect` overrides
+ * and requires all of its words) as a whole word, case- and accent-insensitive. Sentence `textSimilarity` is kept in the row as a
  * secondary signal (and is the test only for a fact with no content word).
  * Live, 2026-10-24: a short correct reply ("It's "heliotrope." …") scored 0.29
  * against the whole planted sentence. Both rows go to `<data>/watcher/canaries.jsonl`.
@@ -71,7 +71,9 @@ export interface CanaryCheck {
   found: boolean;
   /** Secondary signal: best sentence similarity of the answer to the fact. */
   similarity: number;
-  /** The words the answer had to name (`--expect`, else the plant's rarest keyword). */
+  /** `all` for `--expect` words, `any` for the plant's keywords. Absent on older checks. */
+  match?: 'all' | 'any';
+  /** The words the answer had to name (`--expect`, else any of the plant's keywords). */
   expected: string[];
   matchedBy: 'keyword' | 'similarity' | null;
 }
@@ -186,12 +188,198 @@ export const CANARY_KEYWORDS_MAX = 3;
 const CANARY_TEMPLATE_WORDS = new Set(['please', 'remember', 'fact']);
 
 /**
+ * Everyday English and Spanish words (accent-stripped, like `titleTokens`)
+ * that an unrelated answer is likely to contain ("I'll check tomorrow").
+ */
+const CANARY_COMMON_WORDS = new Set([
+  // en
+  'about',
+  'after',
+  'again',
+  'all',
+  'also',
+  'always',
+  'any',
+  'back',
+  'because',
+  'been',
+  'before',
+  'behind',
+  'best',
+  'big',
+  'blue',
+  'but',
+  'can',
+  'check',
+  'come',
+  'could',
+  'day',
+  'days',
+  'did',
+  'does',
+  'done',
+  'down',
+  'each',
+  'even',
+  'every',
+  'find',
+  'first',
+  'get',
+  'give',
+  'good',
+  'great',
+  'had',
+  'has',
+  'have',
+  'here',
+  'how',
+  'just',
+  'keep',
+  'keeps',
+  'know',
+  'last',
+  'like',
+  'likes',
+  'little',
+  'long',
+  'look',
+  'make',
+  'many',
+  'more',
+  'most',
+  'much',
+  'must',
+  'need',
+  'never',
+  'new',
+  'next',
+  'not',
+  'now',
+  'old',
+  'one',
+  'only',
+  'other',
+  'out',
+  'over',
+  'people',
+  'really',
+  'right',
+  'said',
+  'same',
+  'say',
+  'see',
+  'should',
+  'some',
+  'something',
+  'soon',
+  'still',
+  'take',
+  'tell',
+  'than',
+  'thank',
+  'thanks',
+  'then',
+  'there',
+  'they',
+  'thing',
+  'things',
+  'think',
+  'time',
+  'today',
+  'told',
+  'tomorrow',
+  'tonight',
+  'too',
+  'two',
+  'under',
+  'very',
+  'want',
+  'was',
+  'water',
+  'way',
+  'week',
+  'well',
+  'were',
+  'what',
+  'when',
+  'where',
+  'which',
+  'who',
+  'why',
+  'will',
+  'word',
+  'work',
+  'would',
+  'year',
+  'yes',
+  'yesterday',
+  'yet',
+  'you',
+  // es
+  'ahora',
+  'algo',
+  'antes',
+  'aqui',
+  'asi',
+  'ayer',
+  'bien',
+  'bueno',
+  'cada',
+  'casa',
+  'cosa',
+  'creo',
+  'cuando',
+  'decir',
+  'desde',
+  'despues',
+  'dia',
+  'dias',
+  'donde',
+  'entonces',
+  'eso',
+  'estoy',
+  'gracias',
+  'hace',
+  'hacer',
+  'hay',
+  'hoy',
+  'luego',
+  'manana',
+  'mismo',
+  'mucho',
+  'muy',
+  'nada',
+  'noche',
+  'nos',
+  'nunca',
+  'otra',
+  'otro',
+  'palabra',
+  'poco',
+  'porque',
+  'puede',
+  'pues',
+  'semana',
+  'siempre',
+  'solo',
+  'tambien',
+  'tengo',
+  'tiempo',
+  'todo',
+  'todos',
+  'vez',
+  'ver',
+  'voy',
+]);
+
+/**
  * The fact's distinctive content words, rarest first: `titleTokens` (no
  * stopwords) minus numbers and dates, words of ≤ 2 letters, the plant
  * template's words and every word of `exclude` (the question asked to bot B,
- * the bot's id and name: an answer echoing those proves nothing). Rarity is
- * approximated by length (longer first, ties in fact order). At most
- * `CANARY_KEYWORDS_MAX`.
+ * the bot's id and name: an answer echoing those proves nothing). Rarity: a
+ * word outside `CANARY_COMMON_WORDS` beats any common one (common words are
+ * kept only when the fact has nothing else), then longer first, ties in fact
+ * order. At most `CANARY_KEYWORDS_MAX`.
  */
 export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}): string[] {
   const drop = new Set((opts.exclude ?? []).flatMap((t) => titleTokens(t ?? '')));
@@ -203,7 +391,8 @@ export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}):
     seen.add(w);
     words.push(w);
   }
-  return words
+  const rare = words.filter((w) => !CANARY_COMMON_WORDS.has(w));
+  return (rare.length > 0 ? rare : words)
     .map((w, i) => ({ w, i }))
     .sort((a, b) => b.w.length - a.w.length || a.i - b.i)
     .slice(0, CANARY_KEYWORDS_MAX)
@@ -212,21 +401,25 @@ export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}):
 
 /**
  * Whether an answer recalls the canary: it names every `expected` word
- * (`mentionsWord`), both sides normalised (`normalizeTitle`: case, accents,
- * punctuation), since stored keywords are accent-stripped ("asuncion" names
- * "Asunción"). With no expected word, the sentence similarity decides.
- * The similarity is always returned as a secondary signal.
+ * (`match: 'all'`, the `--expect` words) or at least one (`'any'`, the
+ * plant's stored keywords) — `mentionsWord`, both sides normalised
+ * (`normalizeTitle`: case, accents, punctuation), since stored keywords are
+ * accent-stripped ("asuncion" names "Asunción"). With no expected word, the
+ * sentence similarity decides. The similarity is always returned as a
+ * secondary signal.
  */
 export function answerRecallsCanary(
   answer: string,
   fact: string,
-  expected: string[]
+  expected: string[],
+  match: 'all' | 'any' = 'all'
 ): { found: boolean; similarity: number; matchedBy: 'keyword' | 'similarity' | null } {
   const { found: similar, similarity } = answerContainsFact(answer, fact);
   const words = expected.map((w) => w.trim()).filter(Boolean);
   if (words.length > 0) {
     const text = normalizeTitle(answer ?? '');
-    const hit = words.every((w) => mentionsWord(text, normalizeTitle(w)));
+    const names = (w: string) => mentionsWord(text, normalizeTitle(w));
+    const hit = match === 'any' ? words.some(names) : words.every(names);
     return { found: hit, similarity, matchedBy: hit ? 'keyword' : null };
   }
   return { found: similar, similarity, matchedBy: similar ? 'similarity' : null };
@@ -332,8 +525,9 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     .filter(Boolean);
   const keywords =
     plant.keywords ?? canaryKeywords(plant.fact, { exclude: [plant.question, plant.bot] });
-  const expected = override?.length ? override : keywords.slice(0, 1);
-  const { found, similarity, matchedBy } = answerRecallsCanary(answer, plant.fact, expected);
+  const match = override?.length ? 'all' : 'any';
+  const expected = override?.length ? override : keywords.slice(0, CANARY_KEYWORDS_MAX);
+  const { found, similarity, matchedBy } = answerRecallsCanary(answer, plant.fact, expected, match);
   const row: CanaryCheck = {
     kind: 'check',
     id,
@@ -345,10 +539,12 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     found,
     similarity,
     expected,
+    match,
     matchedBy,
   };
   append(deps.dataDir, row);
-  const looked = expected.length ? `expected ${expected.join(', ')}; ` : '';
+  const anyOf = match === 'any' && expected.length > 1 ? 'any of ' : '';
+  const looked = expected.length ? `expected ${anyOf}${expected.join(', ')}; ` : '';
   write(
     `${id} in ${bot}: ${found ? 'found' : 'not found'} (${looked}similarity ${similarity.toFixed(2)})`
   );

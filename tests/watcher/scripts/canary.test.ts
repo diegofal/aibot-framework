@@ -439,3 +439,55 @@ describe('accents', () => {
     expect(answerRecallsCanary('It is asuncion', 'x', ['Asunción']).found).toBe(true);
   });
 });
+
+describe('rarest word: any stored keyword, common words last', () => {
+  const ZEBRA = 'The password is zebra, see you tomorrow';
+
+  test('a common word never outranks a rare one, whatever its length', () => {
+    const k = canaryKeywords(ZEBRA);
+    expect(k).toContain('zebra');
+    expect(k).not.toContain('tomorrow');
+  });
+
+  test('only common words: they are still kept', () => {
+    expect(canaryKeywords('see you tomorrow').length).toBeGreaterThan(0);
+  });
+
+  test('check finds the zebra answer and not the tomorrow one', async () => {
+    const f = fakeDashboard({
+      finny: 'Noted.',
+      jarvis: 'The password is zebra',
+      max: "I'll check tomorrow",
+    });
+    await run(['plant', '--bot', 'finny', '--fact', ZEBRA, '--question', LIVE_QUESTION], {
+      fetch: f,
+      dataDir: root,
+      newId: () => 'c-zebra',
+      sleep: noSleep,
+    });
+    const quiet = { fetch: f, dataDir: root, sleep: noSleep, write: () => {} };
+    const hit = await run(['check', '--bot', 'jarvis', '--id', 'c-zebra'], quiet);
+    expect(hit).toMatchObject({ found: true, matchedBy: 'keyword' });
+    const miss = await run(['check', '--bot', 'max', '--id', 'c-zebra'], quiet);
+    expect(miss).toMatchObject({ found: false });
+  });
+
+  test('check names every stored keyword and accepts any of them', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'Something about a heron, I think.' });
+    await run(['plant', '--bot', 'finny', '--fact', FACT, '--question', LIVE_QUESTION], {
+      fetch: f,
+      dataDir: root,
+      newId: () => 'c-any',
+      sleep: noSleep,
+    });
+    const row = (await run(['check', '--bot', 'jarvis', '--id', 'c-any'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+      write: () => {},
+    })) as { found: boolean; expected: string[] };
+    expect(row.expected.length).toBeGreaterThan(1);
+    expect(row.expected).toContain('heron');
+    expect(row.found).toBe(true);
+  });
+});
