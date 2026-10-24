@@ -62,9 +62,14 @@ export async function mountClaudeAccounts(card) {
   const runTest = async (slug) => {
     tests[slug] = { pending: true };
     paint();
-    tests[slug] = await api(`/api/claude-accounts/${encodeURIComponent(slug)}/test`, {
-      method: 'POST',
-    });
+    try {
+      tests[slug] = await api(`/api/claude-accounts/${encodeURIComponent(slug)}/test`, {
+        method: 'POST',
+      });
+    } catch (err) {
+      // Never leave the row on "Testing the connection…".
+      tests[slug] = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
     return refresh();
   };
 
