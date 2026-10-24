@@ -469,3 +469,47 @@ describe('IntrospectionSampler', () => {
     expect(next.done).toBe(0);
   });
 });
+
+describe('cause coverage, either side', () => {
+  // Review of 2026-10-24 (after ed7dbe3): target-side coverage alone made a
+  // short correct cause miss against a long focus text.
+  const idling: Attention = {
+    phase: 'sense',
+    items: [
+      {
+        id: 'b-0000000c',
+        botId: 'scout',
+        what: 'web_fetch failed in Scout',
+        salience: 0.4,
+        reasons: ['error', 'novel'],
+        touched: [],
+      },
+    ],
+    focusNeuronIds: ['n-bbbbbbbb'],
+    focus: [
+      {
+        id: 'n-bbbbbbbb',
+        kind: 'insight',
+        text: 'jarvis-factory has been idling for six cycles while its research goal waits on operator feedback',
+      },
+    ],
+  };
+
+  test('a short correct cause against a long focus text matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'n-bbbbbbbb', cause: 'jarvis-factory keeps idling' },
+      idling,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+
+  test('bare salience labels still miss', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'n-bbbbbbbb', cause: 'error, novel' },
+      idling,
+      true
+    );
+    expect(s.fields.cause).toBe('miss');
+  });
+});

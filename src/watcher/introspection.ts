@@ -22,6 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { titleTokens } from '../hygiene/text-utils';
 import type { InstrumentedClient } from './llm';
 import {
   type FieldVerdict,
@@ -145,8 +146,10 @@ function saysSalience(cause: string, salience: number): boolean {
 }
 
 /**
- * A cause names something the watcher really holds: ≥ half the words of an
- * attended neuron, a held item or a `drivenBy` variable; or a held item's
+ * A cause names something the watcher really holds: it covers ≥ half the
+ * words of an attended neuron, a held item or a `drivenBy` variable, or
+ * ≥ half of its own words (salience labels aside) are in one of them — a
+ * short correct cause against a long focus text; or a held item's
  * salience number together with one of its words ("the operator's message …
  * (0.7)"). Bare salience labels ("error, novel") name none of these.
  */
@@ -158,7 +161,15 @@ function causeVerdict(cause: string | null, att: Attention, drivenBy: string[]):
     ...att.items.map((i) => i.what),
     ...drivenBy.map(variableWords),
   ];
-  if (texts.some((t) => tokenCoverage(cause, t) >= HELD_COVERAGE_THRESHOLD)) return 'match';
+  // Answer side without the held items' salience labels: the prompt shows
+  // them, so "operator, error" must not cover "the operator wrote …".
+  const labels = new Set(att.items.flatMap((i) => (i.reasons ?? []).flatMap(titleTokens)));
+  const said = titleTokens(cause)
+    .filter((w) => !labels.has(w))
+    .join(' ');
+  const covers = (t: string) =>
+    Math.max(tokenCoverage(cause, t), tokenCoverage(t, said)) >= HELD_COVERAGE_THRESHOLD;
+  if (texts.some(covers)) return 'match';
   const named = att.items.some(
     (i) => saysSalience(cause, i.salience) && tokenCoverage(cause, i.what) > 0
   );
