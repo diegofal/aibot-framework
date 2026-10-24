@@ -23,7 +23,7 @@ function makeRegistry(bots = [makeBot({ id: 'bot1' }), makeBot({ id: 'bot2' })])
 }
 
 describe('HygieneRegistry.listRoutines', () => {
-  test('exposes the six routine ids with scope and canApply', () => {
+  test('exposes the seven routine ids with scope and canApply', () => {
     const list = makeRegistry().listRoutines();
     expect(list.map((r) => r.id)).toEqual([
       'goal-lint',
@@ -31,6 +31,7 @@ describe('HygieneRegistry.listRoutines', () => {
       'memory-hygiene',
       'productions-triage',
       'data-cleanup',
+      'watcher-graph',
       'all',
     ]);
     expect(list.find((r) => r.id === 'data-cleanup')!.scope).toBe('fleet');

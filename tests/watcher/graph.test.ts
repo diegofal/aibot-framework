@@ -457,3 +457,58 @@ describe('Graph: the sensing hot path', () => {
     expect(existsSync(`${files.neurons}.old`)).toBe(false);
   });
 });
+
+describe('Graph.mergeInto (hygiene watcher-graph)', () => {
+  test('sums activations, unions support, re-points edges and archives the rest', () => {
+    const g = graph();
+    const keep = g.addNeuron(
+      fact('the api rate limit is 60 per minute', {
+        activations: 3,
+        support: { bots: ['b1'], paths: ['MEMORY.md'] },
+      })
+    );
+    t += 1000;
+    const dup = g.addNeuron(
+      fact('the api rate limit is 60 per minute.', {
+        activations: 2,
+        support: { bots: ['b1'], paths: ['memory/2026-10-16.md'], cycles: ['c1'] },
+      })
+    );
+    const topic = g.addNeuron({ ...fact('api'), kind: 'topic' });
+    const other = g.addNeuron(fact('something else entirely'));
+    g.addEdge({ from: dup.id, to: topic.id, rel: 'about', weight: 1, createdBy: 'bot:b1' });
+    g.addEdge({ from: other.id, to: dup.id, rel: 'related', weight: 0.8, createdBy: 'watcher' });
+    g.addEdge({ from: keep.id, to: dup.id, rel: 'related', weight: 0.95, createdBy: 'watcher' });
+
+    const res = g.mergeInto(keep.id, [dup.id]);
+    expect(res?.keeper.activations).toBe(5);
+    expect(res?.keeper.support.paths?.sort()).toEqual(['MEMORY.md', 'memory/2026-10-16.md']);
+    expect(res?.keeper.support.cycles).toEqual(['c1']);
+    expect(res?.archived.map((n) => n.id)).toEqual([dup.id]);
+    expect(g.get(dup.id)?.archivedAt).toBeDefined();
+    expect(g.get(dup.id)?.meta?.mergedInto).toBe(keep.id);
+    const keeperEdges = g.edgesOf(keep.id).map((e) => `${e.from}>${e.to}:${e.rel}`);
+    expect(keeperEdges).toContain(`${keep.id}>${topic.id}:about`);
+    expect(keeperEdges).toContain(`${other.id}>${keep.id}:related`);
+    // the edge between the two merged neurons is not re-pointed onto itself
+    expect(keeperEdges.filter((e) => e.startsWith(`${keep.id}>${keep.id}`))).toEqual([]);
+    expect(res?.edges).toBe(2);
+
+    // durable: a reload sees the same
+    const g2 = graph();
+    expect(g2.get(keep.id)?.activations).toBe(5);
+    expect(g2.get(dup.id)?.archivedAt).toBeDefined();
+  });
+
+  test('undefined when the keeper is missing or archived; archived drops are skipped', () => {
+    const g = graph();
+    const a = g.addNeuron(fact('alpha beta'));
+    const b = g.addNeuron(fact('alpha beta gamma', { activations: 4 }));
+    expect(g.mergeInto('n-missing', [a.id])).toBeUndefined();
+    g.archive(b.id);
+    expect(g.mergeInto(a.id, [b.id])?.archived).toEqual([]);
+    expect(g.get(a.id)?.activations).toBe(0);
+    g.archive(a.id);
+    expect(g.mergeInto(a.id, [b.id])).toBeUndefined();
+  });
+});

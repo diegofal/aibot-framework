@@ -515,6 +515,8 @@ export function startWebServer(deps: WebServerDeps): void {
     },
     channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
     workerRuns: (botId) => workerPool()?.list(botId, { endedLimit: 20 }) ?? [],
+    // watcher-graph cleans the live watcher's graph through it, never its files.
+    watcherGraph: () => deps.watcher?.graph,
     // productions-triage archives through the service so index.html is rebuilt.
     archiveProduction: productionsService
       ? (botId, path, reason) => productionsService.archiveFile(botId, path, reason)
