@@ -537,6 +537,61 @@ describe('Noticer.wake / due', () => {
     await s.noticer.run();
     expect(s.rows.find((r) => r.op === 'notice:pass')?.trigger).toBe('manual');
   });
+
+  // Review 2026-10-24 (cost): with an operator item or an urgent one in the
+  // buffer, a failed pass left wake() saying `salience` every 60 s, a paid
+  // retry each time.
+  describe('backoff after a pass that did not go through', () => {
+    const MIN = 60_000;
+    test('2, 4, 8 … min after consecutive failures (cap 30), reset by the next ok pass', async () => {
+      let fail = true;
+      const s = setup({
+        reply: async () => {
+          if (fail) throw new Error('boom');
+          return { text: '{"keep":[]}' };
+        },
+      });
+      s.buffer.push(item(operatorSays('b1', 'drop the Acme lead'), 0.7, { fromOperator: true }));
+      t += NOTICE_MIN_GAP_MS;
+      for (const wait of [2, 4, 8, 16, 30, 30]) {
+        expect(s.noticer.wake()).toBe('salience');
+        expect((await s.noticer.run()).status).toBe('failed');
+        t += wait * MIN - 1_000;
+        expect(s.noticer.wake()).toBeNull();
+        t += 1_000;
+      }
+      expect(s.noticer.wake()).toBe('salience');
+      fail = false;
+      expect((await s.noticer.run()).status).toBe('noticed');
+      s.buffer.push(item(operatorSays('b1', 'and the Beta lead'), 0.7, { fromOperator: true }));
+      t += NOTICE_MIN_GAP_MS;
+      expect(s.noticer.wake()).toBe('salience');
+    });
+
+    test('a refused (breaker) pass backs off too', async () => {
+      const s = setup({ open: true });
+      s.buffer.push(item(toolError('b1'), 0.95));
+      t += NOTICE_MIN_GAP_MS;
+      expect((await s.noticer.run()).status).toBe('breaker');
+      t += NOTICE_MIN_GAP_MS;
+      expect(s.noticer.wake()).toBeNull();
+      t += MIN;
+      expect(s.noticer.wake()).toBe('salience');
+    });
+
+    test('the age ceiling still applies during a backoff', async () => {
+      const s = setup({ open: true, cfg: { maxWaitMs: 3 * MIN } });
+      s.buffer.push(item(toolError('b1'), 0.5));
+      for (let i = 0; i < 3; i++) {
+        t += 30 * MIN;
+        expect(s.noticer.wake()).toBe('age');
+        await s.noticer.run();
+      }
+      // Backing off 8 min now, but the item has waited 3 min since that pass.
+      t += 3 * MIN;
+      expect(s.noticer.wake()).toBe('age');
+    });
+  });
 });
 
 describe('parseNoticeOutput', () => {

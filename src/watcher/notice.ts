@@ -67,6 +67,14 @@ import {
 export const NOTICE_MAX_ITEMS = 20;
 /** Never two passes closer than this, early or not. */
 export const NOTICE_MIN_GAP_MS = 60_000;
+/**
+ * After a pass that did not go through (failed, refused by the breaker or the
+ * cap, unparsable), salience waits `2^n` min (n = consecutive misses), at most
+ * this long; the next pass that reads an answer resets it. The age ceiling
+ * (`notice.maxWaitMs`) still wakes it.
+ */
+export const NOTICE_BACKOFF_BASE_MS = 2 * 60_000;
+export const NOTICE_BACKOFF_MAX_MS = 30 * 60_000;
 /** Text similarity at which a kept item is the same as an existing neuron. */
 export const NOTICE_DEDUPE_TEXT = 0.8;
 const MAX_TEXT = 300;
@@ -207,14 +215,25 @@ const isKeepKind = (k: string): k is NoticeKeepKind =>
   (NOTICE_KEEP_KINDS as readonly string[]).includes(k);
 const isConfidence = (c: unknown): c is Confidence => c === 'low' || c === 'medium' || c === 'high';
 
+/** Outcomes of a pass that ran but read no answer: they back off the next one. */
+const MISSED = new Set<NoticeOutcome['status']>(['failed', 'breaker', 'capped', 'unparsable']);
+
 export class Noticer {
   lastRunAt: number;
   private inFlight: Promise<NoticeOutcome> | null = null;
   private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
+  /** Consecutive passes that did not go through (the backoff exponent). */
+  private misses = 0;
 
   constructor(private readonly deps: NoticeDeps) {
     this.lastRunAt = deps.now();
+  }
+
+  /** How long salience waits after the last pass: 0 unless it did not go through. */
+  backoffMs(): number {
+    if (this.misses === 0) return 0;
+    return Math.min(NOTICE_BACKOFF_MAX_MS, NOTICE_BACKOFF_BASE_MS * 2 ** (this.misses - 1));
   }
 
   /** A pass is due when `wake` says why. */
@@ -226,6 +245,7 @@ export class Noticer {
    * Why a pass should run now (O2, `noticeWake`): salience (`wakeSalience`,
    * possibly raised by the stakes; an operator message at once) or age
    * (`notice.maxWaitMs`); never within `NOTICE_MIN_GAP_MS` of the last pass.
+   * After a pass that did not go through, only age until `backoffMs` passed.
    */
   wake(opts: { wakeSalience?: number } = {}): Extract<PassTrigger, 'salience' | 'age'> | null {
     const cfg = this.deps.config().notice;
@@ -238,6 +258,7 @@ export class Noticer {
       maxWaitMs: cfg.maxWaitMs,
       nowMs,
       sinceMs: this.lastRunAt,
+      ageOnly: nowMs - this.lastRunAt < this.backoffMs(),
     });
   }
 
@@ -254,6 +275,11 @@ export class Noticer {
         if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher notice: pass failed');
         return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+      })
+      .then((out) => {
+        if (out.status === 'noticed') this.misses = 0;
+        else if (MISSED.has(out.status)) this.misses++;
+        return out;
       })
       .finally(() => {
         if (this.inFlight === run) this.inFlight = null;

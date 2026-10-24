@@ -57,24 +57,29 @@ export interface NoticeWakeInput {
   nowMs: number;
   /** The last notice pass: the wait counts from the later of it and the item. */
   sinceMs?: number;
+  /** Backing off after a pass that did not go through: only the age ceiling wakes. */
+  ageOnly?: boolean;
 }
 
 /**
  * Whether notice should wake, and why (O2): an operator message or an urgent
  * item → `salience`; the salient items adding up to `wakeSalience` →
  * `salience`; the oldest salient item waiting `maxWaitMs` (since it arrived or
- * the last pass, whichever is later) → `age`. Null otherwise. Pure.
+ * the last pass, whichever is later) → `age`. Null otherwise. With
+ * `ageOnly` (a backoff), only `age`. Pure.
  */
 export function noticeWake(
   input: NoticeWakeInput
 ): Extract<PassTrigger, 'salience' | 'age'> | null {
   const salient = input.items.filter((i) => Number.isFinite(i.salience) && i.salience >= input.bar);
   if (salient.length === 0) return null;
-  if (salient.some((i) => i.fromOperator === true || i.salience >= NOTICE_URGENT_SALIENCE)) {
-    return 'salience';
+  if (!input.ageOnly) {
+    if (salient.some((i) => i.fromOperator === true || i.salience >= NOTICE_URGENT_SALIENCE)) {
+      return 'salience';
+    }
+    const sum = salient.reduce((s, i) => s + i.salience, 0);
+    if (sum >= input.wakeSalience) return 'salience';
   }
-  const sum = salient.reduce((s, i) => s + i.salience, 0);
-  if (sum >= input.wakeSalience) return 'salience';
   let oldest = Number.POSITIVE_INFINITY;
   for (const i of salient) {
     const at = Date.parse(i.noticedAt);
