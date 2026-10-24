@@ -271,6 +271,29 @@ describe('metric 6: broadcasts that changed behaviour', () => {
     expect(m.value).toBeCloseTo(2 / 3, 10);
     expect(m.detail).toMatchObject({ served: 2, up: 1, down: 1, delivered: 3, failed: 1 });
   });
+
+  // O1: the fast lane and integrate are told apart; a record without a source is integrate's.
+  test('splits delivered and served by source (fast lane vs integrate)', () => {
+    const fastServed = broadcast({ kind: 'directive', source: 'fast-lane', servedByCycle: 'c-1' });
+    const fast = broadcast({ kind: 'directive', source: 'fast-lane' });
+    const fastFailed = broadcast({
+      source: 'fast-lane',
+      deliveredAt: undefined,
+      deliveryError: 'x',
+    });
+    const integrateServed = broadcast({ source: 'integrate', servedByCycle: 'c-2' });
+    const legacy = broadcast();
+    const r = rec({ broadcasts: [fastServed, fast, fastFailed, integrateServed, legacy] });
+    const m = metric(r, 'causal');
+    expect(m.detail).toMatchObject({
+      delivered: 4,
+      served: 2,
+      fastLaneDelivered: 2,
+      fastLaneServed: 1,
+      integrateDelivered: 2,
+      integrateServed: 1,
+    });
+  });
 });
 
 describe('metric 7: novel surprises per week', () => {

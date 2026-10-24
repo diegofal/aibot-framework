@@ -906,6 +906,18 @@ export const WatcherConfigSchema = z
       .default({}),
     birth: z.object({ historyDays: z.number().int().min(1).max(365).default(30) }).default({}),
     log: z.object({ senseSummaryEveryMs: z.number().int().min(1_000).default(60_000) }).default({}),
+    /**
+     * O1 fast lane: a pattern (or a high-confidence fact) that two or more bots
+     * support goes out as a directive to the related third bots right after the
+     * notice pass, without waiting for integrate (`src/watcher/fast-lane.ts`).
+     */
+    fastLane: z
+      .object({
+        enabled: z.boolean().default(true),
+        minBots: z.number().int().min(2).default(2),
+        maxPerDay: z.number().int().min(0).default(6),
+      })
+      .default({}),
   })
   .default({});
 

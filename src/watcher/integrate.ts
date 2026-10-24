@@ -527,8 +527,9 @@ export class Integrator {
         ...(cap !== undefined ? { broadcastsToday: this.countToday(b.id) } : {}),
       })),
       ...(cap !== undefined ? { broadcastCap: cap } : {}),
+      // Insights, and the fresh and nearby neurons a fast-lane directive came from.
       insightBroadcasts: Object.fromEntries(
-        insights
+        [...insights, ...fresh, ...neighbourhood]
           .map((n) => [n.id, sentByInsight.get(n.id) ?? []] as const)
           .filter(([, v]) => v.length > 0)
       ),
@@ -729,6 +730,7 @@ export class Integrator {
         text: clip(b.text, 500),
         insightId: insight.id,
         reason: insight.text,
+        source: 'integrate',
       });
       broadcasts.push(result);
       if (result.status === 'delivered') deliveredFor.add(insight.id);
@@ -870,7 +872,12 @@ export class Integrator {
             ? 'failed'
             : 'in flight';
       const list = out.get(b.insightId) ?? [];
-      list.push({ bot: botName(b.botId), kind: b.kind, status });
+      list.push({
+        bot: botName(b.botId),
+        kind: b.kind,
+        status,
+        ...(b.source === 'fast-lane' ? { source: b.source } : {}),
+      });
       out.set(b.insightId, list);
     }
     return out;

@@ -397,3 +397,21 @@ describe('writeWatcherGoal', () => {
     expect(parseGoals(readFileSync(path, 'utf-8')).active[0].text).toBe('First goal');
   });
 });
+
+describe('Broadcaster.send source (O1 fast lane)', () => {
+  test('integrate: one per insight + kind across bots; the fast lane: one per bot', async () => {
+    const { b } = setup();
+    expect((await send(b, { kind: 'directive', source: 'integrate' })).status).toBe('delivered');
+    expect((await send(b, { kind: 'directive', botId: 'b2' })).status).toBe('duplicate');
+
+    const p = { kind: 'directive', insightId: 'n-pat00001', source: 'fast-lane' };
+    const first = await send(b, { ...p, botId: 'b3' });
+    expect(first.status).toBe('delivered');
+    expect(first.broadcast?.source).toBe('fast-lane');
+    expect((await send(b, { ...p, botId: 'b4' })).status).toBe('delivered');
+    expect((await send(b, { ...p, botId: 'b3' })).status).toBe('duplicate');
+    // The record keeps its source across a reload.
+    const reread = new Broadcaster({ dir, delivery: {} }).get(first.broadcast?.id as string);
+    expect(reread?.source).toBe('fast-lane');
+  });
+});

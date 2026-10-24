@@ -74,6 +74,7 @@
             <li><strong><code>fleet_memory_search</code></strong> &mdash; bots query the graph. Neurons supported by an operator message (<code>meta.operatorSourced</code>) are shown only to the operator. On an operator turn only, the conversation prompt also gets &ldquo;## What the fleet knows&rdquo; (same ranking, top 5, supporting bot named) and a hint to call the tool.</li>
             <li><strong><code>## Your current state</code></strong> (phase 4) &mdash; in both planner prompts and the conversation system prompt while the watcher runs: the bot's live phase, tool and since (from the watcher's own presence tracker), its running cycle (goal and plan), and what the fleet is attending to (never operator-sourced neurons).</li>
           </ul>
+          <p><strong>Fast lane</strong> (<code>fast-lane.ts</code>, O1 of <code>docs/plans/watcher-optimizations-plan.md</code>): right after a notice pass, a new <code>pattern</code> (or a <code>fact</code> at confidence <code>high</code>) that two or more bots support goes at once, as a <code>directive</code>, to every enabled non-tenant bot outside that support that relates to it (a <code>related</code> edge to one of its neurons, or the pattern names a tool it used in the last 7 days). Same <code>Broadcaster</code>, caps and records as integrate, <code>source: 'fast-lane'</code>, one per target bot, at most <code>watcher.fastLane.maxPerDay</code> (6) a day; never a question, goal or wake. The next integrate prompt shows it next to the pattern ("fast lane"), so Opus does not resend it, and metric 6 splits fast lane from integrate.</p>
         </div>
 
         <div class="card">
@@ -85,7 +86,7 @@
             <tbody>
               <tr><td><code>interoception()</code></td><td><code>fleetKarmaAvg</code>, <code>breakerOpen</code>, <code>semaphore</code>, <code>budgetUsedToday</code>, <code>operatorSilenceHours</code>, <code>bufferSalience</code>, <code>lastIntegrateAgoMs</code>. Shown to integrate as <code>## How I am</code>; its answer names <code>drivenBy</code>, kept on the <code>integrate:pass</code> log row and, for the newest pass, in <code>integrate.json</code>, where introspection reads it</td></tr>
               <tr><td><code>attention()</code></td><td>Phase, top 5 buffer and pending items with the neurons they touch, and the focus the last integrate pass named (<code>focusNeuronIds</code>). Shown to integrate as <code>## What I am attending to</code></td></tr>
-              <tr><td>Introspection</td><td><code>introspection.jsonl</code> rows (<code>subject: 'watcher'</code> or <code>bot:&lt;id&gt;</code>) with field verdicts (phase, tool, goal, cause), score, model, tokens and cost. Metric 3 is the mean score per subject</td></tr>
+              <tr><td>Introspection</td><td><code>introspection.jsonl</code> rows (<code>subject: 'watcher'</code> or <code>bot:&lt;id&gt;</code>) with field verdicts (phase, tool, goal, cause), score, model, tokens and cost. Metric 3 is the mean score per subject. The question (O4) shows the held items in words only, without salience numbers or labels, and asks what the watcher holds in its own words (<code>holding</code>, kept on the row) and what about it matters to the fleet</td></tr>
             </tbody>
           </table>
         </div>

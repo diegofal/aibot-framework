@@ -27,6 +27,7 @@ import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import { readToolEntries } from '../stats/readers/tool-audit';
 import { isTenantBot } from '../tenant/tenant-scoping';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
@@ -49,6 +50,7 @@ import {
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
 import { tierSwitches } from './config-file';
+import { FAST_LANE_DEFAULTS, FAST_LANE_TOOL_WINDOW_MS, runFastLane } from './fast-lane';
 import { Graph, type GraphChange } from './graph';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
@@ -172,6 +174,8 @@ export interface WatcherDeps {
   random?: () => number;
   /** Bound of `stop()`'s wait for in-flight work (default `WATCHER_STOP_TIMEOUT_MS`). */
   stopTimeoutMs?: number;
+  /** O1 fast lane: tool names a bot used in `[sinceMs, nowMs]` (the tool audit). */
+  toolsUsed?: (botId: string, sinceMs: number, nowMs: number) => string[];
 }
 
 export class Watcher extends EventEmitter implements WatcherSelfStateSource {
@@ -224,6 +228,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private introspectRun: Promise<IntrospectionOutcome> | null = null;
   /** Aborted by `stop()`: every model call in flight (`instrumented`) is linked to it. */
   private stopCtrl = new AbortController();
+  /** O1 fast lane: the UTC day its capped row was written. */
+  private readonly fastLaneState: { cappedOn?: string } = {};
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -396,8 +402,11 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const isCancelled = () => signal.aborted;
     const run: Promise<NoticeOutcome | null> = noticer
       .run({ isCancelled })
-      .then((outcome) => {
-        if (!isCancelled()) this.integrator?.observeNotice(outcome);
+      .then(async (outcome) => {
+        if (!isCancelled()) {
+          this.integrator?.observeNotice(outcome);
+          await this.fastLane(outcome, isCancelled);
+        }
         return outcome;
       })
       .catch((err): NoticeOutcome | null => {
@@ -414,6 +423,41 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     this.noticeRun = run;
     this.noticeRunSignal = signal;
     return run;
+  }
+
+  /**
+   * O1: what a notice pass created that two bots support goes to the related
+   * third bots at once, as directives (`fast-lane.ts`). Never throws.
+   */
+  private async fastLane(outcome: NoticeOutcome, isCancelled: () => boolean): Promise<void> {
+    if (outcome.status !== 'noticed' || outcome.created.length === 0) return;
+    const toolsUsed = this.deps.toolsUsed;
+    await runFastLane(
+      {
+        graph: this.graph,
+        broadcaster: this.broadcaster,
+        log: this.log,
+        config: () => this.cfg().fastLane ?? FAST_LANE_DEFAULTS,
+        bots: () =>
+          (this.deps.config().bots ?? [])
+            .filter((b) => b.enabled !== false && !this.isTenantBot(b.id))
+            .map((b) => b.id),
+        ...(toolsUsed
+          ? {
+              toolsUsed: (botId: string) => {
+                const nowMs = this.now();
+                return toolsUsed(botId, nowMs - FAST_LANE_TOOL_WINDOW_MS, nowMs);
+              },
+            }
+          : {}),
+        botName: (id) => this.botName(id),
+        now: this.now,
+        isCancelled,
+        state: this.fastLaneState,
+        logger: this.logger,
+      },
+      outcome.created
+    );
   }
 
   /** True while the integrate timer runs (after birth, with `integrate.enabled`). */
@@ -1396,6 +1440,14 @@ export function createFleetWatcher(
       return karma.getAllScores(ids).map((s) => s.current);
     },
     semaphore: getClaudeCliStats,
+    toolsUsed: (botId, since, now) => {
+      try {
+        const entries = readToolEntries(resolveStatsDirs(config).toolAudit, botId, since, now);
+        return [...new Set(entries.map((e) => e.toolName))];
+      } catch {
+        return [];
+      }
+    },
     ...(manager.getRunningCycle
       ? { runningCycle: (botId: string) => manager.getRunningCycle?.(botId) }
       : {}),

@@ -1817,3 +1817,73 @@ describe('Watcher: live tier switches (applyConfig)', () => {
     await watcher.stop();
   });
 });
+
+describe('Watcher fast lane (O1)', () => {
+  test('a pattern two bots support reaches a third bot after the notice pass, and the next integrate prompt shows it', async () => {
+    const directives: Array<{ botId: string; text: string }> = [];
+    let ids: string[] = [];
+    const { client: notice } = noticeClient(() =>
+      JSON.stringify({
+        keep: [
+          {
+            text: 'web_fetch is blocked by Cloudflare on thelancet.com and medium.com',
+            kind: 'pattern',
+            confidence: 'medium',
+            from: ids,
+          },
+        ],
+      })
+    );
+    const { client: integrate, prompts } = integrateClient(() => '{"insights":[]}');
+    const used: string[] = [];
+    const { watcher, activityStream, config } = make(
+      {
+        llm: {
+          notice: { client: notice, model: 'claude-haiku-5-5', backend: 'claude-cli' },
+          integrate: { client: integrate, model: 'claude-opus-5-5', backend: 'claude-cli' },
+        },
+        broadcastDelivery: {
+          directive: (botId, text) => void directives.push({ botId, text }),
+        },
+        toolsUsed: (botId, sinceMs, nowMs) => {
+          used.push(`${botId}:${nowMs - sinceMs}`);
+          return botId === 'b3' ? ['web_fetch'] : [];
+        },
+      },
+      { ...noticeOn, ...integrateOn }
+    );
+    for (const [id, name] of [
+      ['b2', 'Finny'],
+      ['b3', 'Scout'],
+    ]) {
+      config.bots.push({ id, name: id, soulDir: soul(id, name), enabled: true } as never);
+    }
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', {
+      type: 'tool:error',
+      botId: 'b1',
+      timestamp: t,
+      data: { toolName: 'web_fetch', error: 'Cloudflare challenge on thelancet.com' },
+    });
+    activityStream.emit('activity', {
+      type: 'tool:error',
+      botId: 'b2',
+      timestamp: t,
+      data: { toolName: 'web_fetch', error: 'Cloudflare challenge on medium.com' },
+    });
+    ids = watcher.buffer.items().map((i) => i.id);
+    expect(ids).toHaveLength(2);
+    const out = await watcher.noticeNow();
+    expect(out?.status).toBe('noticed');
+    expect(directives.map((d) => d.botId)).toEqual(['b3']);
+    expect(used).toContain(`b3:${7 * 86_400_000}`);
+    const b = watcher.broadcaster.list()[0];
+    expect(b).toMatchObject({ botId: 'b3', kind: 'directive', source: 'fast-lane' });
+    expect(watcher.log.recent(50).some((r) => r.op === 'broadcast:fast-lane')).toBe(true);
+
+    await watcher.integrateNow();
+    expect(prompts[0]).toContain('directive to Scout (delivered, fast lane)');
+    await watcher.stop();
+  });
+});

@@ -225,6 +225,8 @@ export interface WatcherConfig {
   graph: { archiveAfterDays: number; relatedThreshold: number; maxNeurons: number };
   birth: { historyDays: number };
   log: { senseSummaryEveryMs: number };
+  /** O1 fast lane (`src/watcher/fast-lane.ts`); absent = `WATCHER_DEFAULTS.fastLane`. */
+  fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
 }
 
 /** Mirrors `WatcherConfigSchema` in `src/config.ts` (tests/watcher/types.test.ts keeps them equal). */
@@ -252,6 +254,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   graph: { archiveAfterDays: 30, relatedThreshold: 0.82, maxNeurons: 20_000 },
   birth: { historyDays: 30 },
   log: { senseSummaryEveryMs: 60_000 },
+  fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
 };
 
 export function emptyCounts(): Record<NeuronKind, number> {

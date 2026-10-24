@@ -90,7 +90,15 @@ export interface Broadcast {
   servedAt?: string;
   signal?: BroadcastSignal;
   signalAt?: string;
+  /**
+   * Who proposed it: an integrate pass, or the fast lane (`fast-lane.ts`, a
+   * notice-pass pattern two bots support, sent at once). Absent on records
+   * older than the fast lane: those are integrate's.
+   */
+  source?: BroadcastSource;
 }
+
+export type BroadcastSource = 'fast-lane' | 'integrate';
 
 export interface BroadcastDelivery {
   wake?: (botId: string) => void;
@@ -113,6 +121,12 @@ export interface BroadcastInput {
   insightId: string;
   /** Why (the insight's text): the goal event's reason. */
   reason?: string;
+  /**
+   * Recorded on the broadcast. A fast-lane broadcast is one per bot: the
+   * same pattern reaches every related bot, so its duplicate check is per
+   * insight + kind + bot (integrate's stays per insight + kind).
+   */
+  source?: BroadcastSource;
 }
 
 export type BroadcastResult =
@@ -244,6 +258,7 @@ export class Broadcaster {
     if (!text && kind !== 'wake') return { status: 'invalid' };
     for (const b of this.byId.values()) {
       if (b.insightId !== insightId || b.kind !== kind) continue;
+      if (input.source === 'fast-lane' && b.botId !== botId) continue;
       // A failed or deferred delivery may be retried; a delivered or in-flight one may not.
       if (b.deliveryError !== undefined && !b.deliveredAt) continue;
       // Stale only when another process left it open; a slow delivery of
@@ -268,6 +283,7 @@ export class Broadcaster {
       text,
       insightId,
       createdAt: this.iso(),
+      ...(input.source ? { source: input.source } : {}),
     };
     this.put(created);
     this.delivering.add(created.id);
