@@ -1,11 +1,13 @@
 /**
  * Operational view for `GET /api/stats/infra`: LLM backend health, security
  * audit summaries, cron jobs, Telegram channel states, log noise, boots and
- * log size. Log-derived rows use the last 24 h of the log tail.
+ * log size. Log-derived rows use the last 24 h of the log tail. The `ollama`
+ * row carries the embedding health when the route probed it (`extras.embedding`).
  */
 import { basename, dirname, join } from 'node:path';
 import type { BotConfig } from '../config';
 import { type StatsContext, getLogSignals, liveChannelStatus, windowSince } from './context';
+import type { EmbeddingHealth } from './embedding-probe';
 import { resolveChannel } from './fleet-aggregator';
 import { readCronJobs } from './readers/cron';
 import { readLlmEntries } from './readers/llm-query-log';
@@ -15,7 +17,11 @@ import { listDirSafe, toIso, toMs } from './util';
 
 const KNOWN_BACKENDS = ['ollama', 'claude-cli'];
 
-export function buildInfra(ctx: StatsContext, bots: BotConfig[]): InfraResponse {
+export function buildInfra(
+  ctx: StatsContext,
+  bots: BotConfig[],
+  extras: { embedding?: EmbeddingHealth } = {}
+): InfraResponse {
   const now = ctx.now();
   const since24h = windowSince(ctx, '24h');
   const logs = getLogSignals(ctx, '24h');
@@ -89,6 +95,9 @@ export function buildInfra(ctx: StatsContext, bots: BotConfig[]): InfraResponse 
       if (err && !b.lastErrorMessage) b.lastErrorMessage = err.slice(0, 300);
     }
   }
+
+  const ollama = backends.get('ollama');
+  if (ollama && extras.embedding) ollama.embedding = extras.embedding;
 
   const cron = readCronJobs(ctx.dirs.cron).filter((j) =>
     j.botId ? scoped.has(j.botId) : isAdminView

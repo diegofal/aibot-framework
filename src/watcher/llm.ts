@@ -11,6 +11,9 @@
  * when the watcher's stop signal (`InstrumentOptions.signal`) fires: the
  * client receives it, and the call stops being waited on even if the client
  * ignores it. An aborted call is not a backend failure (the breaker is not fed).
+ * Every call that reached the model (answered or failed, not aborted) is kept
+ * as a pass record (`pass-records.ts`: prompt and response, redacted) and the
+ * result carries its `recordId`; by default next to the budget files.
  */
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import { usageExtras } from '../bot/llm-query-log';
@@ -26,6 +29,7 @@ import {
 import type { Logger } from '../logger';
 import type { ChatMessage, OllamaClient } from '../ollama';
 import type { BudgetDecision, DailyBudget, WatcherTier } from './budget';
+import { PassRecords, passesDir, redactPassPrompt } from './pass-records';
 import { WATCHER_BOT_ID } from './sense';
 import { WATCHER_DEFAULTS, type WatcherConfig } from './types';
 
@@ -89,9 +93,18 @@ export type WatcherCallResult =
       costUsd?: number;
       durationMs: number;
       usage?: TokenUsage;
+      /** The pass record of this call (`GET /api/watcher/passes/:id`), when one was written. */
+      recordId?: string;
     }
   | { ok: false; reason: Exclude<BudgetDecision, { ok: true }>['reason'] }
-  | { ok: false; reason: 'error'; error: string; model: string; durationMs: number };
+  | {
+      ok: false;
+      reason: 'error';
+      error: string;
+      model: string;
+      durationMs: number;
+      recordId?: string;
+    };
 
 export interface InstrumentedClient {
   readonly tier: WatcherTier;
@@ -116,13 +129,53 @@ export interface InstrumentOptions {
   now?: () => number;
   /** The watcher's stop signal, read per call; aborting it aborts every call in flight. */
   signal?: () => AbortSignal | undefined;
+  /**
+   * Where the call's prompt and response are kept. Default: `passes/` next to
+   * the budget files (`DailyBudget.dir`, the watcher dir); `null` keeps nothing.
+   */
+  records?: Pick<PassRecords, 'write'> | null;
 }
 
 /** The `error` of a call the watcher's stop aborted. */
 export const WATCHER_CALL_ABORTED = 'aborted: the watcher is stopping';
 
+/** The default records of a call: next to the budget files when the budget has a dir. */
+function defaultRecords(opts: InstrumentOptions): Pick<PassRecords, 'write'> | null {
+  if (opts.records !== undefined) return opts.records;
+  const dir = (opts.budget as { dir?: unknown }).dir;
+  return typeof dir === 'string' && dir
+    ? new PassRecords({ dir: passesDir(dir), ...(opts.now ? { now: opts.now } : {}) })
+    : null;
+}
+
 export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): InstrumentedClient {
   const now = opts.now ?? Date.now;
+  const records = defaultRecords(opts);
+  const keep = (
+    messages: ChatMessage[],
+    rec: {
+      ok: boolean;
+      model: string;
+      durationMs: number;
+      tokens?: number;
+      costUsd?: number;
+      response?: string;
+      error?: string;
+    }
+  ): string | undefined => {
+    if (!records) return undefined;
+    try {
+      return records.write({
+        caller: opts.caller,
+        tier: opts.tier,
+        backend: tier.backend,
+        prompt: redactPassPrompt(messages),
+        ...rec,
+      });
+    } catch {
+      return undefined; // records are best-effort
+    }
+  };
   const log = (entry: Omit<LlmQueryEntry, 'timestamp' | 'botId' | 'caller' | 'backend'>) => {
     try {
       opts.queryLog?.append({
@@ -200,6 +253,14 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
         });
         opts.budget.record(opts.tier, { tokens, costUsd: usage?.costUsd });
         safe(() => opts.breaker?.recordSuccess(tier.backend));
+        const recordId = keep(messages, {
+          ok: true,
+          model,
+          durationMs,
+          tokens,
+          ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+          response: res.text ?? '',
+        });
         return {
           ok: true,
           text: res.text ?? '',
@@ -209,6 +270,7 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
           ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
           durationMs,
           ...(usage ? { usage } : {}),
+          ...(recordId ? { recordId } : {}),
         };
       } catch (err) {
         const durationMs = Date.now() - started;
@@ -239,7 +301,15 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
         });
         opts.budget.record(opts.tier, {});
         safe(() => opts.breaker?.recordFailure(tier.backend, err));
-        return { ok: false, reason: 'error', error, model: tier.model, durationMs };
+        const recordId = keep(messages, { ok: false, model: tier.model, durationMs, error });
+        return {
+          ok: false,
+          reason: 'error',
+          error,
+          model: tier.model,
+          durationMs,
+          ...(recordId ? { recordId } : {}),
+        };
       } finally {
         for (const [s, fn] of links) s.removeEventListener('abort', fn);
       }

@@ -101,7 +101,19 @@ export interface HygieneDeps {
    * a live claim on the task is the only sign of a run.
    */
   workerRuns?: (botId: string) => import('../workers/types').WorkerRunView[];
+  /**
+   * The running watcher's graph (`Watcher.graph`), when the watcher is enabled.
+   * `watcher-graph` reads and writes only through it: the graph files belong
+   * to the live process. Absent → the routine reports it and changes nothing.
+   */
+  watcherGraph?: () => WatcherGraphAccess | undefined;
 }
+
+/** The slice of `src/watcher/graph.ts` `Graph` the `watcher-graph` routine uses. */
+export type WatcherGraphAccess = Pick<
+  import('../watcher/graph').Graph,
+  'list' | 'get' | 'findSimilarText' | 'archive' | 'patchMeta' | 'mergeInto'
+>;
 
 export interface HygieneContext {
   /** Null for fleet-scoped routines. */

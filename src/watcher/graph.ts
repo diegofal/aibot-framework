@@ -334,6 +334,77 @@ export class Graph {
   }
 
   /**
+   * Fold near-duplicates into `keepId` (hygiene `watcher-graph`): the keeper's
+   * activations become the sum, its support the union, every edge of a
+   * dropped neuron is re-created on the keeper (`addEdge` dedupes; edges
+   * between the merged neurons are not re-pointed onto the keeper), and each
+   * dropped neuron is archived with `meta.mergedInto`. Archived or unknown
+   * drops are skipped. Undefined when the keeper is missing or archived. Not a firing.
+   */
+  mergeInto(
+    keepId: string,
+    dropIds: string[]
+  ): { keeper: Neuron; archived: Neuron[]; edges: number } | undefined {
+    const keep = this.neurons.get(keepId);
+    if (!keep || keep.archivedAt) return undefined;
+    const drops = [...new Set(dropIds)]
+      .filter((id) => id !== keepId)
+      .map((id) => this.neurons.get(id))
+      .filter((n): n is Neuron => !!n && !n.archivedAt);
+    if (drops.length === 0) return { keeper: keep, archived: [], edges: 0 };
+    const merged = new Set([keepId, ...drops.map((d) => d.id)]);
+    const union = (pick: (s: Neuron['support']) => string[] | undefined) => {
+      const all = [keep, ...drops].flatMap((n) => pick(n.support) ?? []);
+      return all.length ? [...new Set(all)] : undefined;
+    };
+    const support: Neuron['support'] = { bots: union((s) => s.bots) ?? [] };
+    const cycles = union((s) => s.cycles);
+    const conversations = union((s) => s.conversations);
+    const paths = union((s) => s.paths);
+    if (cycles) support.cycles = cycles;
+    if (conversations) support.conversations = conversations;
+    if (paths) support.paths = paths;
+    const lastActivatedAt = [keep, ...drops]
+      .map((n) => n.lastActivatedAt)
+      .reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+    const keeper: Neuron = {
+      ...keep,
+      support,
+      activations: keep.activations + drops.reduce((sum, d) => sum + d.activations, 0),
+      lastActivatedAt,
+    };
+    this.writeNeuron(keeper);
+    let edges = 0;
+    for (const drop of drops) {
+      for (const e of this.edgesOf(drop.id)) {
+        const other = e.from === drop.id ? e.to : e.from;
+        if (merged.has(other)) continue;
+        const before = this.edges.size;
+        this.addEdge({
+          from: e.from === drop.id ? keepId : e.from,
+          to: e.to === drop.id ? keepId : e.to,
+          rel: e.rel,
+          weight: e.weight,
+          createdBy: e.createdBy,
+        });
+        if (this.edges.size > before) edges++;
+      }
+    }
+    const archived: Neuron[] = [];
+    const at = this.iso();
+    for (const drop of drops) {
+      const next: Neuron = {
+        ...drop,
+        archivedAt: at,
+        meta: { ...(drop.meta ?? {}), mergedInto: keepId },
+      };
+      this.writeNeuron(next);
+      archived.push(next);
+    }
+    return { keeper: this.neurons.get(keepId) ?? keeper, archived, edges };
+  }
+
+  /**
    * Positions for many neurons at once, then one compaction instead of a line
    * per neuron, and one `layout` change (not one per neuron: a relayout moves
    * up to `maxNeurons`) with the positions applied to known neurons.

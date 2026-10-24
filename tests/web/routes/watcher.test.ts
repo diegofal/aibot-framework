@@ -412,3 +412,51 @@ describe('watcher routes (phase 4)', () => {
     expect((await post(app(config, watcher, 't1'), '/api/watcher/introspect')).status).toBe(404);
   });
 });
+
+describe('watcher routes: pass records (O6)', () => {
+  it('lists the records newest first without prompts, reads one, admin only', async () => {
+    const { PassRecords, passesDir } = await import('../../../src/watcher/pass-records');
+    const { config, watcher } = setup();
+    const records = new PassRecords({
+      dir: passesDir(join(root, 'data', 'watcher')),
+      now: () => t,
+    });
+    const rec = {
+      caller: 'watcher:notice' as const,
+      tier: 'notice' as const,
+      model: 'm',
+      backend: 'claude-cli',
+      ok: true,
+      durationMs: 10,
+      prompt: { system: 'S', user: 'U' },
+      response: 'R',
+    };
+    const first = records.write(rec) as string;
+    t += 1000;
+    const second = records.write({ ...rec, caller: 'watcher:integrate', tier: 'integrate' });
+
+    const a = app(config, watcher);
+    const res = await a.request('/api/watcher/passes?limit=10');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { passes: Array<Record<string, unknown>> };
+    expect(body.passes.map((p) => p.id)).toEqual([second, first]);
+    expect(body.passes[0]).not.toHaveProperty('prompt');
+
+    const one = await a.request(`/api/watcher/passes/${first}`);
+    expect(one.status).toBe(200);
+    expect(((await one.json()) as { pass: { response: string } }).pass.response).toBe('R');
+    expect((await a.request('/api/watcher/passes/notice-1-ffff')).status).toBe(404);
+    expect((await a.request('/api/watcher/passes/..%2F..%2Fconfig')).status).toBe(404);
+
+    const tenant = app(config, watcher, 't1');
+    expect((await tenant.request('/api/watcher/passes')).status).toBe(404);
+    expect((await tenant.request(`/api/watcher/passes/${first}`)).status).toBe(404);
+  });
+
+  it('404 with enabled: false while the watcher is off', async () => {
+    const { config } = setup(false);
+    const res = await app(config, undefined).request('/api/watcher/passes');
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { enabled: boolean }).enabled).toBe(false);
+  });
+});

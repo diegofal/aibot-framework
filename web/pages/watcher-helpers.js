@@ -12,6 +12,7 @@
  * and replay agree.
  */
 import { emptyState, esc } from '../ui/index.js';
+import { embeddingStatusHtml, isPassRow, passFoldHtml } from './watcher-ops-helpers.js';
 import { whyPanel } from './why-helpers.js';
 
 export const NEURON_KINDS = [
@@ -207,8 +208,12 @@ function rowMeta(row) {
   return bits.filter(Boolean);
 }
 
-/** One log row. `data-neurons` (space-separated) lets the page highlight them in the ball. */
-export function logRowHtml(row, nowMs = Date.now(), { selectedSeq = null } = {}) {
+/**
+ * One log row. `data-neurons` (space-separated) lets the page highlight them in
+ * the ball. A pass row (a model call) gets a "What it saw" fold, open with
+ * `openPass.html` inside when `openPass.seq` is its seq.
+ */
+export function logRowHtml(row, nowMs = Date.now(), { selectedSeq = null, openPass = null } = {}) {
   const phase = LOG_PHASES.includes(row?.phase) ? row.phase : 'other';
   const ids = Array.isArray(row?.neuronIds)
     ? row.neuronIds.filter((x) => typeof x === 'string')
@@ -232,13 +237,20 @@ export function logRowHtml(row, nowMs = Date.now(), { selectedSeq = null } = {})
     row?.phase ?? ''
   )}</span><span class="watcher-row-text">${esc(row?.text ?? '')}</span>${
     meta.length ? `<span class="watcher-row-meta">${meta.join(' · ')}</span>` : ''
+  }${
+    isPassRow(row)
+      ? passFoldHtml(
+          row,
+          openPass && Number(openPass.seq) === Number(row.seq) ? openPass.html : null
+        )
+      : ''
   }</li>`;
 }
 
 export function logListHtml(
   rows,
   nowMs = Date.now(),
-  { filterId = null, selectedSeq = null } = {}
+  { filterId = null, selectedSeq = null, openPass = null } = {}
 ) {
   const shown = filterLogRows(rows, filterId);
   if (!shown.length) {
@@ -247,7 +259,7 @@ export function logListHtml(
     }</div>`;
   }
   return `<ol class="watcher-log-list">${shown
-    .map((r) => logRowHtml(r, nowMs, { selectedSeq }))
+    .map((r) => logRowHtml(r, nowMs, { selectedSeq, openPass }))
     .join('')}</ol>`;
 }
 
@@ -281,7 +293,7 @@ const LINK_NOTES = {
  * inputs under the operator's cursor. `button` is built only when read (the
  * first render, `stateHtml`): afterwards `syncStateButton` updates it in place.
  */
-export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
+export function stateParts(state, nowMs = Date.now(), { busy = false, embedding = null } = {}) {
   const s = state ?? {};
   const running = !!s.running;
   const main = [
@@ -323,6 +335,7 @@ export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
     main: main.join('<span class="watcher-sep">·</span>'),
     counts: chips.join(''),
     notes: notes.join(''),
+    embed: embeddingStatusHtml(embedding, nowMs),
     tiers: tierControlsHtml(s.config, { busy }),
     get button() {
       return stateButtonHtml(s, { busy });
@@ -365,9 +378,9 @@ function stateButtonHtml(state, { busy = false } = {}) {
 }
 
 /** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
-export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
-  const p = stateParts(state, nowMs, { busy });
-  return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
+export function stateHtml(state, nowMs = Date.now(), { busy = false, embedding = null } = {}) {
+  const p = stateParts(state, nowMs, { busy, embedding });
+  return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-embed">${p.embed}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
 }
 
 /** What the tier controls show: the server values per tier and whether they are disabled. */

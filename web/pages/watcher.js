@@ -8,10 +8,13 @@
  * panel. Start / Stop post to `/api/watcher/start|stop`. "Replay birth"
  * rebuilds the ball from the birth day's log at a readable pace
  * (`replayQueue`); the date field replays any other day.
+ * A pass row's "What it saw" fold loads its record (`/api/watcher/passes`);
+ * the header shows the embedding service (`/api/stats/infra`, ollama row);
+ * "Clean the graph" previews and applies hygiene `watcher-graph`.
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
-import { closeSheet, openSheet, showToast, skeleton } from '../ui/index.js';
+import { closeSheet, confirmDialog, openSheet, showToast, skeleton } from '../ui/index.js';
 import { api, escapeHtml, getAuthToken } from './shared.js';
 import { mountBall } from './watcher-ball.js';
 import {
@@ -45,6 +48,7 @@ import {
   insightRowsHtml,
   metricsStripHtml,
 } from './watcher-metrics-helpers.js';
+import { graphCleanSummary, matchPassRecord, passRecordBodyHtml } from './watcher-ops-helpers.js';
 import {
   attendingHtml,
   focusHighlightIds,
@@ -107,12 +111,13 @@ function drawState({ forceTiers = false } = {}) {
   const state = page.model.state;
   const view = { config: state?.config ?? null, busy: !!page.busy };
   const bar = host.querySelector('.watcher-state');
+  const opts = { busy: page.busy, embedding: page.embedding };
   if (!bar) {
-    host.innerHTML = stateHtml(state, Date.now(), { busy: page.busy });
+    host.innerHTML = stateHtml(state, Date.now(), opts);
     page.tierView = view;
     return;
   }
-  const parts = stateParts(state, Date.now(), { busy: page.busy });
+  const parts = stateParts(state, Date.now(), opts);
   const set = (sel, html) => {
     const node = bar.querySelector(sel);
     if (node && node.innerHTML !== html) node.innerHTML = html;
@@ -120,6 +125,7 @@ function drawState({ forceTiers = false } = {}) {
   set('.watcher-state-main', parts.main);
   set('.watcher-counts', parts.counts);
   set('.watcher-notes', parts.notes);
+  set('.watcher-embed', parts.embed);
   const button = bar.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
   syncStateButton(button, state, { busy: page.busy });
   const tiers = bar.querySelector('.watcher-tiers-host');
@@ -140,6 +146,7 @@ function drawLog() {
   body.innerHTML = logListHtml(page.model.log, Date.now(), {
     filterId: page.filterId,
     selectedSeq: page.selectedSeq,
+    openPass: page.openPass,
   });
 }
 
@@ -183,6 +190,7 @@ function shell() {
       <div class="watcher-overlay watcher-overlay-top" id="watcher-state"></div>
       <div class="watcher-overlay watcher-overlay-controls">
         <button type="button" class="btn btn-sm" data-action="watcher-replay-birth" data-replay-start>Replay birth</button>
+        <button type="button" class="btn btn-sm" data-action="watcher-clean-graph" title="Archive bookkeeping facts and merge near-duplicates (hygiene: watcher-graph)">Clean the graph</button>
         <span class="watcher-replay-day"><input type="date" class="watcher-date" id="watcher-replay-date" aria-label="Day to replay"><button type="button" class="btn btn-sm" data-action="watcher-replay-day" data-replay-start>Replay day</button></span>
       </div>
       <div class="watcher-overlay watcher-overlay-bottom">${legendHtml()}<div class="watcher-hint">drag to orbit · scroll to zoom · click a neuron</div></div>
@@ -275,6 +283,7 @@ async function refreshSlow() {
   const [metrics, broadcasts] = await Promise.all([
     api('/api/watcher/metrics?window=7d').catch(() => null),
     api('/api/watcher/broadcasts?limit=30').catch(() => null),
+    refreshEmbedding(),
   ]);
   if (page !== mine || !page) return;
   if (metrics && !metrics.error) page.metrics = metrics;
@@ -282,6 +291,74 @@ async function refreshSlow() {
   drawMetrics();
   drawBroadcasts();
   await refreshSelf();
+}
+
+/** The embedding service, from the infra ollama row (probed server-side, cached 5 min). */
+async function refreshEmbedding() {
+  const mine = page;
+  const infra = await api('/api/stats/infra').catch(() => null);
+  if (page !== mine || !page || !Array.isArray(infra?.backends)) return;
+  page.embedding = infra.backends.find((b) => b.name === 'ollama')?.embedding ?? null;
+  drawState();
+}
+
+/** Open or close a pass row's "What it saw" fold, loading its record on open. */
+async function togglePass(seq) {
+  if (page.openPass && Number(page.openPass.seq) === Number(seq)) {
+    page.openPass = null;
+    return drawLog();
+  }
+  const rows = page.replay ? page.replay.shown : page.model.log;
+  const row = rows.find((r) => Number(r.seq) === Number(seq));
+  if (!row) return;
+  const mine = page;
+  page.openPass = { seq, html: '<div class="text-dim">Loading…</div>' };
+  drawLog();
+  let match = matchPassRecord(row, page.passes);
+  if (!match) {
+    const list = await api('/api/watcher/passes?limit=500').catch(() => null);
+    if (page !== mine || !page) return;
+    if (Array.isArray(list?.passes)) page.passes = list.passes;
+    match = matchPassRecord(row, page.passes);
+  }
+  const res = match
+    ? await api(`/api/watcher/passes/${encodeURIComponent(match.id)}`).catch(() => null)
+    : null;
+  if (page !== mine || !page || Number(page.openPass?.seq) !== Number(seq)) return;
+  page.openPass = { seq, html: passRecordBodyHtml(res?.pass ?? null) };
+  drawLog();
+}
+
+/** "Clean the graph": preview hygiene `watcher-graph`, confirm, apply. */
+async function cleanGraph() {
+  if (page.cleaning) return;
+  const mine = page;
+  page.cleaning = true;
+  try {
+    const run = (body) =>
+      api('/api/hygiene/run', { method: 'POST', body }).catch((err) => ({
+        error: err?.message || 'request failed',
+      }));
+    const preview = await run({ routine: 'watcher-graph' });
+    if (page !== mine || !page) return;
+    const summary = graphCleanSummary(preview);
+    const fixable = Array.isArray(preview?.findings) && preview.findings.some((f) => f.fixable);
+    if (preview?.error || !fixable)
+      return showToast(summary, { tone: preview?.error ? 'danger' : undefined });
+    const ok = await confirmDialog({
+      title: 'Clean the graph',
+      message: `${summary} Archived neurons stay in the graph and come back if they fire again.`,
+      confirmLabel: 'Clean',
+      tone: 'accent',
+    });
+    if (!ok || page !== mine || !page) return;
+    const applied = await run({ routine: 'watcher-graph', apply: true });
+    if (page !== mine || !page) return;
+    showToast(graphCleanSummary(applied), { tone: applied?.error ? 'danger' : undefined });
+    if (!applied?.error) await refetchGraph();
+  } finally {
+    if (page === mine && page) page.cleaning = false;
+  }
 }
 
 async function sendSignal(id, signal) {
@@ -630,6 +707,11 @@ function wire(el, signal) {
           return endReplay();
         case 'watcher-introspect':
           return askIntrospection();
+        case 'watcher-pass':
+          e.preventDefault();
+          return togglePass(e.target.closest('[data-seq]')?.dataset.seq);
+        case 'watcher-clean-graph':
+          return cleanGraph();
         default:
           break;
       }
@@ -751,6 +833,10 @@ export async function renderWatcher(el) {
     replayLoading: false,
     historySeen: false,
     graphRefetch: null,
+    embedding: null,
+    passes: [],
+    openPass: null,
+    cleaning: false,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -763,6 +849,7 @@ export async function renderWatcher(el) {
   drawInsights();
   drawBroadcasts();
   drawSelf();
+  void refreshEmbedding();
   wire(el, page.listeners.signal);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();
