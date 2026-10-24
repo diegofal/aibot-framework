@@ -7,7 +7,12 @@
  * is a log row and `state().lastError`. Phase 2: tier 1 noticing (`notice.ts`)
  * on a timer that starts only once birth (or the wake resync) is done and only
  * with `notice.enabled`; every LLM call goes through `instrumented` (daily
- * budget + fleet breaker, query log under `__watcher__`).
+ * budget + fleet breaker, query log under `__watcher__`). O2: passes wake on
+ * salience, not on a cadence (`wakeNotice` on `salience:crossed` and on each
+ * check for the age ceiling, `wakeIntegrate` on each integrate check); every
+ * pass row carries its `trigger`. O3: `stakes()` (`stakes.ts`) turns
+ * interoception into policy for both (wake lines, sleeping tiers, held
+ * questions, "## Something is wrong").
  */
 import { EventEmitter } from 'node:events';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -27,6 +32,7 @@ import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import { readToolEntries } from '../stats/readers/tool-audit';
 import { isTenantBot } from '../tenant/tenant-scoping';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
@@ -49,6 +55,7 @@ import {
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
 import { tierSwitches } from './config-file';
+import { FAST_LANE_DEFAULTS, FAST_LANE_TOOL_WINDOW_MS, runFastLane } from './fast-lane';
 import { Graph, type GraphChange } from './graph';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
@@ -69,9 +76,9 @@ import {
 } from './llm';
 import { WatcherLog } from './log';
 import { narrateIntrospection, narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
-import { type NoticeOutcome, Noticer } from './notice';
+import { type NoticeOutcome, Noticer, readNoticeLastRun, writeNoticeLastRun } from './notice';
 import { applyServed, duePredictions, resolvePredictions } from './outcomes';
-import { bufferFile, watcherDir, watcherLogDir } from './paths';
+import { bufferFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
 import {
   type Attention,
@@ -83,10 +90,20 @@ import {
 } from './self-model';
 import { type SenderInfo, Sense, WATCHER_BOT_ID, inboundSender } from './sense';
 import {
+  KarmaTrend,
+  STAKE_PHASE,
+  type StakeRule,
+  type Stakes,
+  newlyFired,
+  stakes,
+  stakesFor,
+} from './stakes';
+import {
   type BirthRecord,
   type LinkStatus,
   type Neuron,
   type NeuronKind,
+  type PassTrigger,
   WATCHER_DEFAULTS,
   type WatcherConfig,
   type WatcherEvent,
@@ -99,8 +116,10 @@ import {
 const DAY_MS = 86_400_000;
 /** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
 export const SENSE_STATE_EVERY_MS = 5_000;
-/** How often the notice timer asks whether a pass is due (`Noticer.due`). */
+/** How often the notice timer asks whether a pass should wake (`wakeNotice`: the age ceiling, the min gap). */
 export const NOTICE_CHECK_MS = 30_000;
+/** `stakes()` is recomputed at most this often (it reads every bot's karma), unless the operator wrote. */
+export const STAKES_EVERY_MS = 30_000;
 /** How often the integrate timer asks whether a pass is due (`Integrator.due`). */
 export const INTEGRATE_CHECK_MS = 60_000;
 /** Outcomes (served broadcasts, due predictions) are checked at most this often. */
@@ -172,6 +191,8 @@ export interface WatcherDeps {
   random?: () => number;
   /** Bound of `stop()`'s wait for in-flight work (default `WATCHER_STOP_TIMEOUT_MS`). */
   stopTimeoutMs?: number;
+  /** O1 fast lane: tool names a bot used in `[sinceMs, nowMs]` (the tool audit). */
+  toolsUsed?: (botId: string, sinceMs: number, nowMs: number) => string[];
 }
 
 export class Watcher extends EventEmitter implements WatcherSelfStateSource {
@@ -219,11 +240,19 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   /** Phase 4: what every bot is doing now, from the activity stream (attached while awake). */
   readonly presence = new WatcherPresence();
   private lastOperatorAt: number | null = null;
+  /** O3: the fleet karma samples behind `fleetKarmaFalling`. */
+  private readonly karmaTrend: KarmaTrend;
+  /** O3: the stakes rules firing at the last `stakes()` (a rule logs one row when it starts). */
+  private firedStakes = new Set<StakeRule>();
+  private stakesCache: { at: number; operatorAt: number | null; value: Stakes } | null = null;
+  private releaseRun: Promise<void> | null = null;
   private readonly sampler: IntrospectionSampler;
   private introspectTimer: ReturnType<typeof setInterval> | null = null;
   private introspectRun: Promise<IntrospectionOutcome> | null = null;
   /** Aborted by `stop()`: every model call in flight (`instrumented`) is linked to it. */
   private stopCtrl = new AbortController();
+  /** O1 fast lane: the UTC day its capped row was written. */
+  private readonly fastLaneState: { cappedOn?: string } = {};
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -253,10 +282,19 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       botName: (id) => this.botName(id),
       sender: (e) => this.sender(e),
       onItem: (item) => {
-        if (item.fromOperator) this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
+        if (item.fromOperator) {
+          this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
+          this.karmaTrend.setOperatorAt(this.lastOperatorAt);
+          // O3: the operator is here; a question held for them can go out.
+          void Promise.resolve().then(() => this.releaseQuestions());
+        }
         this.integrator?.observe(item);
       },
       onBatch: () => this.senseStateChanged(),
+      // O2 `salience:crossed`: off the publish call, the noticer adds the gap.
+      onCrossed: () => void Promise.resolve().then(() => this.wakeNotice()),
+      wakeSalience: () =>
+        this.cfg().notice.wakeSalience * (this.stakesCache?.value.noticeWakeFactor ?? 1),
       logger: this.logger,
     });
     this.budget = new DailyBudget({
@@ -319,6 +357,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         logger: this.logger,
       });
     }
+    this.karmaTrend = new KarmaTrend(join(this.dir, 'stakes.json'));
+    this.lastOperatorAt = this.karmaTrend.operatorAt();
     this.sampler = new IntrospectionSampler({
       dir: this.dir,
       now: this.now,
@@ -380,14 +420,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   /**
-   * One notice pass now (the timer calls it when due). Null when noticing is
-   * off or there is no notice client. Never throws.
+   * One notice pass now (`wakeNotice` calls it with what woke it; anything
+   * else is `manual`). Null when noticing is off or there is no notice
+   * client. Never throws.
    */
-  noticeNow(): Promise<NoticeOutcome | null> {
+  noticeNow(trigger: PassTrigger = 'manual'): Promise<NoticeOutcome | null> {
     const noticer = this.noticer;
     if (!noticer || !this.cfg().notice.enabled || !this.running) return Promise.resolve(null);
     if (this.noticeRun && !this.noticeRunSignal?.aborted) return this.noticeRun;
     this.sense.flush();
+    const drivenBy = stakesFor('notice', this.stakes());
     this.setPhase('notice');
     // Same per-run cancellation as birth: a pass a stop left behind (waiting
     // on an embedding that cannot be aborted) writes nothing more, never feeds
@@ -395,9 +437,12 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const signal = this.stopCtrl.signal;
     const isCancelled = () => signal.aborted;
     const run: Promise<NoticeOutcome | null> = noticer
-      .run({ isCancelled })
-      .then((outcome) => {
-        if (!isCancelled()) this.integrator?.observeNotice(outcome);
+      .run({ isCancelled, trigger, ...(drivenBy.length ? { drivenBy } : {}) })
+      .then(async (outcome) => {
+        if (!isCancelled()) {
+          this.integrator?.observeNotice(outcome);
+          await this.fastLane(outcome, isCancelled);
+        }
         return outcome;
       })
       .catch((err): NoticeOutcome | null => {
@@ -405,6 +450,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         return null;
       })
       .finally(() => {
+        this.persistNoticeLastRun();
         if (this.noticeRun === run) {
           this.noticeRun = null;
           this.noticeRunSignal = null;
@@ -416,29 +462,85 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     return run;
   }
 
+  /** Keep when the last notice pass ran (a restart keeps the age ceiling). */
+  private persistNoticeLastRun(): void {
+    if (this.noticer && this.noticer.lastRunAt > 0) {
+      writeNoticeLastRun(noticeStateFile(this.dir), this.noticer.lastRunAt);
+    }
+  }
+
+  /**
+   * O1: what a notice pass created or recognised that two bots support goes to the related
+   * third bots at once, as directives (`fast-lane.ts`). Never throws.
+   */
+  private async fastLane(outcome: NoticeOutcome, isCancelled: () => boolean): Promise<void> {
+    if (outcome.status !== 'noticed') return;
+    // Created and recognised: a pattern a later pass recognised from another
+    // bot qualifies then (the broadcaster's per-bot dedupe prevents resends).
+    const neurons = [...outcome.created, ...outcome.recognised];
+    if (neurons.length === 0) return;
+    const toolsUsed = this.deps.toolsUsed;
+    await runFastLane(
+      {
+        graph: this.graph,
+        broadcaster: this.broadcaster,
+        log: this.log,
+        config: () => this.cfg().fastLane ?? FAST_LANE_DEFAULTS,
+        bots: () =>
+          (this.deps.config().bots ?? [])
+            .filter((b) => b.enabled !== false && !this.isTenantBot(b.id))
+            .map((b) => b.id),
+        ...(toolsUsed
+          ? {
+              toolsUsed: (botId: string) => {
+                const nowMs = this.now();
+                return toolsUsed(botId, nowMs - FAST_LANE_TOOL_WINDOW_MS, nowMs);
+              },
+            }
+          : {}),
+        botName: (id) => this.botName(id),
+        now: this.now,
+        isCancelled,
+        state: this.fastLaneState,
+        logger: this.logger,
+      },
+      neurons
+    );
+  }
+
   /** True while the integrate timer runs (after birth, with `integrate.enabled`). */
   get integrating(): boolean {
     return this.integrateTimer !== null;
   }
 
   /**
-   * One integrate pass now (the timer calls it when due). Null when
-   * integration is off or there is no integrate client. One in flight;
-   * phase `integrate`, back to `sense`. Never throws.
+   * One integrate pass now (`wakeIntegrate` calls it with what woke it;
+   * anything else is `manual`), shaped by the stakes (held questions, "## Something
+   * is wrong", `drivenBy`). Null when integration is off or there is no
+   * integrate client. One in flight; phase `integrate`, back to `sense`.
+   * Never throws.
    */
-  integrateNow(): Promise<IntegrateOutcome | null> {
+  integrateNow(trigger: PassTrigger = 'manual'): Promise<IntegrateOutcome | null> {
     const integrator = this.integrator;
     if (!integrator || !this.cfg().integrate.enabled || !this.running) {
       return Promise.resolve(null);
     }
     if (this.integrateRun && !this.integrateRunSignal?.aborted) return this.integrateRun;
     this.sense.flush();
+    const st = this.stakes();
+    const drivenBy = stakesFor('integrate', st);
     this.setPhase('integrate');
     // Per-run cancellation, as in `noticeNow`: no write nor broadcast after a stop.
     const signal = this.stopCtrl.signal;
     const isCancelled = () => signal.aborted;
     const run: Promise<IntegrateOutcome | null> = integrator
-      .run({ isCancelled })
+      .run({
+        isCancelled,
+        trigger,
+        ...(drivenBy.length ? { drivenBy } : {}),
+        ...(st.deferQuestions ? { deferQuestions: true } : {}),
+        ...(st.somethingWrong ? { somethingWrong: st.somethingWrong } : {}),
+      })
       .catch((err): IntegrateOutcome | null => {
         if (!isCancelled()) this.fail(err);
         return null;
@@ -499,6 +601,114 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       bufferItems: this.buffer.items(),
       ...(lastRunAt ? { lastIntegrateAt: lastRunAt } : {}),
     });
+  }
+
+  /**
+   * O3: the stakes now (`stakes.ts`) from interoception, today's budget and
+   * the karma trend; recomputed at most every `STAKES_EVERY_MS` unless the
+   * operator wrote since. A rule that starts firing logs one `stakes:<rule>`
+   * row (`drivenBy: [rule]`). Never throws.
+   */
+  stakes(): Stakes {
+    const nowMs = this.now();
+    const c = this.stakesCache;
+    if (c && nowMs - c.at < STAKES_EVERY_MS && c.operatorAt === this.lastOperatorAt) return c.value;
+    let value: Stakes;
+    try {
+      const intero = this.interoception();
+      this.karmaTrend.record(nowMs, intero.fleetKarmaAvg);
+      const cfg = this.cfg();
+      value = stakes({
+        interoception: intero,
+        budget: { notice: this.budget.used('notice'), integrate: this.budget.used('integrate') },
+        limits: cfg,
+        backends: {
+          ...(this.deps.llm?.notice ? { notice: this.deps.llm.notice.backend } : {}),
+          ...(this.deps.llm?.integrate ? { integrate: this.deps.llm.integrate.backend } : {}),
+        },
+        karmaPeak: this.karmaTrend.peak(nowMs),
+      });
+    } catch (err) {
+      this.logger.warn({ err }, 'Watcher: could not compute the stakes');
+      value = stakes({
+        interoception: { breakerOpen: [], operatorSilenceHours: null, fleetKarmaAvg: null },
+        budget: {
+          notice: { calls: 0, tokens: 0, costUsd: 0 },
+          integrate: { calls: 0, tokens: 0, costUsd: 0 },
+        },
+        limits: this.cfg(),
+        backends: {},
+      });
+    }
+    for (const rule of newlyFired(this.firedStakes, value)) {
+      // `operatorPresent` has an effect only with held questions: its row is
+      // the release row (`integrate:question-released`), not one per message.
+      if (rule === 'operatorPresent') continue;
+      this.log.say(STAKE_PHASE[rule], `stakes:${rule}`, value.notes[rule] ?? rule, {
+        drivenBy: [rule],
+      });
+    }
+    this.firedStakes = new Set(value.fired);
+    this.stakesCache = { at: nowMs, operatorAt: this.lastOperatorAt, value };
+    return value;
+  }
+
+  /**
+   * O2: run a notice pass if one should wake now (`Noticer.wake` with the
+   * stakes' wake line; asleep while its breaker is open). Called on
+   * `salience:crossed` and on every notice check. Returns the trigger, or null.
+   */
+  wakeNotice(): PassTrigger | null {
+    if (!this.noticeTimer || !this.running || this.stopping) return null;
+    const noticer = this.noticer;
+    if (!noticer || !this.cfg().notice.enabled || this.noticeRun) return null;
+    const st = this.stakes();
+    if (st.asleep.notice) return null;
+    const trigger = noticer.wake({
+      wakeSalience: this.cfg().notice.wakeSalience * st.noticeWakeFactor,
+    });
+    if (trigger) void this.noticeNow(trigger);
+    return trigger;
+  }
+
+  /**
+   * O2: run an integrate pass if one should wake now (`Integrator.wake` with
+   * the stakes' wake line; asleep while its breaker is open), and send held
+   * questions when the operator is here. Called on every integrate check.
+   */
+  wakeIntegrate(): PassTrigger | null {
+    if (!this.integrateTimer || !this.running || this.stopping) return null;
+    const integrator = this.integrator;
+    if (!integrator || !this.cfg().integrate.enabled) return null;
+    const st = this.stakes();
+    if (st.releaseQuestions) void this.releaseQuestions();
+    if (st.asleep.integrate || this.integrateRun) return null;
+    const trigger = integrator.wake({
+      wakeSalience: this.cfg().integrate.wakeSalience * st.integrateWakeFactor,
+    });
+    if (trigger) void this.integrateNow(trigger);
+    return trigger;
+  }
+
+  /**
+   * O3: send the questions integrate held while the operator was silent, if
+   * the operator is here now (`operatorPresent`). One in flight; never throws.
+   */
+  releaseQuestions(): Promise<void> {
+    const integrator = this.integrator;
+    if (!integrator || !this.running || this.stopping) return Promise.resolve();
+    if (this.releaseRun) return this.releaseRun;
+    if (integrator.deferredQuestions().length === 0) return Promise.resolve();
+    if (!this.stakes().releaseQuestions) return Promise.resolve();
+    const signal = this.stopCtrl.signal;
+    this.releaseRun = integrator
+      .releaseQuestions({ isCancelled: () => signal.aborted })
+      .then(() => undefined)
+      .catch((err) => this.fail(err))
+      .finally(() => {
+        this.releaseRun = null;
+      });
+    return this.releaseRun;
   }
 
   /** Phase 4: the phase, the top buffer (and pending) items, and the last pass's focus. */
@@ -653,10 +863,14 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     try {
       this.graph.load();
       this.buffer.restore(bufferFile(this.dir));
+      // The age ceiling counts from the last pass: the one before the restart,
+      // or (none recorded) from the items themselves.
+      if (this.noticer) this.noticer.lastRunAt = readNoticeLastRun(noticeStateFile(this.dir)) ?? 0;
       this.lastOperatorAt = lastOperatorMs(
         [...this.buffer.items(), ...(this.integrator?.state().pending.items ?? [])],
-        this.lastOperatorAt
+        this.lastOperatorAt ?? this.karmaTrend.operatorAt()
       );
+      this.karmaTrend.setOperatorAt(this.lastOperatorAt);
       this.presence.attach(this.deps.activityStream as never);
       const record = readBirthRecord(this.dir);
       const deps = this.birthDeps();
@@ -742,6 +956,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.sense.tick();
       this.graph.compact();
       this.buffer.persist(bufferFile(this.dir));
+      this.persistNoticeLastRun();
       this.log.say('sleep', 'sleep', narrateSleep({ neurons: this.graph.liveCount() }));
     } catch (err) {
       this.fail(err);
@@ -753,9 +968,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   /**
-   * Wait for birth and the passes in flight, at most `stopTimeoutMs`: their
-   * model calls are already aborted; what cannot be (an embedding) is left
-   * behind so stop can compact and persist.
+   * Wait for birth, the passes and a release of held questions in flight, at
+   * most `stopTimeoutMs`: their model calls are already aborted; what cannot
+   * be (an embedding) is left behind so stop can compact and persist.
    */
   private async settleInFlight(): Promise<void> {
     const work = [
@@ -764,6 +979,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.integrateRun,
       this.outcomesRun,
       this.introspectRun,
+      this.releaseRun,
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
@@ -947,7 +1163,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     if (this.noticeTimer || !this.noticer || !this.cfg().notice.enabled) return;
     const timer = setInterval(() => {
       if (!this.running || this.stopping) return;
-      if (this.cfg().notice.enabled && this.noticer?.due()) void this.noticeNow();
+      // O2: the age ceiling and a crossing the min gap held back; sensing
+      // wakes notice itself (`salience:crossed`).
+      this.wakeNotice();
     }, NOTICE_CHECK_MS);
     (timer as { unref?: () => void }).unref?.();
     this.noticeTimer = timer;
@@ -964,7 +1182,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const timer = setInterval(() => {
       if (!this.running || this.stopping || !this.cfg().integrate.enabled) return;
       if (this.now() - this.lastOutcomesAt >= OUTCOMES_EVERY_MS) void this.outcomesNow();
-      if (this.integrator?.due()) void this.integrateNow();
+      this.wakeIntegrate();
     }, INTEGRATE_CHECK_MS);
     (timer as { unref?: () => void }).unref?.();
     this.integrateTimer = timer;
@@ -1396,6 +1614,14 @@ export function createFleetWatcher(
       return karma.getAllScores(ids).map((s) => s.current);
     },
     semaphore: getClaudeCliStats,
+    toolsUsed: (botId, since, now) => {
+      try {
+        const entries = readToolEntries(resolveStatsDirs(config).toolAudit, botId, since, now);
+        return [...new Set(entries.map((e) => e.toolName))];
+      } catch {
+        return [];
+      }
+    },
     ...(manager.getRunningCycle
       ? { runningCycle: (botId: string) => manager.getRunningCycle?.(botId) }
       : {}),

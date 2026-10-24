@@ -333,6 +333,8 @@ export interface InfraResponse {
     failedCalls24h: number;
     /** Live circuit-breaker state from the agent loop; null when not exposed. */
     circuit: BackendCircuitSnapshot | null;
+    /** `ollama` only, when the route has a probe: the embedding service (`stats/embedding-probe.ts`). */
+    embedding?: import('./embedding-probe').EmbeddingHealth;
   }>;
   securityAudit: Array<{ botId: string; critical: number; warn: number; info: number; at: string }>;
   cron: Array<{

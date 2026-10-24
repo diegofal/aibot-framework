@@ -188,6 +188,7 @@ export function attention(input: AttentionInput): Attention {
   const items = top.map((i) => ({
     id: i.id,
     botId: i.event.botId,
+    // One line: pass records clip per line (a multi-line operator message).
     what: attempt(
       () =>
         describeEvent(i.event, {
@@ -195,7 +196,9 @@ export function attention(input: AttentionInput): Attention {
           ...(i.fromOperator ? { sender: 'the operator' } : {}),
         }),
       `an event in ${i.event.botId}`
-    ),
+    )
+      .replace(/\s+/g, ' ')
+      .trim(),
     salience: i.salience,
     reasons: [...(i.reasons ?? [])],
     touched: [...new Set(i.touched ?? [])]

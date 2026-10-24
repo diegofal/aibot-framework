@@ -311,6 +311,29 @@ describe('Graph.patchMeta (phase 3)', () => {
   });
 });
 
+describe('Graph.addSupport (review 2026-10-24)', () => {
+  test('unions bots and cycles, persists, emits once; nothing new is a no-op', () => {
+    const changes: GraphChange[] = [];
+    const g = graph({ onChange: (c) => changes.push(c) });
+    const n = g.addNeuron(
+      fact('web_fetch is blocked', { support: { bots: ['b1'], cycles: ['c1'] } })
+    );
+    changes.length = 0;
+    const next = g.addSupport(n.id, { bots: ['b2', 'b1'], cycles: ['c2'] });
+    expect(next?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c1', 'c2'] });
+    expect(next?.activations).toBe(n.activations);
+    expect(changes.map((c) => c.type)).toEqual(['neuron']);
+    expect(graph().get(n.id)?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c1', 'c2'] });
+    changes.length = 0;
+    expect(g.addSupport(n.id, { bots: ['b2'], cycles: [] })?.support.bots).toEqual(['b1', 'b2']);
+    expect(changes).toEqual([]);
+  });
+
+  test('unknown id is undefined', () => {
+    expect(graph().addSupport('n-nope', { bots: ['b1'] })).toBeUndefined();
+  });
+});
+
 describe('Graph: the sensing hot path', () => {
   /** A graph.json with `count` neurons, each with words no other shares, loaded. */
   function bigGraph(count: number, extra: Array<{ id: string; text: string }> = []) {
@@ -455,5 +478,96 @@ describe('Graph: the sensing hot path', () => {
     expect(reloaded.get(a.id)?.text).toBe('a');
     expect(reloaded.getEmbedding(a.id)).toEqual([3, 4]);
     expect(existsSync(`${files.neurons}.old`)).toBe(false);
+  });
+});
+
+describe('Graph.mergeInto (hygiene watcher-graph)', () => {
+  test('sums activations, unions support, re-points edges and archives the rest', () => {
+    const g = graph();
+    const keep = g.addNeuron(
+      fact('the api rate limit is 60 per minute', {
+        activations: 3,
+        support: { bots: ['b1'], paths: ['MEMORY.md'] },
+      })
+    );
+    t += 1000;
+    const dup = g.addNeuron(
+      fact('the api rate limit is 60 per minute.', {
+        activations: 2,
+        support: { bots: ['b1'], paths: ['memory/2026-10-16.md'], cycles: ['c1'] },
+      })
+    );
+    const topic = g.addNeuron({ ...fact('api'), kind: 'topic' });
+    const other = g.addNeuron(fact('something else entirely'));
+    g.addEdge({ from: dup.id, to: topic.id, rel: 'about', weight: 1, createdBy: 'bot:b1' });
+    g.addEdge({ from: other.id, to: dup.id, rel: 'related', weight: 0.8, createdBy: 'watcher' });
+    g.addEdge({ from: keep.id, to: dup.id, rel: 'related', weight: 0.95, createdBy: 'watcher' });
+
+    const res = g.mergeInto(keep.id, [dup.id]);
+    expect(res?.keeper.activations).toBe(5);
+    expect(res?.keeper.support.paths?.sort()).toEqual(['MEMORY.md', 'memory/2026-10-16.md']);
+    expect(res?.keeper.support.cycles).toEqual(['c1']);
+    expect(res?.archived.map((n) => n.id)).toEqual([dup.id]);
+    expect(g.get(dup.id)?.archivedAt).toBeDefined();
+    expect(g.get(dup.id)?.meta?.mergedInto).toBe(keep.id);
+    const keeperEdges = g.edgesOf(keep.id).map((e) => `${e.from}>${e.to}:${e.rel}`);
+    expect(keeperEdges).toContain(`${keep.id}>${topic.id}:about`);
+    expect(keeperEdges).toContain(`${other.id}>${keep.id}:related`);
+    // the edge between the two merged neurons is not re-pointed onto itself
+    expect(keeperEdges.filter((e) => e.startsWith(`${keep.id}>${keep.id}`))).toEqual([]);
+    expect(res?.edges).toBe(2);
+
+    // durable: a reload sees the same
+    const g2 = graph();
+    expect(g2.get(keep.id)?.activations).toBe(5);
+    expect(g2.get(dup.id)?.archivedAt).toBeDefined();
+  });
+
+  // Review 2026-10-24: a dropped neuron kept its meta.key, so findByKey still
+  // answered with the archived drop, and activate() revived it.
+  test("a dropped neuron's key moves to a keeper without one, durably", () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('Jarvis the assistant bot'));
+    const drop = g.addNeuron(fact('Jarvis, the assistant bot', { meta: { key: 'bot:b1' } }));
+    g.mergeInto(keep.id, [drop.id]);
+    expect(g.findByKey('bot:b1')?.id).toBe(keep.id);
+    expect(g.get(keep.id)?.meta?.key).toBe('bot:b1');
+    expect(g.get(drop.id)?.meta?.key).toBeUndefined();
+    expect(graph().findByKey('bot:b1')?.id).toBe(keep.id);
+    g.compact();
+    expect(graph().findByKey('bot:b1')?.id).toBe(keep.id);
+  });
+
+  test("a keeper with its own key still answers for the drop's key", () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('the boiler service', { meta: { key: 'topic:boiler' } }));
+    const drop = g.addNeuron(fact('the boiler service.', { meta: { key: 'topic:boilers' } }));
+    g.mergeInto(keep.id, [drop.id]);
+    expect(g.findByKey('topic:boilers')?.id).toBe(keep.id);
+    expect(g.findByKey('topic:boiler')?.id).toBe(keep.id);
+    expect(graph().findByKey('topic:boilers')?.id).toBe(keep.id);
+  });
+
+  test('activating a merged drop fires its keeper and never revives the drop', () => {
+    const g = graph();
+    const keep = g.addNeuron(fact('the api rate limit is 60 per minute', { activations: 1 }));
+    const drop = g.addNeuron(fact('the api rate limit is 60 per minute.', { activations: 1 }));
+    g.mergeInto(keep.id, [drop.id]);
+    const fired = g.activate(drop.id);
+    expect(fired?.id).toBe(keep.id);
+    expect(fired?.activations).toBe(3);
+    expect(g.get(drop.id)?.archivedAt).toBeDefined();
+  });
+
+  test('undefined when the keeper is missing or archived; archived drops are skipped', () => {
+    const g = graph();
+    const a = g.addNeuron(fact('alpha beta'));
+    const b = g.addNeuron(fact('alpha beta gamma', { activations: 4 }));
+    expect(g.mergeInto('n-missing', [a.id])).toBeUndefined();
+    g.archive(b.id);
+    expect(g.mergeInto(a.id, [b.id])?.archived).toEqual([]);
+    expect(g.get(a.id)?.activations).toBe(0);
+    g.archive(a.id);
+    expect(g.mergeInto(a.id, [b.id])).toBeUndefined();
   });
 });

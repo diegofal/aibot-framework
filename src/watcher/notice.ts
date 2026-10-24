@@ -1,10 +1,13 @@
 /**
- * Tier 1: noticing (phase 2). Every `notice.everyMs`, or sooner when salient
- * items pile up, the watcher shows the salient part of the working buffer and
+ * Tier 1: noticing (phase 2). When the salient items waiting add up to
+ * `notice.wakeSalience` (an operator message at once), or the oldest has
+ * waited `notice.maxWaitMs` (O2, `wake`), the watcher shows the salient part of the working buffer and
  * the neurons it touched to a cheap model and keeps what is worth remembering
  * as new neurons (`createdBy: 'watcher'`), merging into an existing one when
  * the text (`textSimilarity ≥ 0.8`) or, with embeddings, the meaning
- * (`≥ graph.relatedThreshold`) is already known.
+ * (`≥ graph.relatedThreshold`) is already known. A recognition unions the
+ * pass items' bots and cycles into that neuron's support (`Graph.addSupport`)
+ * and marks it `operatorSourced` by the same rule as a new one (never unmarks).
  *
  * Code decides what the model sees (`noticeItems`: tier 0 already reduced
  * non-operator text to topic words; tool args and results never reach it) and
@@ -21,6 +24,8 @@
  * after an answer was read; a failure keeps it for the next pass. Never throws.
  */
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { parseLLMJson } from '../bot/llm-json-parser';
 import type { DailyBudget } from './budget';
 import type { WorkingBuffer } from './buffer';
@@ -44,25 +49,35 @@ import {
   type NoticePromptItem,
   buildNoticePrompt,
 } from './prompts';
+import { noticeWake } from './sense';
 import {
   type BufferItem,
   type Confidence,
   type Neuron,
+  OPERATOR_MESSAGE,
   OPERATOR_SOURCED,
+  type PassTrigger,
   type Vec3,
   type WatcherConfig,
   isHumanInbound,
   isOperatorSourced,
   isPublicHumanItem,
+  mayCarryOperatorMessage,
   restsOnOperatorMaterial,
 } from './types';
 
 /** Most buffer items one pass shows the model (the most salient first). */
 export const NOTICE_MAX_ITEMS = 20;
-/** Early pass when the salient items' total reaches this many times `notice.salienceBar`. */
-export const NOTICE_EARLY_FACTOR = 5;
 /** Never two passes closer than this, early or not. */
 export const NOTICE_MIN_GAP_MS = 60_000;
+/**
+ * After a pass that did not go through (failed, refused by the breaker or the
+ * cap, unparsable), salience waits `2^n` min (n = consecutive misses), at most
+ * this long; the next pass that reads an answer resets it. The age ceiling
+ * (`notice.maxWaitMs`) still wakes it.
+ */
+export const NOTICE_BACKOFF_BASE_MS = 2 * 60_000;
+export const NOTICE_BACKOFF_MAX_MS = 30 * 60_000;
 /** Text similarity at which a kept item is the same as an existing neuron. */
 export const NOTICE_DEDUPE_TEXT = 0.8;
 const MAX_TEXT = 300;
@@ -110,6 +125,10 @@ export type NoticeOutcome =
 /** Per-run cancellation (the watcher run's signal): a cancelled pass writes nothing more. */
 export interface PassOptions {
   isCancelled?: () => boolean;
+  /** O2: what woke the pass (on its pass row; default `manual`). */
+  trigger?: PassTrigger;
+  /** O3: the stakes rules that shaped the pass (on its pass row). */
+  drivenBy?: string[];
 }
 
 export interface NoticeDeps {
@@ -170,23 +189,34 @@ function detailOf(item: BufferItem): string | undefined {
   return parts.length ? clip(parts.join(' · '), DETAIL_MAX) : undefined;
 }
 
-/** Buffer items as the prompt sees them. */
+/** Whitespace (newlines included) collapsed: one item is one prompt line. */
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * Buffer items as the prompt sees them. `what` and `detail` are flattened to
+ * one line each: pass records clip per line (`PASS_RECORD_LINE_MAX`), and a
+ * multi-line operator message used to survive there almost whole (review
+ * 2026-10-24).
+ */
 export function noticeItems(
   items: BufferItem[],
   botName: (botId: string) => string
 ): NoticePromptItem[] {
   return items.map((item) => {
     const fromOperator = item.fromOperator === true;
-    const detail = detailOf(item);
+    const raw = detailOf(item);
+    const detail = raw ? oneLine(raw) : undefined;
     return {
       id: item.id,
       botId: item.event.botId,
       bot: botName(item.event.botId),
       at: item.noticedAt,
-      what: describeEvent(item.event, {
-        botName,
-        ...(fromOperator ? { sender: 'the operator' } : {}),
-      }),
+      what: oneLine(
+        describeEvent(item.event, {
+          botName,
+          ...(fromOperator ? { sender: 'the operator' } : {}),
+        })
+      ),
       ...(detail ? { detail } : {}),
       salience: item.salience,
       reasons: item.reasons,
@@ -199,25 +229,76 @@ const isKeepKind = (k: string): k is NoticeKeepKind =>
   (NOTICE_KEEP_KINDS as readonly string[]).includes(k);
 const isConfidence = (c: unknown): c is Confidence => c === 'low' || c === 'medium' || c === 'high';
 
+/** The persisted `lastRunAt` (`noticeStateFile`); undefined when absent or unreadable. Never throws. */
+export function readNoticeLastRun(file: string): number | undefined {
+  try {
+    if (!existsSync(file)) return undefined;
+    const raw = JSON.parse(readFileSync(file, 'utf-8')) as { lastRunAt?: unknown };
+    return typeof raw.lastRunAt === 'number' && Number.isFinite(raw.lastRunAt)
+      ? raw.lastRunAt
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Keep `lastRunAt` (atomic). Never throws. */
+export function writeNoticeLastRun(file: string, lastRunAt: number): void {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify({ lastRunAt }), 'utf-8');
+    renameSync(tmp, file);
+  } catch {
+    // a lost time is the next start's: the age then counts from the items
+  }
+}
+
+/** Outcomes of a pass that ran but read no answer: they back off the next one. */
+const MISSED = new Set<NoticeOutcome['status']>(['failed', 'breaker', 'capped', 'unparsable']);
+
 export class Noticer {
   lastRunAt: number;
   private inFlight: Promise<NoticeOutcome> | null = null;
   private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
+  /** Consecutive passes that did not go through (the backoff exponent). */
+  private misses = 0;
 
   constructor(private readonly deps: NoticeDeps) {
     this.lastRunAt = deps.now();
   }
 
-  /** A pass is due on the cadence, or early when salient items pile up. */
+  /** How long salience waits after the last pass: 0 unless it did not go through. */
+  backoffMs(): number {
+    if (this.misses === 0) return 0;
+    return Math.min(NOTICE_BACKOFF_MAX_MS, NOTICE_BACKOFF_BASE_MS * 2 ** (this.misses - 1));
+  }
+
+  /** A pass is due when `wake` says why. */
   due(): boolean {
+    return this.wake() !== null;
+  }
+
+  /**
+   * Why a pass should run now (O2, `noticeWake`): salience (`wakeSalience`,
+   * possibly raised by the stakes; an operator message at once) or age
+   * (`notice.maxWaitMs`); never within `NOTICE_MIN_GAP_MS` of the last pass.
+   * After a pass that did not go through, only age until `backoffMs` passed.
+   */
+  wake(opts: { wakeSalience?: number } = {}): Extract<PassTrigger, 'salience' | 'age'> | null {
     const cfg = this.deps.config().notice;
-    const salient = this.deps.buffer.salient(cfg.salienceBar);
-    if (salient.length === 0) return false;
-    const since = this.deps.now() - this.lastRunAt;
-    if (since >= cfg.everyMs) return true;
-    const total = salient.reduce((s, i) => s + i.salience, 0);
-    return since >= NOTICE_MIN_GAP_MS && total >= NOTICE_EARLY_FACTOR * cfg.salienceBar;
+    const nowMs = this.deps.now();
+    if (nowMs - this.lastRunAt < NOTICE_MIN_GAP_MS) return null;
+    return noticeWake({
+      items: this.deps.buffer.items(),
+      bar: cfg.salienceBar,
+      wakeSalience: opts.wakeSalience ?? cfg.wakeSalience,
+      maxWaitMs: cfg.maxWaitMs,
+      nowMs,
+      sinceMs: this.lastRunAt,
+      ageOnly: nowMs - this.lastRunAt < this.backoffMs(),
+    });
   }
 
   /**
@@ -228,11 +309,16 @@ export class Noticer {
   run(opts: PassOptions = {}): Promise<NoticeOutcome> {
     if (this.inFlight && !this.inFlightCancelled()) return this.inFlight;
     const isCancelled = opts.isCancelled ?? (() => false);
-    const run: Promise<NoticeOutcome> = this.pass(isCancelled)
+    const run: Promise<NoticeOutcome> = this.pass(isCancelled, opts)
       .catch((err): NoticeOutcome => {
         if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher notice: pass failed');
         return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+      })
+      .then((out) => {
+        if (out.status === 'noticed') this.misses = 0;
+        else if (MISSED.has(out.status)) this.misses++;
+        return out;
       })
       .finally(() => {
         if (this.inFlight === run) this.inFlight = null;
@@ -248,7 +334,7 @@ export class Noticer {
    * log: after a stop the buffer was persisted and the graph compacted, so a
    * write here would land after the sleep row or in the next run's state.
    */
-  private async pass(isCancelled: () => boolean): Promise<NoticeOutcome> {
+  private async pass(isCancelled: () => boolean, opts: PassOptions = {}): Promise<NoticeOutcome> {
     const { graph, buffer, log } = this.deps;
     const cfg = this.deps.config();
     const items = buffer
@@ -266,6 +352,9 @@ export class Noticer {
     // The prompt shows every touched neuron in full: if one is operator
     // material, anything the model writes may restate it (conservative).
     const shownOperator = touched.some((n) => isOperatorSourced(n));
+    // Narrower: a shown neuron that may hold the operator's words taints what
+    // the model writes, so the fast lane never quotes it to a bot.
+    const shownOperatorMessage = touched.some(mayCarryOperatorMessage);
     const res = await this.deps.client.chat(
       [
         { role: 'system', content: prompt.system },
@@ -297,7 +386,10 @@ export class Noticer {
     const used = new Set<string>();
     for (const keep of out.keep) {
       if (isCancelled()) return { status: 'cancelled' };
-      const result = await this.keep(keep, byId, res.model, isCancelled, shownOperator);
+      const result = await this.keep(keep, byId, res.model, isCancelled, {
+        shownOperator,
+        shownOperatorMessage,
+      });
       if (isCancelled()) return { status: 'cancelled' };
       if (!result) continue;
       for (const id of result.from) used.add(id);
@@ -326,6 +418,8 @@ export class Noticer {
         ...(created.length || recognised.length
           ? { neuronIds: [...created, ...recognised].map((n) => n.id) }
           : {}),
+        trigger: opts.trigger ?? 'manual',
+        ...(opts.drivenBy?.length ? { drivenBy: [...opts.drivenBy] } : {}),
       }
     );
     return { status: 'noticed', created, recognised };
@@ -368,7 +462,7 @@ export class Noticer {
     items: Map<string, BufferItem>,
     model: string,
     isCancelled: () => boolean,
-    shownOperator = false
+    shown: { shownOperator?: boolean; shownOperatorMessage?: boolean } = {}
   ): Promise<{ neuron: Neuron; created: boolean; from: string[] } | null> {
     const { graph, log } = this.deps;
     const text = clip(keep.text ?? '', MAX_TEXT);
@@ -397,17 +491,6 @@ export class Noticer {
       }
     }
     if (isCancelled()) return null;
-    if (match) {
-      const active = graph.activate(match.id) ?? match;
-      log.say(
-        'notice',
-        'notice:recognised',
-        narrateNoticeRecognised({ text: active.text, activations: active.activations }),
-        { neuronIds: [active.id], source: 'watcher:notice' }
-      );
-      return { neuron: active, created: false, from };
-    }
-
     const bots = [...new Set(support.map((i) => i.event.botId))];
     const cycles = [
       ...new Set(
@@ -420,6 +503,33 @@ export class Noticer {
           .filter((c): c is string => typeof c === 'string' && c.length > 0)
       ),
     ];
+    const operatorSourced = shown.shownOperator === true || restsOnOperatorMaterial(support);
+    // An operator message behind it, or shown in the prompt: the fast lane
+    // never quotes it to a bot.
+    const operatorMessage =
+      shown.shownOperatorMessage === true || support.some((i) => i.fromOperator === true);
+    if (match) {
+      graph.activate(match.id);
+      // What this pass's items add: their bots and cycles join the support,
+      // and operator material behind them marks it (never unmarks).
+      if (isKeepKind(match.kind)) graph.addSupport(match.id, { bots, cycles });
+      const marks: Record<string, string> = {
+        ...(operatorSourced && !isOperatorSourced(match) ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        ...(operatorMessage && match.meta?.[OPERATOR_MESSAGE] !== 'true'
+          ? { [OPERATOR_MESSAGE]: 'true' }
+          : {}),
+      };
+      if (Object.keys(marks).length) graph.patchMeta(match.id, marks);
+      const active = graph.get(match.id) ?? match;
+      log.say(
+        'notice',
+        'notice:recognised',
+        narrateNoticeRecognised({ text: active.text, activations: active.activations }),
+        { neuronIds: [active.id], source: 'watcher:notice' }
+      );
+      return { neuron: active, created: false, from };
+    }
+
     const owners = bots
       .map((b) => graph.findByKey(`bot:${b}`))
       .filter((n): n is Neuron => !!n && !n.archivedAt);
@@ -443,9 +553,10 @@ export class Noticer {
         source: 'notice',
         model,
         ...(eventAt ? { eventAt } : {}),
-        ...(shownOperator || restsOnOperatorMaterial(support)
-          ? { [OPERATOR_SOURCED]: 'true' }
-          : {}),
+        ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        // Always written, `'false'` too: the fast lane reads a missing flag
+        // (neurons older than it) as an operator message behind the neuron.
+        [OPERATOR_MESSAGE]: operatorMessage ? 'true' : 'false',
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

@@ -34,3 +34,8 @@ export function birthFile(dir: string): string {
 export function bufferFile(dir: string): string {
   return join(dir, 'buffer.json');
 }
+
+/** When the last notice pass ran (`{ lastRunAt }`): the age ceiling survives a restart. */
+export function noticeStateFile(dir: string): string {
+  return join(dir, 'notice.json');
+}

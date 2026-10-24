@@ -2730,7 +2730,7 @@ body.unauthed #topbar {
   font-size: 10px;
 }
 .hyg-fix {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   font-size: 12px;
   padding-left: 10px;
   border-left: 2px solid var(--border);
@@ -5908,7 +5908,7 @@ body.ui-palette-open {
   margin-bottom: 8px;
 }
 .prod-bulk-bar .prod-bulk-count {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   font-size: var(--fs-xs);
 }
 .prod-select-hint {
@@ -7048,7 +7048,7 @@ a.gd-row-name:hover {
   color: var(--danger);
 }
 .gd-row-err {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   color: var(--danger);
 }
 .gd-pos {
@@ -9795,6 +9795,41 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-note.is-error {
   color: #f87171;
 }
+/* embeddings status in the header (O7) */
+.watcher-embed-status {
+  font-size: var(--fs-xs);
+}
+.watcher-embed-status.is-ok {
+  color: var(--text-dim, #9ca3af);
+}
+.watcher-embed-status.is-warn {
+  color: #fbbf24;
+}
+.watcher-embed-status.is-error {
+  color: #f87171;
+}
+/* "What it saw" fold on a pass row (O6) */
+.watcher-pass {
+  grid-column: 1 / -1;
+  font-size: var(--fs-xs);
+}
+.watcher-pass > summary {
+  cursor: pointer;
+  color: var(--text-dim, #9ca3af);
+}
+.watcher-pass-label {
+  margin-top: 6px;
+  font-weight: 600;
+}
+.watcher-pass-pre {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 6px 8px;
+  border-radius: 4px;
+}
 /* wrappers drawState updates in place; they add no box of their own */
 .watcher-notes,
 .watcher-tiers-host {
@@ -10216,7 +10251,7 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   color: var(--danger);
 }
 .watcher-self-sub {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
 }
 .watcher-self-phase {
   font-size: var(--fs-sm);

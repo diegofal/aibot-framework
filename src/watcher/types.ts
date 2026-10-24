@@ -101,13 +101,22 @@ export interface WatcherLogRow {
   tokens?: number;
   costUsd?: number;
   durationMs?: number;
-  /** Phase 4, `integrate:pass` only: the "How I am" variables the model named (known keys only). */
+  /**
+   * Phase 4, `integrate:pass`: the "How I am" variables the model named (known
+   * keys only). O3: plus the stakes rules (`stakes.ts`) that shaped the pass, on
+   * pass rows of both tiers and on each `stakes:*` row.
+   */
   drivenBy?: string[];
+  /** O2, `notice:pass` / `integrate:pass`: what woke the pass. */
+  trigger?: PassTrigger;
   /** `integrate:insight` / `integrate:no-broadcast`: why the insight calls for no broadcast (model text). */
   whyNoBroadcast?: string;
   /** `integrate:insight`: the insight needed a broadcast or a reason (`insightNeedsBroadcast`) and got neither. */
   broadcastReasonMissing?: true;
 }
+
+/** O2: what woke a notice or integrate pass. */
+export type PassTrigger = 'salience' | 'age' | 'agenda-changed' | 'heartbeat' | 'manual';
 
 /** What tier 0 senses: an activity-stream event or a `human_inbound` hook event. */
 export type SensedEvent = ActivityEvent | HumanInboundEvent;
@@ -204,27 +213,39 @@ export interface WatcherConfig {
     enabled: boolean;
     backend: 'claude-cli' | 'ollama';
     model: string;
+    /** Deprecated (O2): unused, kept so live configs validate. */
     everyMs: number;
     salienceBar: number;
     maxPerDay: number;
+    /** A pass wakes when the salient items waiting add up to this. */
+    wakeSalience: number;
+    /** ...or when the oldest salient item has waited this long. */
+    maxWaitMs: number;
   };
   integrate: {
     enabled: boolean;
     model: string;
+    /** Deprecated (O2): `wakeSalience` decides. */
     salienceBar: number;
     heartbeatMs: number;
     /** The heartbeat runs a pass only with at least this many salient items pending. */
     minItems: number;
     /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
     agendaMax: number;
-    /** A heartbeat pass with only the standing agenda to act on runs at most this often. */
+    /** Deprecated (O2): an agenda pass runs when the agenda changes. */
     agendaEveryMs: number;
+    /** An agenda-only pass runs at most once per this long, whatever the agenda gained. */
+    agendaFloorMs: number;
     maxPerDay: number;
     maxTokensPerDay: number;
+    /** A pass wakes when the salience pending since the last one adds up to this. */
+    wakeSalience: number;
   };
   graph: { archiveAfterDays: number; relatedThreshold: number; maxNeurons: number };
   birth: { historyDays: number };
   log: { senseSummaryEveryMs: number };
+  /** O1 fast lane (`src/watcher/fast-lane.ts`); absent = `WATCHER_DEFAULTS.fastLane`. */
+  fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
 }
 
 /** Mirrors `WatcherConfigSchema` in `src/config.ts` (tests/watcher/types.test.ts keeps them equal). */
@@ -237,6 +258,8 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     everyMs: 300_000,
     salienceBar: 0.4,
     maxPerDay: 288,
+    wakeSalience: 1.0,
+    maxWaitMs: 1_800_000,
   },
   integrate: {
     enabled: false,
@@ -246,12 +269,15 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     minItems: 5,
     agendaMax: 8,
     agendaEveryMs: 21_600_000,
+    agendaFloorMs: 7_200_000,
     maxPerDay: 24,
     maxTokensPerDay: 600_000,
+    wakeSalience: 3.0,
   },
   graph: { archiveAfterDays: 30, relatedThreshold: 0.82, maxNeurons: 20_000 },
   birth: { historyDays: 30 },
   log: { senseSummaryEveryMs: 60_000 },
+  fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
 };
 
 export function emptyCounts(): Record<NeuronKind, number> {
@@ -272,6 +298,16 @@ export function isHumanInbound(event: SensedEvent): event is HumanInboundEvent {
  */
 export const OPERATOR_SOURCED = 'operatorSourced';
 
+/**
+ * `Neuron.meta` key set to `'true'` when an operator message (a buffer item
+ * `fromOperator`) is among the items behind the neuron, at creation or at a
+ * later recognition. Narrower than `OPERATOR_SOURCED`: the neuron's text may be
+ * the operator's own words, so the fast lane never quotes it to a bot. Notice
+ * writes `'false'` explicitly at creation; a neuron without the key predates
+ * it, and the fast lane treats an operator-sourced one as `'true'`.
+ */
+export const OPERATOR_MESSAGE = 'operatorMessage';
+
 /** A buffer item that is a non-operator human message (already reduced to topic words by tier 0). */
 export function isPublicHumanItem(item: Pick<BufferItem, 'event' | 'fromOperator'>): boolean {
   return isHumanInbound(item.event) && item.fromOperator !== true;
@@ -290,4 +326,16 @@ export function restsOnOperatorMaterial(
 
 export function isOperatorSourced(n: Pick<Neuron, 'meta'>): boolean {
   return n.meta?.[OPERATOR_SOURCED] === 'true';
+}
+
+/**
+ * Whether a neuron may carry an operator message's words: `operatorMessage`
+ * `'true'`, or operator-sourced and either without the flag (it predates it)
+ * or not a pattern (a fact may be their words). A notice pass shown such a
+ * neuron marks what it writes `operatorMessage: 'true'`.
+ */
+export function mayCarryOperatorMessage(n: Pick<Neuron, 'kind' | 'meta'>): boolean {
+  const flag = n.meta?.[OPERATOR_MESSAGE];
+  if (flag === 'true') return true;
+  return isOperatorSourced(n) && (flag === undefined || n.kind !== 'pattern');
 }

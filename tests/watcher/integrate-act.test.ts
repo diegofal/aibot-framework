@@ -7,7 +7,7 @@
  * acted and did not.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMClient } from '../../src/core/llm-client';
@@ -15,9 +15,12 @@ import { BROADCAST_INFLIGHT_MAX_MS, Broadcaster } from '../../src/watcher/broadc
 import { DailyBudget } from '../../src/watcher/budget';
 import { Graph } from '../../src/watcher/graph';
 import {
+  DEFERRED_QUESTIONS_MAX,
+  DEFERRED_QUESTION_MAX_AGE_MS,
   INTEGRATE_MIN_GAP_MS,
   Integrator,
   insightNeedsBroadcast,
+  integrateStateFile,
   parseIntegrateOutput,
 } from '../../src/watcher/integrate';
 import { instrumented } from '../../src/watcher/llm';
@@ -98,7 +101,7 @@ function setup(
   const config: WatcherConfig = {
     ...WATCHER_DEFAULTS,
     enabled: true,
-    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, salienceBar: 1, ...cfg },
+    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, wakeSalience: 1, ...cfg },
   };
   const delivered: string[] = [];
   const broadcaster = new Broadcaster({
@@ -409,57 +412,109 @@ describe('insightNeedsBroadcast', () => {
   });
 });
 
-describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026-10-24)', () => {
+// Changed deliberately on 2026-10-24 (O2, docs/plans/watcher-optimizations-plan.md):
+// an agenda-only pass used to run on the heartbeat at most every
+// `integrate.agendaEveryMs` (6 h) whatever the agenda held. It now runs when
+// the agenda CHANGED since the last agenda pass (a pair or an insight the last
+// one was not shown); an unchanged agenda never wakes a pass on its own.
+// `agendaEveryMs` stays in the schema, unused.
+describe('Integrator: wakes on salience, a changed agenda or the heartbeat (O2)', () => {
   const HOUR = 3_600_000;
+  const quietCfg = { heartbeatMs: HOUR, minItems: 5, wakeSalience: 100 };
 
-  test('nothing pending and a non-empty agenda: due once, then not until integrate.agendaEveryMs', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
+  /** A second cross-bot related pair, new to the agenda. */
+  function newPair(s: ReturnType<typeof setup>) {
+    const c = s.graph.addNeuron({
+      kind: 'fact',
+      text: 'Jarvis tracks the Q3 invoices',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
     });
-    expect(s.integrator.due()).toBe(false);
-    t += HOUR;
+    const d = s.graph.addNeuron({
+      kind: 'fact',
+      text: 'Scout tracks the Q3 invoices',
+      support: { bots: ['b2'] },
+      createdBy: 'watcher',
+    });
+    return s.graph.addEdge({
+      from: c.id,
+      to: d.id,
+      rel: 'related',
+      weight: 0.9,
+      createdBy: 'watcher',
+    });
+  }
+
+  test('an agenda never passed on is a change: due at once, as agenda-changed', () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
+    expect(s.integrator.wake()).toBe('agenda-changed');
+  });
+
+  test('unchanged agenda: not due, however long; one new pair: due once', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     expect(s.integrator.due()).toBe(true);
-    const out = await s.integrator.run();
+    const out = await s.integrator.run({ trigger: 'agenda-changed' });
     expect(out.status).toBe('integrated');
     expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
-    t += HOUR;
+    t += INTEGRATE_MIN_GAP_MS;
     expect(s.integrator.due()).toBe(false);
-    t += 4 * HOUR;
+    t += 12 * HOUR;
     expect(s.integrator.due()).toBe(false);
-    t += HOUR;
-    expect(s.integrator.due()).toBe(true);
+    const fresh = newPair(s);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.wake()).toBe('agenda-changed');
+    await s.integrator.run({ trigger: 'agenda-changed' });
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${fresh.id}]`);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.due()).toBe(false);
   });
 
-  test('the agenda pass time is kept in the state', async () => {
-    // A readable answer: an unparsable one no longer uses up the agenda slot.
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
+  test('the salience pending since the last pass reaches wakeSalience: due, as salience', () => {
+    const s = setup(() => ({}), { heartbeatMs: HOUR, minItems: 5, wakeSalience: 3, agendaMax: 0 });
+    s.integrator.observe(item(1.5));
+    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(1.5));
+    expect(s.integrator.wake()).toBe('salience');
+    // The stakes may raise the line (budget pressure doubles it).
+    expect(s.integrator.wake({ wakeSalience: 6 })).toBeNull();
+  });
+
+  test('the heartbeat stays as a floor: minItems pending after heartbeatMs, as heartbeat', () => {
+    const s = setup(() => ({}), { ...quietCfg, minItems: 2, agendaMax: 0 });
+    s.integrator.observe(item(0.2));
+    s.integrator.observe(item(0.2));
+    expect(s.integrator.due()).toBe(false);
     t += HOUR;
+    expect(s.integrator.wake()).toBe('heartbeat');
+  });
+
+  test('the agenda pass time and the ids it was shown are kept in the state', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     await s.integrator.run();
     expect(s.integrator.state().lastAgendaAt).toBe(new Date(t).toISOString());
+    expect(s.integrator.state().agendaIds).toEqual([s.edge.id]);
   });
 
-  test('a breaker-refused agenda pass does not use up the agenda slot: due again after the min gap', async () => {
+  test('every pass row records its trigger (manual without one)', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
+    await s.integrator.run({ trigger: 'agenda-changed' });
+    t += INTEGRATE_MIN_GAP_MS;
+    await pass(s);
+    const passes = s.rows.filter((r) => r.op === 'integrate:pass');
+    expect(passes.map((r) => r.trigger)).toEqual(['agenda-changed', 'manual']);
+  });
+
+  test('a breaker-refused agenda pass does not use up the change: due again after the min gap', async () => {
     const refused = {
       backend: 'claude-cli',
       model: 'claude-opus-5-5',
       chat: async () => ({ ok: false as const, reason: 'breaker' as const }),
     };
-    const s = setup(
-      () => ({}),
-      { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaEveryMs: 6 * HOUR },
-      { client: refused }
-    );
-    t += HOUR;
+    const s = setup(() => ({}), quietCfg, { client: refused });
     expect(s.integrator.due()).toBe(true);
     expect((await s.integrator.run()).status).toBe('breaker');
     expect(s.integrator.state().lastAgendaAt).toBeUndefined();
+    expect(s.integrator.state().agendaIds).toBeUndefined();
     t += INTEGRATE_MIN_GAP_MS;
     expect(s.integrator.due()).toBe(true);
   });
@@ -468,14 +523,8 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
     spyOn(s.integrator as unknown as { standingAgenda: () => unknown }, 'standingAgenda');
 
   test('an agenda-only pass computes the standing agenda once: due() carries it into the pass', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
+    const s = setup(() => ({ insights: [] }), quietCfg);
     const spy = agendaSpy(s);
-    t += HOUR;
     expect(s.integrator.due()).toBe(true);
     expect((await s.integrator.run()).status).toBe('integrated');
     expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
@@ -489,28 +538,33 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  test('a direct run with nothing pending and the agenda slot used is idle without computing it', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
-    t += HOUR;
+  test('due() scans the graph at most once per minimum gap', () => {
+    const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 0 });
+    const spy = agendaSpy(s);
+    expect(s.integrator.due()).toBe(false);
+    t += 60_000;
+    expect(s.integrator.due()).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1);
+    t += INTEGRATE_MIN_GAP_MS;
+    expect(s.integrator.due()).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  // Changed deliberately (was "idle without computing it"): whether a direct
+  // run with nothing pending has anything to do now depends on whether the
+  // agenda changed, which takes one scan.
+  test('a direct run with nothing pending and an unchanged agenda is idle', async () => {
+    const s = setup(() => ({ insights: [] }), quietCfg);
     await s.integrator.run();
     t += INTEGRATE_MIN_GAP_MS;
     const spy = agendaSpy(s);
     expect((await s.integrator.run()).status).toBe('idle');
-    expect(spy).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(s.prompts).toHaveLength(1);
   });
 
   test('an agenda carried by due() goes stale: a later pass computes its own', async () => {
-    const s = setup(() => ({ insights: [] }), {
-      heartbeatMs: HOUR,
-      minItems: 5,
-      salienceBar: 100,
-      agendaEveryMs: 6 * HOUR,
-    });
-    t += HOUR;
+    const s = setup(() => ({ insights: [] }), quietCfg);
     expect(s.integrator.due()).toBe(true);
     // No run follows that due(); the graph may change before the next pass.
     s.integrator.observe(item());
@@ -521,15 +575,462 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
   });
 
   test('an empty agenda and 2 pending (below minItems): not due', () => {
-    const s = setup(() => ({}), { heartbeatMs: HOUR, minItems: 5, salienceBar: 100, agendaMax: 0 });
+    const s = setup(() => ({}), { ...quietCfg, agendaMax: 0 });
     s.integrator.observe(item(0.2));
     s.integrator.observe(item(0.2));
     t += HOUR;
     expect(s.integrator.due()).toBe(false);
   });
 
-  test('agendaEveryMs defaults to 6 h', () => {
+  test('agendaEveryMs is kept (deprecated, unused) with its 6 h default', () => {
     expect(WATCHER_DEFAULTS.integrate.agendaEveryMs).toBe(6 * HOUR);
+  });
+
+  // Review 2026-10-24: with a backlog larger than agendaMax (live ~1,388
+  // related links) covering one pair slid an old one into the top ids and
+  // every pass woke Opus again. Only an item created (or left unacted) after
+  // the last agenda pass is news, and agenda-only passes keep a floor.
+  describe('a backlog larger than agendaMax', () => {
+    /** `n` more cross-bot related pairs, weights below the setup pair's 0.9. */
+    function backlog(
+      s: ReturnType<typeof setup>,
+      n: number,
+      weight = (i: number) => 0.5 + i / 100
+    ) {
+      const ids: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const c = s.graph.addNeuron({
+          kind: 'fact',
+          text: `Jarvis backlog fact number ${i} about topic ${i * 7}`,
+          support: { bots: ['b1'] },
+          createdBy: 'watcher',
+        });
+        const d = s.graph.addNeuron({
+          kind: 'fact',
+          text: `Scout backlog fact number ${i} about subject ${i * 11}`,
+          support: { bots: ['b2'] },
+          createdBy: 'watcher',
+        });
+        ids.push(
+          s.graph.addEdge({
+            from: c.id,
+            to: d.id,
+            rel: 'related',
+            weight: weight(i),
+            createdBy: 'watcher',
+          }).id
+        );
+      }
+      return ids;
+    }
+
+    test('covering one pair does not make the next pass due; a pair created later does, once', async () => {
+      const covers: string[][] = [];
+      const s = setup(() => ({ insights: [], agendaCovered: covers.shift() ?? [] }), {
+        ...quietCfg,
+        agendaMax: 8,
+      });
+      backlog(s, 19);
+      covers.push([s.edge.id]);
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      expect((await s.integrator.run({ trigger: 'agenda-changed' })).status).toBe('integrated');
+      expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
+      for (const step of [INTEGRATE_MIN_GAP_MS, 3 * HOUR, 12 * HOUR]) {
+        t += step;
+        expect(s.integrator.wake()).toBeNull();
+      }
+      expect(s.prompts).toHaveLength(1);
+      const [fresh] = backlog(s, 1, () => 0.95);
+      t += INTEGRATE_MIN_GAP_MS;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      expect(agendaOf(s.prompts[1] as string)).toContain(`[${fresh}]`);
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBeNull();
+    });
+
+    test('agenda-only passes keep a floor (integrate.agendaFloorMs, default 2 h)', async () => {
+      expect(WATCHER_DEFAULTS.integrate.agendaFloorMs).toBe(2 * HOUR);
+      const s = setup(() => ({ insights: [] }), quietCfg);
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 30 * 60_000;
+      newPair(s);
+      t += INTEGRATE_MIN_GAP_MS;
+      expect(s.integrator.wake()).toBeNull();
+      t += 2 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+    });
+
+    test('an insight whose broadcast failed after the last agenda pass is news again', async () => {
+      const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 8 });
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 60_000;
+      const insight = s.graph.addNeuron({
+        kind: 'insight',
+        text: 'Jarvis and Scout both track the Q3 invoices',
+        support: { bots: ['b1', 'b2'] },
+        confidence: 'medium',
+        createdBy: 'watcher',
+      });
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBeNull();
+      // A fast-lane send for it fails later: it became unacted after that pass.
+      s.broadcaster.list = () => [
+        {
+          id: 'bc-1',
+          botId: 'b1',
+          kind: 'directive',
+          text: 'x',
+          insightId: insight.id,
+          reason: 'x',
+          createdAt: new Date(t).toISOString(),
+          deliveryError: 'chat not found',
+        } as never,
+      ];
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+    });
+
+    // Fix 2026-10-24: a send that failed DURING the agenda pass is before
+    // `agendaSettledAt` and its insight is older than the scan, so it was never
+    // news again; a quiet fleet never retried it.
+    describe('an insight whose broadcast was unsuccessful during the agenda pass', () => {
+      function withInsight(status: 'failed' | 'deferred' | 'capped' | 'delivered') {
+        const ref: { id?: string } = {};
+        let first = true;
+        const s = setup(
+          () => {
+            const out = first
+              ? {
+                  insights: [],
+                  broadcasts: [{ bot: 'b1', kind: 'wake', text: '', insightId: ref.id }],
+                }
+              : { insights: [] };
+            first = false;
+            return out;
+          },
+          { ...quietCfg, agendaMax: 8 }
+        );
+        ref.id = s.graph.addNeuron({
+          kind: 'insight',
+          text: 'Jarvis and Scout both track the Q3 invoices',
+          support: { bots: ['b1', 'b2'] },
+          confidence: 'medium',
+          createdBy: 'watcher',
+        }).id;
+        const sends: string[] = [];
+        s.broadcaster.send = (async (req: { insightId?: string }) => {
+          sends.push(req.insightId ?? '');
+          return status === 'capped' ? { status } : { status, broadcast: {} };
+        }) as never;
+        return { s, id: ref.id, sends };
+      }
+
+      for (const status of ['failed', 'deferred', 'capped'] as const) {
+        test(`${status}: not due at +10 min, due once after the floor`, async () => {
+          const { s, id, sends } = withInsight(status);
+          expect(s.integrator.wake()).toBe('agenda-changed');
+          await s.integrator.run({ trigger: 'agenda-changed' });
+          expect(sends).toEqual([id]);
+          t += 10 * 60_000;
+          expect(s.integrator.wake()).toBeNull();
+          t += 2 * HOUR;
+          expect(s.integrator.wake()).toBe('agenda-changed');
+          await s.integrator.run({ trigger: 'agenda-changed' });
+          expect(agendaOf(s.prompts[1] as string)).toContain(id);
+          // Shown again and not re-sent: the retry was used up.
+          for (const step of [INTEGRATE_MIN_GAP_MS, 3 * HOUR, 12 * HOUR]) {
+            t += step;
+            expect(s.integrator.wake()).toBeNull();
+          }
+        });
+      }
+
+      test('delivered: never due again', async () => {
+        const { s, sends } = withInsight('delivered');
+        await s.integrator.run({ trigger: 'agenda-changed' });
+        expect(sends).toHaveLength(1);
+        for (const step of [10 * 60_000, 2 * HOUR, 12 * HOUR]) {
+          t += step;
+          expect(s.integrator.wake()).toBeNull();
+        }
+      });
+
+      test('untouched backlog (shown, never sent): never due again', async () => {
+        const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 8 });
+        s.graph.addNeuron({
+          kind: 'insight',
+          text: 'Jarvis and Scout both track the Q3 invoices',
+          support: { bots: ['b1', 'b2'] },
+          confidence: 'medium',
+          createdBy: 'watcher',
+        });
+        await s.integrator.run({ trigger: 'agenda-changed' });
+        for (const step of [10 * 60_000, 2 * HOUR, 12 * HOUR]) {
+          t += step;
+          expect(s.integrator.wake()).toBeNull();
+        }
+      });
+    });
+  });
+});
+
+// O3 (stakes): what the watcher feels shapes what it does.
+describe('Integrator: stakes shape the pass (O3)', () => {
+  function withQuestions(reply: Reply, sent: string[], deferNext = { value: false }) {
+    const qlog = new WatcherLog(join(dir, 'qlog'), { now: () => t });
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      log: qlog,
+      delivery: {
+        question: async (bot, text) => {
+          if (deferNext.value) return { ok: false, detail: 'throttled', deferred: true };
+          sent.push(`${bot}:${text}`);
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    return setup(reply, {}, { broadcaster });
+  }
+  const askAnswer = (s: () => ReturnType<typeof setup>) => () => ({
+    insights: [{ text: DUP, support: [s().a.id, s().b.id], confidence: 'high' }],
+    broadcasts: [{ bot: 'b1', kind: 'question', text: 'Who owns the brief?', insightIndex: 0 }],
+  });
+
+  test('operator silent: a question is deferred, logged, and its insight stays on the agenda', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    const out = await s.integrator.run({ deferQuestions: true, drivenBy: ['operatorSilence'] });
+    expect(out.status).toBe('integrated');
+    expect(sent).toEqual([]);
+    const row = s.rows.find((r) => r.op === 'integrate:question-deferred');
+    expect(row?.whyNoBroadcast).toBe('operator silent');
+    expect(row?.drivenBy).toEqual(['operatorSilence']);
+    const insight = s.graph.list().find((n) => n.kind === 'insight') as Neuron;
+    expect(insight.meta?.whyNoBroadcast).toBeUndefined();
+    expect(s.integrator.deferredQuestions().map((q) => q.insightId)).toEqual([insight.id]);
+    expect(s.rows.find((r) => r.op === 'integrate:pass')?.drivenBy).toContain('operatorSilence');
+    // Still on the agenda for the next pass.
+    t += INTEGRATE_MIN_GAP_MS;
+    s.integrator.observe(item());
+    await s.integrator.run();
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${insight.id}]`);
+  });
+
+  test('the operator writes: the deferred question goes out at once, without a pass', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    const results = await s.integrator.releaseQuestions();
+    expect(results.map((r) => r.status)).toEqual(['delivered']);
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+    expect(s.prompts).toHaveLength(1);
+    const row = s.rows.find((r) => r.op === 'integrate:question-released');
+    expect(row?.drivenBy).toEqual(['operatorPresent']);
+  });
+
+  test('a released question the throttle defers again stays deferred', async () => {
+    const sent: string[] = [];
+    const deferNext = { value: false };
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent,
+      deferNext
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    deferNext.value = true;
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['deferred']);
+    expect(s.integrator.deferredQuestions()).toHaveLength(1);
+  });
+
+  // A released question that hit the bot's daily broadcast cap was taken off
+  // the persisted queue unsent: it must wait for the next release instead.
+  test('a released question the daily cap refuses stays held for the next release', async () => {
+    const sent: string[] = [];
+    const cap = { value: 0 };
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      get maxPerBotPerDay() {
+        return cap.value;
+      },
+      delivery: {
+        question: async (bot, text) => {
+          sent.push(`${bot}:${text}`);
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = setup(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      {},
+      { broadcaster }
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    expect(s.integrator.deferredQuestions()).toHaveLength(1);
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['capped']);
+    expect(sent).toEqual([]);
+    expect(s.integrator.deferredQuestions().map((q) => q.text)).toEqual(['Who owns the brief?']);
+    expect(s.rows.find((r) => r.op === 'integrate:question-dropped')).toBeUndefined();
+    cap.value = 3;
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['delivered']);
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+  });
+
+  // Review 2026-10-24: the queue was persisted only after the whole loop, so a
+  // stop (or a crash) mid-release resent what had already gone out.
+  test('each released question leaves the persisted queue as soon as it is sent', async () => {
+    const queued = ['n-q0000001', 'n-q0000002'].map((insightId, i) => ({
+      insightId,
+      botId: 'b1',
+      text: `Question ${i}?`,
+      reason: 'x',
+      deferredAt: new Date(t - 60_000).toISOString(),
+    }));
+    writeFileSync(
+      integrateStateFile(dir),
+      JSON.stringify({
+        attending: [],
+        pending: { items: [], neurons: [], salience: 0 },
+        deferredQuestions: queued,
+      })
+    );
+    let release: () => void = () => {};
+    const onDisk = () =>
+      (
+        JSON.parse(readFileSync(integrateStateFile(dir), 'utf-8')) as {
+          deferredQuestions?: Array<{ text: string }>;
+        }
+      ).deferredQuestions?.map((q) => q.text) ?? [];
+    let seenBeforeSecond: string[] = [];
+    let n = 0;
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      delivery: {
+        question: async () => {
+          n++;
+          if (n === 2) {
+            seenBeforeSecond = onDisk();
+            await new Promise<void>((r) => {
+              release = r;
+            });
+          }
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    const s = setup(() => ({}), {}, { broadcaster });
+    const done = s.integrator.releaseQuestions();
+    for (let i = 0; i < 20 && n < 2; i++) await new Promise((r) => setImmediate(r));
+    expect(seenBeforeSecond).toEqual(['Question 1?']);
+    release();
+    await done;
+    expect(onDisk()).toEqual([]);
+  });
+
+  // Review 2026-10-24: a held question dropped by age or by the cap left no trace.
+  test('a held question older than 7 days is dropped unsent, with a row', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    t += DEFERRED_QUESTION_MAX_AGE_MS + 1;
+    expect(await s.integrator.releaseQuestions()).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+    const row = s.rows.find((r) => r.op === 'integrate:question-dropped');
+    expect(row?.text).toContain('Who owns the brief?');
+    expect(row?.whyNoBroadcast).toBe('held over 7 days');
+  });
+
+  test('a held question pushed out by the cap is dropped with a row', async () => {
+    const old = Array.from({ length: DEFERRED_QUESTIONS_MAX }, (_, i) => ({
+      insightId: `n-old0000${i}`,
+      botId: 'b2',
+      text: `Old question ${i}?`,
+      reason: 'x',
+      deferredAt: new Date(t - 60_000).toISOString(),
+    }));
+    writeFileSync(
+      integrateStateFile(dir),
+      JSON.stringify({
+        attending: [],
+        pending: { items: [], neurons: [], salience: 0 },
+        deferredQuestions: old,
+      })
+    );
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    expect(s.integrator.deferredQuestions()).toHaveLength(DEFERRED_QUESTIONS_MAX);
+    expect(s.integrator.deferredQuestions().map((q) => q.text)).not.toContain('Old question 0?');
+    const row = s.rows.find((r) => r.op === 'integrate:question-dropped');
+    expect(row?.text).toContain('Old question 0?');
+    expect(row?.whyNoBroadcast).toBe(`more than ${DEFERRED_QUESTIONS_MAX} held`);
+  });
+
+  test('without deferral a question goes out in the pass', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run();
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+  });
+
+  test('fleet karma falling: the prompt opens with "Something is wrong"', async () => {
+    const s = setup(() => ({ insights: [] }));
+    s.integrator.observe(item());
+    await s.integrator.run({
+      somethingWrong: 'Fleet karma fell from 60 to 52 in 24 h.',
+      drivenBy: ['fleetKarmaFalling'],
+    });
+    expect(s.prompts[0]).toContain(
+      '## Something is wrong\nFleet karma fell from 60 to 52 in 24 h.'
+    );
+    expect(s.rows.find((r) => r.op === 'integrate:pass')?.drivenBy).toEqual(['fleetKarmaFalling']);
+    expect(s.integrator.drivenBy()).toEqual(['fleetKarmaFalling']);
   });
 });
 

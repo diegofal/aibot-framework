@@ -12,6 +12,9 @@
  *   GET  /broadcasts       { broadcasts } newest first, each with `why`; ?botId=&limit=
  *   POST /neurons/:id/signal  { signal: up|down } on an insight / contradiction /
  *                          prediction (`n-…`) or a broadcast (`b-…`)
+ *   GET  /passes           { passes } newest first: what each notice / integrate / introspect
+ *                          call saw and said, without prompt and response; ?limit= (O6)
+ *   GET  /passes/:id       { pass } one record with its prompt and response
  *   GET  /self             { running, interoception, attention, introspection, subjects } (phase 4)
  *   POST /introspect       ask the watcher what it is doing now: 200 { status: scored, record },
  *                          409 unavailable (asleep / no notice model), 429 refused (budget,
@@ -35,6 +38,8 @@ import {
 import { computeMetrics, parseMetricsWindow } from '../../watcher/metrics';
 import { summarizeIntrospection } from '../../watcher/metrics/introspection';
 import { loadMetricsRecords } from '../../watcher/metrics/records';
+import { passRecordsFor } from '../../watcher/pass-records';
+import { watcherDir } from '../../watcher/paths';
 import type { Neuron } from '../../watcher/types';
 import { WATCHER_DEFAULTS, type WatcherConfig } from '../../watcher/types';
 import type { Watcher } from '../../watcher/watcher';
@@ -238,6 +243,19 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     return c.json({ broadcasts });
   });
 
+  /** What the watcher's model saw and said, per call (`src/watcher/pass-records.ts`). */
+  app.get('/passes', (c) => {
+    if (!live()) return c.json(off, 404);
+    const limit = clampInt(c.req.query('limit'), PASSES_DEFAULT_LIMIT, 1, PASSES_MAX_LIMIT);
+    return c.json({ passes: passRecordsFor(watcherDir(deps.config)).list(limit) });
+  });
+
+  app.get('/passes/:id', (c) => {
+    if (!live()) return c.json(off, 404);
+    const pass = passRecordsFor(watcherDir(deps.config)).get(c.req.param('id'));
+    return pass ? c.json({ pass }) : c.json(notFound, 404);
+  });
+
   /** 👍/👎 on an insight, contradiction or prediction (`n-…`), or a broadcast (`b-…`). */
   app.post('/neurons/:id/signal', async (c) => {
     const w = live();
@@ -260,6 +278,8 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
 }
 
 const BROADCASTS_DEFAULT_LIMIT = 50;
+const PASSES_DEFAULT_LIMIT = 100;
+const PASSES_MAX_LIMIT = 500;
 const BROADCASTS_MAX_LIMIT = 200;
 
 function botNameOf(config: Config, w: Watcher, botId: string): string {

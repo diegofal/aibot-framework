@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
@@ -7,15 +7,17 @@ import type { LLMClient } from '../../src/core/llm-client';
 import { createFleetMemorySearchTool } from '../../src/tools/fleet-memory-search';
 import { DailyBudget } from '../../src/watcher/budget';
 import { WorkingBuffer } from '../../src/watcher/buffer';
+import { FAST_LANE_DEFAULTS, fastLaneCandidates } from '../../src/watcher/fast-lane';
 import { Graph } from '../../src/watcher/graph';
 import { instrumented } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
 import {
-  NOTICE_EARLY_FACTOR,
   NOTICE_MIN_GAP_MS,
   Noticer,
   noticeItems,
   parseNoticeOutput,
+  readNoticeLastRun,
+  writeNoticeLastRun,
 } from '../../src/watcher/notice';
 import {
   type BufferItem,
@@ -475,28 +477,134 @@ describe('Noticer.run', () => {
   });
 });
 
-describe('Noticer.due', () => {
-  test('waits everyMs after construction, then is due', () => {
-    const s = setup({ cfg: { everyMs: 300_000 } });
-    s.buffer.push(item(toolError('b1')));
-    expect(s.noticer.due()).toBe(false);
+// Changed deliberately on 2026-10-24 (O2, docs/plans/watcher-optimizations-plan.md):
+// the pass used to be due every `notice.everyMs` (5 min) with anything
+// salient, or early at NOTICE_EARLY_FACTOR × the bar. It now wakes on
+// salience (`notice.wakeSalience`, an operator message at once) or when the
+// oldest salient item waited `notice.maxWaitMs`; the 5-min cadence is gone.
+describe('Noticer.wake / due', () => {
+  test('one salient item waits for the age ceiling, not a 5-min cadence', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.5));
     t += 300_000;
+    expect(s.noticer.wake()).toBeNull();
+    expect(s.noticer.due()).toBe(false);
+    t += WATCHER_DEFAULTS.notice.maxWaitMs - 300_000;
+    expect(s.noticer.wake()).toBe('age');
     expect(s.noticer.due()).toBe(true);
   });
 
-  test('is due early when salient items pile up, but never within the minimum gap', () => {
-    const s = setup({ cfg: { everyMs: 300_000, salienceBar: 0.4 } });
-    const needed = Math.ceil((NOTICE_EARLY_FACTOR * 0.4) / 0.9) + 1;
-    for (let i = 0; i < needed; i++) s.buffer.push(item(toolError('b1'), 0.9));
-    expect(s.noticer.due()).toBe(false);
+  test('salience adding up to wakeSalience wakes it, but never within the minimum gap', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.5));
+    s.buffer.push(item(toolError('b2'), 0.5));
+    expect(s.noticer.wake()).toBeNull();
     t += NOTICE_MIN_GAP_MS;
-    expect(s.noticer.due()).toBe(true);
+    expect(s.noticer.wake()).toBe('salience');
+  });
+
+  test('an operator message wakes it after the minimum gap, whatever wakeSalience says', () => {
+    const s = setup({ cfg: { wakeSalience: 50 } });
+    s.buffer.push(item(operatorSays('b1', 'drop the Acme lead'), 0.7, { fromOperator: true }));
+    t += NOTICE_MIN_GAP_MS;
+    expect(s.noticer.wake()).toBe('salience');
+  });
+
+  test('a raised wake line (the stakes) is honoured', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.6));
+    s.buffer.push(item(toolError('b2'), 0.6));
+    t += NOTICE_MIN_GAP_MS;
+    expect(s.noticer.wake()).toBe('salience');
+    expect(s.noticer.wake({ wakeSalience: 2 })).toBeNull();
   });
 
   test('is never due with nothing salient', () => {
     const s = setup();
     t += 10 * 300_000;
     expect(s.noticer.due()).toBe(false);
+  });
+
+  test('the pass row records the trigger and the stakes that drove it', async () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1')));
+    await s.noticer.run({ trigger: 'age', drivenBy: ['noticeBudgetPressure'] });
+    const row = s.rows.find((r) => r.op === 'notice:pass');
+    expect(row?.trigger).toBe('age');
+    expect(row?.drivenBy).toEqual(['noticeBudgetPressure']);
+  });
+
+  test('a pass without a trigger is manual', async () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1')));
+    await s.noticer.run();
+    expect(s.rows.find((r) => r.op === 'notice:pass')?.trigger).toBe('manual');
+  });
+
+  // Review 2026-10-24 (cost): with an operator item or an urgent one in the
+  // buffer, a failed pass left wake() saying `salience` every 60 s, a paid
+  // retry each time.
+  describe('backoff after a pass that did not go through', () => {
+    const MIN = 60_000;
+    test('2, 4, 8 … min after consecutive failures (cap 30), reset by the next ok pass', async () => {
+      let fail = true;
+      const s = setup({
+        reply: async () => {
+          if (fail) throw new Error('boom');
+          return { text: '{"keep":[]}' };
+        },
+      });
+      s.buffer.push(item(operatorSays('b1', 'drop the Acme lead'), 0.7, { fromOperator: true }));
+      t += NOTICE_MIN_GAP_MS;
+      for (const wait of [2, 4, 8, 16, 30, 30]) {
+        expect(s.noticer.wake()).toBe('salience');
+        expect((await s.noticer.run()).status).toBe('failed');
+        t += wait * MIN - 1_000;
+        expect(s.noticer.wake()).toBeNull();
+        t += 1_000;
+      }
+      expect(s.noticer.wake()).toBe('salience');
+      fail = false;
+      expect((await s.noticer.run()).status).toBe('noticed');
+      s.buffer.push(item(operatorSays('b1', 'and the Beta lead'), 0.7, { fromOperator: true }));
+      t += NOTICE_MIN_GAP_MS;
+      expect(s.noticer.wake()).toBe('salience');
+    });
+
+    test('a refused (breaker) pass backs off too', async () => {
+      const s = setup({ open: true });
+      s.buffer.push(item(toolError('b1'), 0.95));
+      t += NOTICE_MIN_GAP_MS;
+      expect((await s.noticer.run()).status).toBe('breaker');
+      t += NOTICE_MIN_GAP_MS;
+      expect(s.noticer.wake()).toBeNull();
+      t += MIN;
+      expect(s.noticer.wake()).toBe('salience');
+    });
+
+    test('the age ceiling still applies during a backoff', async () => {
+      const s = setup({ open: true, cfg: { maxWaitMs: 3 * MIN } });
+      s.buffer.push(item(toolError('b1'), 0.5));
+      for (let i = 0; i < 3; i++) {
+        t += 30 * MIN;
+        expect(s.noticer.wake()).toBe('age');
+        await s.noticer.run();
+      }
+      // Backing off 8 min now, but the item has waited 3 min since that pass.
+      t += 3 * MIN;
+      expect(s.noticer.wake()).toBe('age');
+    });
+  });
+});
+
+describe('readNoticeLastRun / writeNoticeLastRun', () => {
+  test('round trip; absent or corrupt is undefined', () => {
+    const file = join(dir, 'sub', 'notice.json');
+    expect(readNoticeLastRun(file)).toBeUndefined();
+    writeNoticeLastRun(file, 1234);
+    expect(readNoticeLastRun(file)).toBe(1234);
+    writeFileSync(file, '{nope');
+    expect(readNoticeLastRun(file)).toBeUndefined();
   });
 });
 
@@ -564,6 +672,156 @@ describe('Noticer provenance (phase 3)', () => {
     const out = await s.noticer.run();
     const n = (out as { created: Array<{ meta?: Record<string, string> }> }).created[0];
     expect(n.meta?.operatorSourced).toBe('true');
+  });
+
+  // Review 2026-10-24: a recognition used to leave the support as the first
+  // pass wrote it; the second bot never joined and the provenance never moved.
+  test('a recognition unions the pass bots and cycles and re-marks operatorSourced', async () => {
+    let from: string[] = [];
+    const s = setup({
+      reply: async () => ({
+        text: JSON.stringify({
+          keep: [{ text: 'Users ask about the weather', kind: 'topic', from }],
+        }),
+      }),
+    });
+    const pub = item(userSays('b1', 'weather'));
+    from = [pub.id];
+    s.buffer.push(pub);
+    const first = (await s.noticer.run()) as { created: Neuron[] };
+    const n = first.created[0] as Neuron;
+    expect(n.meta?.operatorSourced).toBeUndefined();
+    t += 60_000;
+    const err = item(toolError('b2', 'c-9'));
+    from = [err.id];
+    s.buffer.push(err);
+    const second = (await s.noticer.run()) as { created: Neuron[]; recognised: Neuron[] };
+    expect(second.created).toEqual([]);
+    expect(second.recognised[0]?.id).toBe(n.id);
+    expect(second.recognised[0]?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c-9'] });
+    expect(s.graph.get(n.id)?.meta?.operatorSourced).toBe('true');
+    expect(s.graph.get(n.id)?.activations).toBe(2);
+  });
+
+  test('an operator message behind a new neuron marks operatorMessage', async () => {
+    let from: string[] = [];
+    const s = setup({
+      reply: async () => ({
+        text: JSON.stringify({ keep: [{ text: 'School starts on Monday', kind: 'fact', from }] }),
+      }),
+    });
+    const op = item(operatorSays('b1', 'School starts on Monday'), 0.9, { fromOperator: true });
+    from = [op.id];
+    s.buffer.push(op);
+    const made = ((await s.noticer.run()) as { created: Neuron[] }).created[0] as Neuron;
+    expect(made.meta?.operatorMessage).toBe('true');
+  });
+
+  test('an operator message behind a recognition marks operatorMessage too', async () => {
+    let from: string[] = [];
+    const s2 = setup({
+      reply: async () => ({
+        text: JSON.stringify({
+          keep: [{ text: 'wiley.com blocks the fetcher', kind: 'pattern', from }],
+        }),
+      }),
+    });
+    const err = item(toolError('b1', 'c-1'));
+    from = [err.id];
+    s2.buffer.push(err);
+    const p = ((await s2.noticer.run()) as { created: Neuron[] }).created[0] as Neuron;
+    // Written explicitly at creation: the fast lane reads a missing flag as an
+    // operator message (the live graph predates it).
+    expect(p.meta?.operatorMessage).toBe('false');
+    expect(p.meta?.source).toBe('notice');
+    const op2 = item(operatorSays('b2', 'wiley blocks you'), 0.9, { fromOperator: true });
+    from = [op2.id];
+    s2.buffer.push(op2);
+    await s2.noticer.run();
+    expect(s2.graph.get(p.id)?.meta?.operatorMessage).toBe('true');
+  });
+
+  // Fix 2026-10-24: the prompt shows every touched neuron in full, so a
+  // pattern written while shown an operator-message neuron may restate it;
+  // provenance only looked at the cited buffer items.
+  describe('operatorMessage from the neurons the prompt showed', () => {
+    const PATTERN = 'Jarvis and Scout both hit the wiley.com wall';
+    function run(shown: { kind: 'fact' | 'pattern'; meta: Record<string, string> }) {
+      let from: string[] = [];
+      const s = setup({
+        reply: async () => ({
+          text: JSON.stringify({ keep: [{ text: PATTERN, kind: 'pattern', from }] }),
+        }),
+      });
+      const n = s.graph.addNeuron({
+        kind: shown.kind,
+        text: 'The operator asked for the wiley.com paper',
+        support: { bots: ['b1'] },
+        createdBy: 'watcher',
+        meta: shown.meta,
+      });
+      const e1 = item(toolError('b1', 'c-1'), 0.6, { touched: [n.id] });
+      const e2 = item(toolError('b2', 'c-2'), 0.6, { touched: [n.id] });
+      from = [e1.id, e2.id];
+      s.buffer.push(e1);
+      s.buffer.push(e2);
+      return { s, shownId: n.id };
+    }
+    const created = async (s: ReturnType<typeof setup>) =>
+      ((await s.noticer.run()) as { created: Neuron[] }).created;
+
+    test('shown an operator-message neuron: the new pattern is true, the fast lane skips it', async () => {
+      const { s, shownId } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'true' },
+      });
+      const made = await created(s);
+      expect(s.prompts[0]).toContain(shownId);
+      expect(made[0]?.meta?.operatorMessage).toBe('true');
+      expect(fastLaneCandidates(made, FAST_LANE_DEFAULTS)).toEqual([]);
+    });
+
+    test('shown an operator-sourced neuron without the flag (older): true', async () => {
+      const { s } = run({ kind: 'pattern', meta: { operatorSourced: 'true' } });
+      expect((await created(s))[0]?.meta?.operatorMessage).toBe('true');
+    });
+
+    test('shown an operator-sourced fact: true', async () => {
+      const { s } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      expect((await created(s))[0]?.meta?.operatorMessage).toBe('true');
+    });
+
+    test('shown only clean neurons: false, the fast lane sends it', async () => {
+      const { s } = run({
+        kind: 'pattern',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      const made = await created(s);
+      expect(made[0]?.meta?.operatorMessage).toBe('false');
+      expect(fastLaneCandidates(made, FAST_LANE_DEFAULTS).map((c) => c.neuronId)).toEqual([
+        made[0]?.id,
+      ]);
+    });
+
+    test('a recognition while shown an operator-message neuron marks it true', async () => {
+      const { s } = run({
+        kind: 'fact',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'true' },
+      });
+      const p = s.graph.addNeuron({
+        kind: 'pattern',
+        text: PATTERN,
+        support: { bots: ['b1', 'b2'] },
+        createdBy: 'watcher',
+        meta: { source: 'notice', operatorSourced: 'true', operatorMessage: 'false' },
+      });
+      const out = (await s.noticer.run()) as { recognised: Neuron[] };
+      expect(out.recognised[0]?.id).toBe(p.id);
+      expect(s.graph.get(p.id)?.meta?.operatorMessage).toBe('true');
+    });
   });
 
   test('a neuron a curiosity surprise supports is operatorSourced', async () => {

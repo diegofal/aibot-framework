@@ -325,7 +325,11 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
   );
   const delivered = broadcasts.filter((b) => !!b.deliveredAt);
   const servedByRows = new Set(servedFromCycles(delivered, records.cycles ?? []).map((s) => s.id));
-  const served = delivered.filter((b) => !!b.servedByCycle || servedByRows.has(b.id)).length;
+  const isServed = (b: Broadcast) => !!b.servedByCycle || servedByRows.has(b.id);
+  const served = delivered.filter(isServed).length;
+  // O1: fast lane vs integrate (a record older than `source` is integrate's).
+  const fastLane = delivered.filter((b) => b.source === 'fast-lane');
+  const integrated = delivered.filter((b) => b.source !== 'fast-lane');
   push({
     id: 'causal',
     label: 'Broadcasts served by a cycle',
@@ -340,6 +344,10 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
       served,
       up: broadcasts.filter((b) => b.signal === 'up').length,
       down: broadcasts.filter((b) => b.signal === 'down').length,
+      fastLaneDelivered: fastLane.length,
+      fastLaneServed: fastLane.filter(isServed).length,
+      integrateDelivered: integrated.length,
+      integrateServed: integrated.filter(isServed).length,
     },
   });
 

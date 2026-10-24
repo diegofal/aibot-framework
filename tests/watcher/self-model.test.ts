@@ -153,6 +153,24 @@ describe('attention', () => {
     expect(att.items[0]?.what).toBe('Jarvis finished a cycle');
   });
 
+  // Review 2026-10-24 (privacy): pass records clip per line; a multi-line
+  // operator message must be one line wherever a prompt shows it.
+  test('a multi-line operator message is one line', () => {
+    const op = item(9, {
+      fromOperator: true,
+      event: {
+        botId: 'b1',
+        channelKind: 'dashboard',
+        chatId: 'operator',
+        userId: 'operator',
+        timestamp: 0,
+        text: 'first line\nsecond line\n\nthird line',
+      },
+    } as never);
+    const att = attention({ phase: 'sense', items: [op], graph: graph([]), attending: [] });
+    expect(att.items[0]?.what).toContain('first line second line third line');
+  });
+
   test('dedupes items by id and drops touched ids the graph does not know', () => {
     const one = item(2, { touched: ['n-missing'] });
     const att = attention({ phase: 'sense', items: [one, one], graph: graph([]), attending: [] });

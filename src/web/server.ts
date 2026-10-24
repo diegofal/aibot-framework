@@ -20,6 +20,7 @@ import { HygieneRegistry } from '../hygiene/registry';
 import type { Logger } from '../logger';
 import { McpServer } from '../mcp/server';
 import type { SessionManager } from '../session';
+import { EmbeddingProbe } from '../stats/embedding-probe';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { PresenceTracker } from '../stats/presence-tracker';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
@@ -495,6 +496,14 @@ export function startWebServer(deps: WebServerDeps): void {
       botManager: deps.botManager,
       logger,
       karmaService: karmaService ?? undefined,
+      embeddingProbe: new EmbeddingProbe({
+        model: config.soul.search?.embeddingModel,
+        embed: async (text) => {
+          const model = config.soul.search?.embeddingModel;
+          if (!model) throw new Error('no embedding model configured');
+          return (await deps.botManager.getOllamaClient().embed(text, model)).embedding;
+        },
+      }),
     })
   );
 
@@ -515,6 +524,8 @@ export function startWebServer(deps: WebServerDeps): void {
     },
     channelStateOf: (botId) => deps.botManager.getChannelState(botId)?.state,
     workerRuns: (botId) => workerPool()?.list(botId, { endedLimit: 20 }) ?? [],
+    // watcher-graph cleans the live watcher's graph through it, never its files.
+    watcherGraph: () => deps.watcher?.graph,
     // productions-triage archives through the service so index.html is rebuilt.
     archiveProduction: productionsService
       ? (botId, path, reason) => productionsService.archiveFile(botId, path, reason)

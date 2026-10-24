@@ -23,6 +23,7 @@ import { goalLint } from './routines/goal-lint';
 import { memoryHygiene } from './routines/memory-hygiene';
 import { productionsTriage } from './routines/productions-triage';
 import { soulStructure } from './routines/soul-structure';
+import { WATCHER_GRAPH_ROUTINE_ID, watcherGraph } from './routines/watcher-graph';
 import {
   HYGIENE_HISTORY_LIMIT,
   type HygieneApplyResult,
@@ -56,6 +57,7 @@ export interface HygieneRegistryDeps {
   lastHealthCheckOf?: HygieneDeps['lastHealthCheckOf'];
   archiveProduction?: HygieneDeps['archiveProduction'];
   workerRuns?: HygieneDeps['workerRuns'];
+  watcherGraph?: HygieneDeps['watcherGraph'];
 }
 
 export interface HygieneRunRequest {
@@ -133,6 +135,9 @@ export class HygieneHistory {
 // Registry
 // ---------------------------------------------------------------------------
 
+/** Routines `all` (and so `/cleanup`) never runs: each is a deliberate, one-button act. */
+const NOT_IN_ALL = new Set([WATCHER_GRAPH_ROUTINE_ID]);
+
 /** Routines whose fixes rewrite files in the bot's soul dir. */
 const SOUL_ROUTINES = new Set(['goal-lint', 'soul-structure', 'memory-hygiene']);
 
@@ -196,9 +201,17 @@ export class HygieneRegistry {
         ? { archiveProduction: registryDeps.archiveProduction }
         : {}),
       ...(registryDeps.workerRuns ? { workerRuns: registryDeps.workerRuns } : {}),
+      ...(registryDeps.watcherGraph ? { watcherGraph: registryDeps.watcherGraph } : {}),
     };
     this.history = new HygieneHistory(this.dataDir, registryDeps.logger);
-    for (const r of [goalLint, soulStructure, memoryHygiene, productionsTriage, dataCleanup]) {
+    for (const r of [
+      goalLint,
+      soulStructure,
+      memoryHygiene,
+      productionsTriage,
+      dataCleanup,
+      watcherGraph,
+    ]) {
       this.register(r);
     }
   }
@@ -364,7 +377,7 @@ export class HygieneRegistry {
     const fleetRoutines =
       req.includeFleet === false
         ? []
-        : [...this.routines.values()].filter((r) => r.scope === 'fleet');
+        : [...this.routines.values()].filter((r) => r.scope === 'fleet' && !NOT_IN_ALL.has(r.id));
 
     const tag = (prefix: string, botId: string | undefined, findings: HygieneFinding[]) =>
       findings.map((f) => ({ ...f, id: `${prefix}:${f.id}`, botId }));
