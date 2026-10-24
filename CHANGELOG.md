@@ -4,6 +4,7 @@
 
 ### Fixed (2026-10-24) — Watcher gaps follow-up
 - **A repeat window does not slide** (`src/watcher/sense.ts`). **Why.** Every sighting moved the 60 s window, so a tool failing every 30 s was never novel again and never re-activated its neurons. The window now opens on the first sighting: one activation per `REPEAT_WINDOW_MS`. Test: `tests/watcher/sense.test.ts`.
+- **A slow broadcast is not delivered twice** (`src/watcher/broadcast.ts`). **Why.** `send()` skipped every open record older than `BROADCAST_INFLIGHT_MAX_MS` in the duplicate check, also one this process was still delivering: a question hanging over 10 min and re-proposed went out twice. Only records another process left open stop counting (closed as `interrupted` on load, or stale after load); one this instance opened is in flight until its delivery settles. Test: `tests/watcher/broadcast.test.ts`.
 
 ### Fixed (2026-10-24) — Watcher day-2 gaps
 - **Why.** Live, after four Opus integrate passes: 2 cross-bot insights, 3 predictions, 0 broadcasts, although the graph held actionable items (two bots run the same Monday AI-engineer brief; the recruiting pilot's LLM-scoring assumption rests on a RoBERTa figure). A canary fact planted in a dashboard thread was in the graph, but the bot asked about it never called `fleet_memory_search`. One failing `web_fetch` gave four "novel" rows in a second. The watcher scored 0 on "why am I attending to this".

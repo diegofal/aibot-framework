@@ -17,7 +17,9 @@
  * A record still open (neither delivered nor failed) after
  * `BROADCAST_INFLIGHT_MAX_MS` was left by a process that exited mid-delivery
  * (`isStaleOpen`): it no longer blocks a retry, and on load it is closed as
- * failed ("interrupted"), so it keeps its slot of that day's cap.
+ * failed ("interrupted"), so it keeps its slot of that day's cap. A record
+ * this instance opened is in flight until its delivery settles, however
+ * slow: it always blocks a duplicate.
  * A question the shared proactive throttle refused is `deferred`, not failed:
  * nothing was attempted, so it neither counts toward the cap nor blocks a
  * retry once the cooldown is over.
@@ -176,6 +178,8 @@ export function readBroadcasts(dir: string): Broadcast[] {
 
 export class Broadcaster {
   private byId = new Map<string, Broadcast>();
+  /** Records this instance opened and has not closed yet: in flight, however slow. */
+  private readonly delivering = new Set<string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: BroadcasterDeps) {
@@ -240,7 +244,9 @@ export class Broadcaster {
       if (b.insightId !== insightId || b.kind !== kind) continue;
       // A failed or deferred delivery may be retried; a delivered or in-flight one may not.
       if (b.deliveryError !== undefined && !b.deliveredAt) continue;
-      if (isStaleOpen(b, this.now())) continue;
+      // Stale only when another process left it open; a slow delivery of
+      // this instance is still in flight (a retry would deliver twice).
+      if (!this.delivering.has(b.id) && isStaleOpen(b, this.now())) continue;
       return { status: 'duplicate' };
     }
     if (this.countToday(botId) >= this.cap) {
@@ -262,6 +268,7 @@ export class Broadcaster {
       createdAt: this.iso(),
     };
     this.put(created);
+    this.delivering.add(created.id);
 
     let outcome: { ok: boolean; detail?: string; deferred?: boolean };
     try {
@@ -283,6 +290,7 @@ export class Broadcaster {
     // Recorded (not dropped) so the record that held the cap slot while in
     // flight is closed; `deferred` takes it out of the cap and the duplicates.
     this.put(done);
+    this.delivering.delete(created.id);
     const status = outcome.ok ? 'delivered' : outcome.deferred ? 'deferred' : 'failed';
     this.deps.log?.say(
       'broadcast',

@@ -286,6 +286,28 @@ describe('Broadcaster: records left open by a process exit', () => {
     expect((await send(b)).status).toBe('duplicate');
   });
 
+  test('a delivery of this process hanging past the limit is still in flight: a re-proposal is a duplicate', async () => {
+    let release: () => void = () => {};
+    const hanging = new Promise<void>((r) => {
+      release = r;
+    });
+    const asked: string[] = [];
+    const { b } = setup({
+      question: async (bot) => {
+        asked.push(bot);
+        if (asked.length === 1) await hanging;
+        return { ok: true, detail: 'sent' };
+      },
+    });
+    const first = send(b, { kind: 'question' });
+    await Promise.resolve();
+    t += BROADCAST_INFLIGHT_MAX_MS + 60_000;
+    expect((await send(b, { kind: 'question' })).status).toBe('duplicate');
+    expect(asked).toEqual(['b1']);
+    release();
+    expect((await first).status).toBe('delivered');
+  });
+
   test('an open record that went stale after load no longer blocks a retry', async () => {
     writeOpen(60_000);
     const { b, calls } = setup();
