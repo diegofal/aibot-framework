@@ -605,6 +605,35 @@ describe('Noticer provenance (phase 3)', () => {
     expect(n.meta?.operatorSourced).toBe('true');
   });
 
+  // Review 2026-10-24: a recognition used to leave the support as the first
+  // pass wrote it; the second bot never joined and the provenance never moved.
+  test('a recognition unions the pass bots and cycles and re-marks operatorSourced', async () => {
+    let from: string[] = [];
+    const s = setup({
+      reply: async () => ({
+        text: JSON.stringify({
+          keep: [{ text: 'Users ask about the weather', kind: 'topic', from }],
+        }),
+      }),
+    });
+    const pub = item(userSays('b1', 'weather'));
+    from = [pub.id];
+    s.buffer.push(pub);
+    const first = (await s.noticer.run()) as { created: Neuron[] };
+    const n = first.created[0] as Neuron;
+    expect(n.meta?.operatorSourced).toBeUndefined();
+    t += 60_000;
+    const err = item(toolError('b2', 'c-9'));
+    from = [err.id];
+    s.buffer.push(err);
+    const second = (await s.noticer.run()) as { created: Neuron[]; recognised: Neuron[] };
+    expect(second.created).toEqual([]);
+    expect(second.recognised[0]?.id).toBe(n.id);
+    expect(second.recognised[0]?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c-9'] });
+    expect(s.graph.get(n.id)?.meta?.operatorSourced).toBe('true');
+    expect(s.graph.get(n.id)?.activations).toBe(2);
+  });
+
   test('a neuron a curiosity surprise supports is operatorSourced', async () => {
     const e = item(surprise('b1'));
     const s = setup({ reply: keepOf('Jarvis learned the tax deadline moved', [e.id]) });

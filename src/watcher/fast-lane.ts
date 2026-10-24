@@ -5,9 +5,11 @@
  * on thelancet.com and medium.com" from two bots; it waited 12 h for an
  * integrate pass that never broadcast it, and a third bot hit the same wall.
  *
- * Right after a notice pass, every neuron it created that is a `pattern` (or a
- * `fact` at confidence `high`) supported by at least `fastLane.minBots` bots is
- * a candidate (`fastLaneCandidates`). Its targets (`fastLaneTargets`) are the
+ * Right after a notice pass, every neuron it created or recognised that is a
+ * `pattern` (or a `fact` at confidence `high`) supported by at least
+ * `fastLane.minBots` bots is a candidate (`fastLaneCandidates`): a recognition
+ * unions the pass's bots into the neuron's support, so two bots hitting the
+ * same wall in different passes qualify on the second. Its targets (`fastLaneTargets`) are the
  * eligible bots (enabled, not a customer tenant's: the caller passes them, and
  * the broadcaster refuses a tenant bot anyway) that are NOT among its
  * supporting bots and that relate to it: a `related` edge between the pattern
@@ -58,7 +60,7 @@ export interface FastLaneTargetContext {
   toolsUsed?: (botId: string) => string[];
 }
 
-/** The fast-lane candidates among the neurons a notice pass created. Pure. */
+/** The fast-lane candidates among the neurons a notice pass created or recognised. Pure. */
 export function fastLaneCandidates(created: Neuron[], cfg: FastLaneConfig): FastLaneCandidate[] {
   if (!cfg.enabled) return [];
   const out: FastLaneCandidate[] = [];
@@ -166,7 +168,7 @@ function narrateFastLaneCapped(maxPerDay: number): string {
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
 /**
- * Sends the fast-lane directives for what a notice pass created. One row per
+ * Sends the fast-lane directives for what a notice pass created or recognised. One row per
  * pattern that reached a bot (`broadcast:fast-lane`), one row per UTC day
  * when the daily cap holds the rest (`broadcast:fast-lane-capped`). Never throws.
  */

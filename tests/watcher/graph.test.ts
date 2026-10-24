@@ -311,6 +311,29 @@ describe('Graph.patchMeta (phase 3)', () => {
   });
 });
 
+describe('Graph.addSupport (review 2026-10-24)', () => {
+  test('unions bots and cycles, persists, emits once; nothing new is a no-op', () => {
+    const changes: GraphChange[] = [];
+    const g = graph({ onChange: (c) => changes.push(c) });
+    const n = g.addNeuron(
+      fact('web_fetch is blocked', { support: { bots: ['b1'], cycles: ['c1'] } })
+    );
+    changes.length = 0;
+    const next = g.addSupport(n.id, { bots: ['b2', 'b1'], cycles: ['c2'] });
+    expect(next?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c1', 'c2'] });
+    expect(next?.activations).toBe(n.activations);
+    expect(changes.map((c) => c.type)).toEqual(['neuron']);
+    expect(graph().get(n.id)?.support).toEqual({ bots: ['b1', 'b2'], cycles: ['c1', 'c2'] });
+    changes.length = 0;
+    expect(g.addSupport(n.id, { bots: ['b2'], cycles: [] })?.support.bots).toEqual(['b1', 'b2']);
+    expect(changes).toEqual([]);
+  });
+
+  test('unknown id is undefined', () => {
+    expect(graph().addSupport('n-nope', { bots: ['b1'] })).toBeUndefined();
+  });
+});
+
 describe('Graph: the sensing hot path', () => {
   /** A graph.json with `count` neurons, each with words no other shares, loaded. */
   function bigGraph(count: number, extra: Array<{ id: string; text: string }> = []) {

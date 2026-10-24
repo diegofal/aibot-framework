@@ -460,11 +460,15 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   /**
-   * O1: what a notice pass created that two bots support goes to the related
+   * O1: what a notice pass created or recognised that two bots support goes to the related
    * third bots at once, as directives (`fast-lane.ts`). Never throws.
    */
   private async fastLane(outcome: NoticeOutcome, isCancelled: () => boolean): Promise<void> {
-    if (outcome.status !== 'noticed' || outcome.created.length === 0) return;
+    if (outcome.status !== 'noticed') return;
+    // Created and recognised: a pattern a later pass recognised from another
+    // bot qualifies then (the broadcaster's per-bot dedupe prevents resends).
+    const neurons = [...outcome.created, ...outcome.recognised];
+    if (neurons.length === 0) return;
     const toolsUsed = this.deps.toolsUsed;
     await runFastLane(
       {
@@ -490,7 +494,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         state: this.fastLaneState,
         logger: this.logger,
       },
-      outcome.created
+      neurons
     );
   }
 

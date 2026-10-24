@@ -5,7 +5,9 @@
  * the neurons it touched to a cheap model and keeps what is worth remembering
  * as new neurons (`createdBy: 'watcher'`), merging into an existing one when
  * the text (`textSimilarity ≥ 0.8`) or, with embeddings, the meaning
- * (`≥ graph.relatedThreshold`) is already known.
+ * (`≥ graph.relatedThreshold`) is already known. A recognition unions the
+ * pass items' bots and cycles into that neuron's support (`Graph.addSupport`)
+ * and marks it `operatorSourced` by the same rule as a new one (never unmarks).
  *
  * Code decides what the model sees (`noticeItems`: tier 0 already reduced
  * non-operator text to topic words; tool args and results never reach it) and
@@ -417,17 +419,6 @@ export class Noticer {
       }
     }
     if (isCancelled()) return null;
-    if (match) {
-      const active = graph.activate(match.id) ?? match;
-      log.say(
-        'notice',
-        'notice:recognised',
-        narrateNoticeRecognised({ text: active.text, activations: active.activations }),
-        { neuronIds: [active.id], source: 'watcher:notice' }
-      );
-      return { neuron: active, created: false, from };
-    }
-
     const bots = [...new Set(support.map((i) => i.event.botId))];
     const cycles = [
       ...new Set(
@@ -440,6 +431,27 @@ export class Noticer {
           .filter((c): c is string => typeof c === 'string' && c.length > 0)
       ),
     ];
+    const operatorSourced = shownOperator || restsOnOperatorMaterial(support);
+    if (match) {
+      graph.activate(match.id);
+      // What this pass's items add: their bots and cycles join the support,
+      // and operator material behind them marks it (never unmarks).
+      if (isKeepKind(match.kind)) {
+        graph.addSupport(match.id, { bots, cycles });
+        if (operatorSourced && !isOperatorSourced(match)) {
+          graph.patchMeta(match.id, { [OPERATOR_SOURCED]: 'true' });
+        }
+      }
+      const active = graph.get(match.id) ?? match;
+      log.say(
+        'notice',
+        'notice:recognised',
+        narrateNoticeRecognised({ text: active.text, activations: active.activations }),
+        { neuronIds: [active.id], source: 'watcher:notice' }
+      );
+      return { neuron: active, created: false, from };
+    }
+
     const owners = bots
       .map((b) => graph.findByKey(`bot:${b}`))
       .filter((n): n is Neuron => !!n && !n.archivedAt);
@@ -463,9 +475,7 @@ export class Noticer {
         source: 'notice',
         model,
         ...(eventAt ? { eventAt } : {}),
-        ...(shownOperator || restsOnOperatorMaterial(support)
-          ? { [OPERATOR_SOURCED]: 'true' }
-          : {}),
+        ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

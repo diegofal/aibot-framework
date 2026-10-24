@@ -1886,6 +1886,71 @@ describe('Watcher fast lane (O1)', () => {
     expect(prompts[0]).toContain('directive to Scout (delivered, fast lane)');
     await watcher.stop();
   });
+
+  // Review 2026-10-24: a recognised neuron never gained the second bot, and the
+  // fast lane only saw what a pass created, so two bots hitting the same wall
+  // in different notice passes never qualified.
+  test('bot A creates a pattern, a later bot B pass recognises it: both support it and bot C hears', async () => {
+    const directives: Array<{ botId: string; text: string }> = [];
+    let ids: string[] = [];
+    const { client: notice } = noticeClient(() =>
+      JSON.stringify({
+        keep: [
+          {
+            text: 'web_fetch is blocked by Cloudflare on thelancet.com and medium.com',
+            kind: 'pattern',
+            confidence: 'medium',
+            from: ids,
+          },
+        ],
+      })
+    );
+    const { watcher, activityStream, config } = make(
+      {
+        llm: { notice: { client: notice, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        broadcastDelivery: {
+          directive: (botId, text) => void directives.push({ botId, text }),
+        },
+        toolsUsed: (botId) => (botId === 'b3' ? ['web_fetch'] : []),
+      },
+      noticeOn
+    );
+    for (const [id, name] of [
+      ['b2', 'Finny'],
+      ['b3', 'Scout'],
+    ]) {
+      config.bots.push({ id, name: id, soulDir: soul(id, name), enabled: true } as never);
+    }
+    await watcher.start();
+    await watcher.idle();
+    const blocked = (botId: string, cycleId: string) =>
+      activityStream.emit('activity', {
+        type: 'tool:error',
+        botId,
+        timestamp: t,
+        data: { toolName: 'web_fetch', error: 'Cloudflare challenge on thelancet.com', cycleId },
+      });
+    blocked('b1', 'c-a');
+    ids = watcher.buffer.items().map((i) => i.id);
+    const first = await watcher.noticeNow();
+    expect(first?.status === 'noticed' && first.created).toHaveLength(1);
+    const p = first?.status === 'noticed' ? first.created[0] : undefined;
+    expect(p?.support.bots).toEqual(['b1']);
+    expect(directives).toEqual([]);
+
+    t += 10 * 60_000;
+    blocked('b2', 'c-b');
+    ids = watcher.buffer.items().map((i) => i.id);
+    const second = await watcher.noticeNow();
+    expect(second?.status === 'noticed' && second.recognised.map((n) => n.id)).toEqual([
+      p?.id as string,
+    ]);
+    const after = watcher.graph.get(p?.id as string);
+    expect(after?.support.bots).toEqual(['b1', 'b2']);
+    expect(after?.support.cycles).toEqual(['c-a', 'c-b']);
+    expect(directives.map((d) => d.botId)).toEqual(['b3']);
+    await watcher.stop();
+  });
 });
 
 // O2 + O3 (docs/plans/watcher-optimizations-plan.md): passes wake on salience,

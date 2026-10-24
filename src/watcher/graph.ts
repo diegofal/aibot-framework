@@ -299,6 +299,29 @@ export class Graph {
     return next;
   }
 
+  /**
+   * Union `bots` and `cycles` into a neuron's support (a later notice pass
+   * recognised it from other bots). Not a firing; a no-op when nothing is new.
+   */
+  addSupport(id: string, add: { bots?: string[]; cycles?: string[] }): Neuron | undefined {
+    const n = this.neurons.get(id);
+    if (!n) return undefined;
+    const bots = [...new Set([...n.support.bots, ...(add.bots ?? [])])];
+    const cycles = [...new Set([...(n.support.cycles ?? []), ...(add.cycles ?? [])])];
+    if (
+      bots.length === n.support.bots.length &&
+      cycles.length === (n.support.cycles ?? []).length
+    ) {
+      return n;
+    }
+    const next: Neuron = {
+      ...n,
+      support: { ...n.support, bots, ...(cycles.length ? { cycles } : {}) },
+    };
+    this.writeNeuron(next);
+    return next;
+  }
+
   /** Remove attributes from a neuron's `meta`. Not a firing; a no-op when none is set. */
   dropMeta(id: string, keys: string[]): Neuron | undefined {
     const n = this.neurons.get(id);
