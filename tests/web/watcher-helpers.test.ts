@@ -298,6 +298,18 @@ describe('stateHtml', () => {
     expect(html).not.toContain('data-action="watcher-start"');
   });
 
+  it('says "last event sensed", and "fleet quiet" after 30 min of nothing while awake', () => {
+    expect(stateHtml(runningState(), NOW)).toContain('last event sensed just now');
+    expect(stateHtml(runningState(), NOW)).not.toContain('last tick');
+    const quiet = stateHtml(runningState({ lastTickAt: '2026-10-23T08:00:00Z' }), NOW);
+    expect(quiet).toContain('last event sensed 2 h ago (fleet quiet)');
+    const asleep = stateHtml(
+      runningState({ running: false, lastTickAt: '2026-10-23T08:00:00Z' }),
+      NOW
+    );
+    expect(asleep).not.toContain('fleet quiet');
+  });
+
   it('skips zero counts', () => {
     expect(stateHtml(runningState(), NOW)).not.toContain('goal');
   });
@@ -760,9 +772,17 @@ describe('small formatters', () => {
 
   it('legendHtml lists every kind and both origins', () => {
     const html = legendHtml();
-    for (const k of NEURON_KINDS) expect(html).toContain(`</i>${k}</span>`);
+    for (const k of NEURON_KINDS) expect(html).toContain(`</i>${k}</button>`);
     expect(html).toContain('from a bot');
     expect(html).toContain("the watcher's own");
+  });
+
+  it('legendHtml: every kind is a filter button, the active one pressed', () => {
+    const html = legendHtml('goal');
+    for (const k of NEURON_KINDS) expect(html).toContain(`data-legend-kind="${k}"`);
+    expect(html).toMatch(/data-legend-kind="goal"[^>]*aria-pressed="true"/);
+    expect(html).toMatch(/data-legend-kind="fact"[^>]*aria-pressed="false"/);
+    expect(legendHtml()).not.toContain('aria-pressed="true"');
   });
 });
 

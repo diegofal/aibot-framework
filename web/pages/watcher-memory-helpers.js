@@ -15,7 +15,6 @@
  * (`neuronToWhy` in `src/why/builders/watcher.ts`, note "Why archived").
  */
 import { esc } from '../ui/index.js';
-import { SIGNAL_NEURON_KINDS } from './watcher-metrics-helpers.js';
 
 const MAX_ROWS = 30;
 const fmt = (n) => Number(n).toLocaleString('en-US');
@@ -44,7 +43,7 @@ export function memoryCountsHtml(state) {
   )}</b> live · <b>${fmt(archived)}</b> archived</span>`;
 }
 
-const THOUGHT_KINDS = [...SIGNAL_NEURON_KINDS, 'summary'];
+const THOUGHT_KINDS = ['insight', 'contradiction', 'prediction', 'summary'];
 
 /**
  * True when a live effect (`applyWatcherEvent`) on this neuron changes the

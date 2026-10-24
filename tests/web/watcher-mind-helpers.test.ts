@@ -1,0 +1,290 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  MIND_PAGE_SIZE,
+  MIND_TABS,
+  broadcastStatus,
+  contradictionSides,
+  kindFilterIds,
+  mindCounts,
+  mindListHtml,
+  mindRows,
+  mindTabBlurb,
+  mindTabsHtml,
+  predictionOutcome,
+} from '../../web/pages/watcher-mind-helpers.js';
+
+const NOW = Date.parse('2026-10-24T12:00:00Z');
+
+const n = (id: string, kind: string, createdAt: string, over: Record<string, unknown> = {}) => ({
+  id,
+  kind,
+  text: `text ${id}`,
+  support: { bots: ['b1', 'b2'] },
+  createdBy: 'watcher',
+  createdAt,
+  lastActivatedAt: createdAt,
+  activations: 3,
+  ...over,
+});
+
+const bc = (over: Record<string, unknown> = {}) => ({
+  id: 'b-1',
+  botId: 'scout',
+  kind: 'directive',
+  text: 'Coordinate with Jarvis',
+  insightId: 'n-1',
+  createdAt: '2026-10-24T10:00:00Z',
+  deliveredAt: '2026-10-24T10:00:00Z',
+  why: { what: 'Directive to Scout', by: 'watcher' },
+  ...over,
+});
+
+describe('MIND_TABS', () => {
+  test('one tab per kind the operator reads, in the agreed order, each with a blurb', () => {
+    expect(MIND_TABS.map((t) => t.label)).toEqual([
+      'Insights',
+      'Predictions',
+      'Patterns',
+      'Broadcasts',
+      'Contradictions',
+      'Surprises',
+      'Questions',
+      'Topics',
+      'Facts',
+      'People',
+      'Goals',
+    ]);
+    for (const t of MIND_TABS) expect(t.blurb.length).toBeGreaterThan(20);
+    expect(mindTabBlurb('prediction')).toContain('0.25 is a coin flip');
+    expect(mindTabBlurb('nope')).toBe('');
+  });
+});
+
+describe('mindCounts', () => {
+  test('live neurons per kind, broadcasts from the list; archived do not count', () => {
+    const counts = mindCounts(
+      [
+        n('n-1', 'insight', '2026-10-24T10:00:00Z'),
+        n('n-2', 'insight', '2026-10-24T10:00:00Z', { archivedAt: '2026-10-24T11:00:00Z' }),
+        n('n-3', 'fact', '2026-10-24T10:00:00Z'),
+      ],
+      [bc(), bc({ id: 'b-2' })]
+    );
+    expect(counts.insight).toBe(1);
+    expect(counts.fact).toBe(1);
+    expect(counts.broadcast).toBe(2);
+    expect(counts.person).toBe(0);
+  });
+});
+
+describe('mindRows', () => {
+  const neurons = [
+    n('n-1', 'fact', '2026-10-24T09:00:00Z', { text: 'Invoices go out on Monday' }),
+    n('n-2', 'fact', '2026-10-24T11:00:00Z', { text: 'The client pays late' }),
+    n('n-3', 'fact', '2026-10-24T10:00:00Z', { archivedAt: '2026-10-24T11:00:00Z' }),
+    n('n-4', 'topic', '2026-10-24T11:30:00Z'),
+  ];
+
+  test('one kind, live only, newest first', () => {
+    expect(mindRows('fact', { neurons }).map((r) => r.id)).toEqual(['n-2', 'n-1']);
+  });
+
+  test('search matches text and supporting bots, case-insensitive', () => {
+    expect(mindRows('fact', { neurons, query: 'INVOICE' }).map((r) => r.id)).toEqual(['n-1']);
+    expect(mindRows('fact', { neurons, query: 'b2' })).toHaveLength(2);
+    expect(mindRows('fact', { neurons, query: 'zzz' })).toHaveLength(0);
+  });
+
+  test('broadcasts come from the list, searchable by bot and kind', () => {
+    const broadcasts = [
+      bc({ id: 'b-1', createdAt: '2026-10-24T08:00:00Z' }),
+      bc({ id: 'b-2', botId: 'jarvis', kind: 'wake', createdAt: '2026-10-24T09:00:00Z' }),
+    ];
+    expect(mindRows('broadcast', { broadcasts }).map((r) => r.id)).toEqual(['b-2', 'b-1']);
+    expect(mindRows('broadcast', { broadcasts, query: 'wake' }).map((r) => r.id)).toEqual(['b-2']);
+  });
+});
+
+describe('predictionOutcome / broadcastStatus', () => {
+  test('pending, happened, did not happen', () => {
+    expect(predictionOutcome(n('n-1', 'prediction', 'x', { meta: {} }))).toBe('pending');
+    expect(
+      predictionOutcome(
+        n('n-1', 'prediction', 'x', { meta: { resolvedAt: 'y', happened: 'true' } })
+      )
+    ).toBe('happened');
+    expect(
+      predictionOutcome(
+        n('n-1', 'prediction', 'x', { meta: { resolvedAt: 'y', happened: 'false' } })
+      )
+    ).toBe('missed');
+  });
+
+  test('delivered, deferred, failed', () => {
+    expect(broadcastStatus(bc())).toBe('delivered');
+    expect(broadcastStatus(bc({ deliveredAt: undefined, deferred: true }))).toBe('deferred');
+    expect(broadcastStatus(bc({ deliveredAt: undefined }))).toBe('failed');
+  });
+});
+
+describe('contradictionSides', () => {
+  test('the two neurons its contradicts edges point at, with their text', () => {
+    const edges = [
+      { id: 'e-1', from: 'n-c', to: 'n-a', rel: 'contradicts', weight: 1 },
+      { id: 'e-2', from: 'n-c', to: 'n-b', rel: 'contradicts', weight: 1 },
+      { id: 'e-3', from: 'n-c', to: 'n-z', rel: 'owned_by', weight: 1 },
+    ];
+    const text = { 'n-a': 'Jarvis says yes', 'n-b': 'Scout says no' } as Record<string, string>;
+    expect(contradictionSides('n-c', edges, (id: string) => text[id] ?? null)).toEqual([
+      { id: 'n-a', text: 'Jarvis says yes' },
+      { id: 'n-b', text: 'Scout says no' },
+    ]);
+    expect(contradictionSides('n-x', edges, () => null)).toEqual([]);
+  });
+});
+
+describe('kindFilterIds', () => {
+  test('live ids of one kind; no kind → empty', () => {
+    const neurons = [
+      n('n-1', 'goal', 'x'),
+      n('n-2', 'goal', 'x', { archivedAt: 'y' }),
+      n('n-3', 'fact', 'x'),
+    ];
+    expect(kindFilterIds(neurons, 'goal')).toEqual(['n-1']);
+    expect(kindFilterIds(neurons, null)).toEqual([]);
+  });
+});
+
+describe('mindTabsHtml', () => {
+  test('a tab button per kind with its count; the active one pressed', () => {
+    const html = mindTabsHtml({ insight: 4, prediction: 2 }, 'prediction');
+    expect(html).toContain('data-mind-tab="insight"');
+    expect(html).toMatch(/data-mind-tab="prediction"[^>]*aria-selected="true"/);
+    expect(html).toMatch(/Insights<\/span><b[^>]*>4<\/b>/);
+    expect(html).toMatch(/Facts<\/span><b[^>]*>0<\/b>/);
+  });
+});
+
+describe('mindListHtml', () => {
+  test('a prediction: probability, due, pending badge, open button', () => {
+    const p = n('n-p', 'prediction', '2026-10-24T10:00:00Z', {
+      meta: { probability: '0.7', horizonHours: '24', dueAt: '2026-10-24T17:00:00Z' },
+    });
+    const html = mindListHtml('prediction', [p], { nowMs: NOW });
+    expect(html).toContain('70 %');
+    expect(html).toContain('due in 5 h');
+    expect(html).toContain('pending');
+    expect(html).toContain('data-mind-open="n-p"');
+  });
+
+  test('a resolved prediction: outcome, Brier, evidence in a fold', () => {
+    const p = n('n-p', 'prediction', '2026-10-23T10:00:00Z', {
+      meta: {
+        probability: '0.2',
+        dueAt: '2026-10-24T10:00:00Z',
+        resolvedAt: '2026-10-24T10:05:00Z',
+        happened: 'false',
+        brier: '0.04',
+        evidence: 'No cycle served the goal',
+      },
+    });
+    const html = mindListHtml('prediction', [p], { nowMs: NOW });
+    expect(html).toContain('did not happen');
+    expect(html).toContain('Brier 0.04');
+    expect(html).toContain('No cycle served the goal');
+    expect(html).toContain('data-open-key="n-p:evidence"');
+    const open = mindListHtml('prediction', [p], { nowMs: NOW, open: new Set(['n-p:evidence']) });
+    expect(open).toContain('<details class="watcher-mind-fold" open>');
+  });
+
+  test('an insight: bots, confidence, broadcast status or why not, signals', () => {
+    const i = n('n-1', 'insight', '2026-10-24T10:00:00Z', { confidence: 'high' });
+    const sent = mindListHtml('insight', [i], { nowMs: NOW, broadcasts: [bc()] });
+    expect(sent).toContain('b1, b2');
+    expect(sent).toContain('high');
+    expect(sent).toContain('broadcast to scout');
+    expect(sent).toContain('data-watcher-signal="up"');
+    expect(sent).toContain('data-signal-id="n-1"');
+    const held = mindListHtml(
+      'insight',
+      [n('n-2', 'insight', '2026-10-24T10:00:00Z', { meta: { whyNoBroadcast: 'Only one bot' } })],
+      { nowMs: NOW, broadcasts: [] }
+    );
+    expect(held).toContain('not broadcast: Only one bot');
+  });
+
+  test('a broadcast: target bot, kind, status, Open cycle, Why through the shared panel', () => {
+    const html = mindListHtml(
+      'broadcast',
+      [bc({ servedByCycle: 'c-9', servedAt: '2026-10-24T11:00:00Z' })],
+      { nowMs: NOW }
+    );
+    expect(html).toContain('scout');
+    expect(html).toContain('directive');
+    expect(html).toContain('delivered');
+    expect(html).toContain('data-open-cycle="c-9"');
+    expect(html).toContain('data-bot-id="scout"');
+    expect(html).toContain('class="why');
+    expect(html).toContain('data-mind-open="n-1"');
+    expect(html).toContain('data-signal-id="b-1"');
+    const failed = mindListHtml(
+      'broadcast',
+      [bc({ deliveredAt: undefined, deliveryError: 'chat not found' })],
+      { nowMs: NOW }
+    );
+    expect(failed).toContain('failed');
+    expect(failed).toContain('chat not found');
+    const held = mindListHtml('broadcast', [bc({ deliveredAt: undefined, deferred: true })], {
+      nowMs: NOW,
+    });
+    expect(held).toContain('deferred');
+  });
+
+  test('a contradiction: both sides and Confirm / Dismiss', () => {
+    const c = n('n-c', 'contradiction', '2026-10-24T10:00:00Z');
+    const html = mindListHtml('contradiction', [c], {
+      nowMs: NOW,
+      sidesOf: () => [
+        { id: 'n-a', text: 'Jarvis says yes' },
+        { id: 'n-b', text: 'Scout says no' },
+      ],
+    });
+    expect(html).toContain('Jarvis says yes');
+    expect(html).toContain('Scout says no');
+    expect(html).toContain('data-mind-open="n-a"');
+    expect(html).toContain('Confirm');
+    expect(html).toContain('Dismiss');
+  });
+
+  test('other kinds: text, supporting bots, created, activations; no signals', () => {
+    const html = mindListHtml('fact', [n('n-f', 'fact', '2026-10-24T10:00:00Z')], { nowMs: NOW });
+    expect(html).toContain('text n-f');
+    expect(html).toContain('b1, b2');
+    expect(html).toContain('2 h ago');
+    expect(html).toContain('3 activations');
+    expect(html).not.toContain('data-watcher-signal');
+  });
+
+  test('pages 50 at a time with a "Show more" button; empty and no-match say so', () => {
+    const many = Array.from({ length: 120 }, (_, i) => n(`n-${i}`, 'fact', '2026-10-24T10:00:00Z'));
+    expect(MIND_PAGE_SIZE).toBe(50);
+    const first = mindListHtml('fact', many, { nowMs: NOW });
+    expect(first.match(/class="watcher-mind-row/g)).toHaveLength(50);
+    expect(first).toContain('Showing 50 of 120');
+    expect(first).toContain('data-action="watcher-mind-more"');
+    const all = mindListHtml('fact', many, { nowMs: NOW, shown: 150 });
+    expect(all.match(/class="watcher-mind-row/g)).toHaveLength(120);
+    expect(all).not.toContain('watcher-mind-more');
+    expect(mindListHtml('fact', [], { nowMs: NOW })).toContain('No facts yet');
+    expect(mindListHtml('fact', [], { nowMs: NOW, query: 'x' })).toContain('Nothing matches');
+  });
+
+  test('escapes neuron text', () => {
+    const html = mindListHtml(
+      'fact',
+      [n('n-f', 'fact', '2026-10-24T10:00:00Z', { text: '<script>x</script>' })],
+      { nowMs: NOW }
+    );
+    expect(html).not.toContain('<script>');
+  });
+});

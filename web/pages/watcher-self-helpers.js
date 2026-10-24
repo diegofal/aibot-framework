@@ -37,8 +37,35 @@ function row(label, value, { warn = false } = {}) {
   )}</span><span class="watcher-self-value">${esc(value)}</span></li>`;
 }
 
-/** "How I am": the interoception record in words; missing readings show as a dash. */
-export function howIAmHtml(intero) {
+/** Each card's title and the sentence that says what it is for (`cardHeadHtml`). */
+export const CARD_HEADS = {
+  how: {
+    title: 'How I am',
+    sub: 'What the watcher feels: these variables change how choosy it is (a busy CLI, an open breaker or a spent budget make it wait; a quiet operator raises its bar).',
+  },
+  attending: {
+    title: 'Attending to',
+    sub: 'Its working memory: what its last Opus pass focused on (lit in the ball), then the events waiting to be noticed.',
+  },
+  introspection: {
+    title: 'Introspection',
+    sub: "We ask it what it's doing and check the answer against the record; green = matched.",
+  },
+};
+
+/** A card's title with its muted subtitle. */
+export function cardHeadHtml(key) {
+  const h = CARD_HEADS[key];
+  if (!h) return '';
+  return `<div class="watcher-card-head"><div class="watcher-log-title">${esc(h.title)}</div><div class="watcher-card-sub">${esc(h.sub)}</div></div>`;
+}
+
+/**
+ * "How I am": the interoception record in words; missing readings show as a
+ * dash. `startedAt` (the state's, when this run woke) dates "no message since
+ * the watcher woke".
+ */
+export function howIAmHtml(intero, { startedAt = null, nowMs = Date.now() } = {}) {
   if (!intero || typeof intero !== 'object') {
     return '<div class="watcher-insights-empty text-dim">No reading yet.</div>';
   }
@@ -68,7 +95,7 @@ export function howIAmHtml(intero) {
     row(
       'Operator',
       silence === null || silence === undefined || !Number.isFinite(Number(silence))
-        ? 'not heard from yet'
+        ? `no message since the watcher woke${startedAt && relTime(startedAt, nowMs) ? ` (${relTime(startedAt, nowMs)})` : ''}`
         : `silent for ${Number(silence) < 1 ? 'under an hour' : `${Math.round(Number(silence))} h`}`
     ),
     row('Buffer salience', String(intero.bufferSalience ?? 0)),
@@ -131,7 +158,7 @@ export function introspectionHtml(rows, subjects, nowMs = Date.now(), { busy = f
     busy ? ' disabled' : ''
   }>${busy ? 'Asking…' : 'Ask me now'}</button>`;
   const summary = subs.length
-    ? `<ul class="watcher-self-list">${subs
+    ? `<div class="watcher-self-legend text-dim">Per subject: mean score over n answers; phase · tool · goal · cause = how often each part of its answer matched.</div><ul class="watcher-self-list">${subs
         .map((s) => {
           const shares = FIELDS.map(
             (f) => `${f} ${s.fields?.[f] === null ? '—' : pct(s.fields?.[f])}`

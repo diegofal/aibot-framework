@@ -1783,6 +1783,20 @@ describe('Watcher: last tick follows sensing', () => {
   });
 });
 
+describe('Watcher: startedAt (when this run woke)', () => {
+  test('absent asleep, the start instant while running, gone after stop', async () => {
+    const { watcher } = make();
+    expect(watcher.state().startedAt).toBeUndefined();
+    const started = new Date(t).toISOString();
+    await watcher.start();
+    await watcher.idle();
+    t += 60_000;
+    expect(watcher.state().startedAt).toBe(started);
+    await watcher.stop();
+    expect(watcher.state().startedAt).toBeUndefined();
+  });
+});
+
 describe('Watcher: live tier switches (applyConfig)', () => {
   const fake = { chat: async () => ({ text: '{}' }) } as unknown as LLMClient;
   const llm = {

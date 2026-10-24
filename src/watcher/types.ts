@@ -160,6 +160,8 @@ export interface WatcherState {
   bornAt?: string;
   phase: WatcherPhase;
   lastTickAt?: string;
+  /** When the current run started; absent while asleep. */
+  startedAt?: string;
   /** Live neurons per kind. */
   counts: Record<NeuronKind, number>;
   /** O10: archived neurons (forgotten, merged or consolidated); the header shows live / archived. */
