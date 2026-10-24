@@ -427,3 +427,15 @@ describe('canary run with keywords', () => {
     expect(row).toMatchObject({ found: true, expected: ['heliotrope'] });
   });
 });
+
+describe('accents', () => {
+  test('a keyword stripped of accents matches the accented answer', () => {
+    const fact = 'La capital del canario es Asunción';
+    expect(canaryKeywords(fact)).toContain('asuncion');
+    expect(answerRecallsCanary('Es Asunción.', fact, ['asuncion']).found).toBe(true);
+  });
+
+  test('an accented --expect word matches an unaccented answer', () => {
+    expect(answerRecallsCanary('It is asuncion', 'x', ['Asunción']).found).toBe(true);
+  });
+});

@@ -24,7 +24,12 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mentionsWord, textSimilarity, titleTokens } from '../../src/hygiene/text-utils';
+import {
+  mentionsWord,
+  normalizeTitle,
+  textSimilarity,
+  titleTokens,
+} from '../../src/hygiene/text-utils';
 import { fail, parseArgs, resolveCliContext } from '../system-cli';
 import { cliDataDir } from './baseline';
 import { url, type HttpDeps, headers } from './introspect';
@@ -207,7 +212,9 @@ export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}):
 
 /**
  * Whether an answer recalls the canary: it names every `expected` word
- * (`mentionsWord`). With no expected word, the sentence similarity decides.
+ * (`mentionsWord`), both sides normalised (`normalizeTitle`: case, accents,
+ * punctuation), since stored keywords are accent-stripped ("asuncion" names
+ * "Asunción"). With no expected word, the sentence similarity decides.
  * The similarity is always returned as a secondary signal.
  */
 export function answerRecallsCanary(
@@ -218,7 +225,8 @@ export function answerRecallsCanary(
   const { found: similar, similarity } = answerContainsFact(answer, fact);
   const words = expected.map((w) => w.trim()).filter(Boolean);
   if (words.length > 0) {
-    const hit = words.every((w) => mentionsWord(answer ?? '', w));
+    const text = normalizeTitle(answer ?? '');
+    const hit = words.every((w) => mentionsWord(text, normalizeTitle(w)));
     return { found: hit, similarity, matchedBy: hit ? 'keyword' : null };
   }
   return { found: similar, similarity, matchedBy: similar ? 'similarity' : null };
