@@ -116,6 +116,14 @@ export interface BotContext {
    * block in the planners or the conversation prompt.
    */
   watcherSelfState?: WatcherSelfStateSource;
+  /**
+   * The watcher's graph while it runs (`Watcher.fleetMemory`), set by
+   * `ToolRegistry.setFleetMemory` with the same source `fleet_memory_search`
+   * reads (only with `watcher.enabled`). Read per turn; undefined = asleep.
+   * The conversation pipeline prefetches "## What the fleet knows" from it on
+   * operator turns.
+   */
+  fleetMemory?: () => import('../tools/fleet-memory-search').FleetMemorySource | undefined;
 
   // Helper methods
   getActiveModel(botId: string): string;

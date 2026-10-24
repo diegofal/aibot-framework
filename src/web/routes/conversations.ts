@@ -139,8 +139,15 @@ export function conversationsRoutes(deps: {
         const ragQuery = latestHuman?.content ?? '';
 
         // Pre-fetch RAG context (same as Telegram ConversationPipeline)
-        const ragContext =
-          ragQuery.length >= 8 ? await botManager.prefetchMemoryContext(ragQuery, botId) : null;
+        const ragPromise =
+          ragQuery.length >= 8 ? botManager.prefetchMemoryContext(ragQuery, botId) : null;
+        // An admin (or single-tenant) thread is the operator's turn
+        // (`isOperatorTurn`): it also gets what the whole fleet knows.
+        const operatorTurn = actor === 'operator';
+        const fleetPromise =
+          operatorTurn && ragQuery ? botManager.prefetchFleetMemory?.(ragQuery, botId) : null;
+        const ragContext = await ragPromise;
+        const fleetMemoryContext = (await fleetPromise) ?? null;
 
         // Build unified system prompt (soul, memory, core mem, tools, karma, humanizer, RAG)
         let systemPrompt = botManager.buildSystemPrompt({
@@ -150,6 +157,7 @@ export function conversationsRoutes(deps: {
           isGroup: false,
           ragContext,
           permissionMode: 'conversation',
+          ...(operatorTurn ? { operatorTurn, fleetMemoryContext } : {}),
         });
 
         // Append conversation-type overlay

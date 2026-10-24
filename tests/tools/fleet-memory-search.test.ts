@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   FLEET_MEMORY_MAX_RESULTS,
+  FLEET_PREFETCH_RESULTS,
+  buildFleetMemoryPrefetch,
   createFleetMemorySearchTool,
 } from '../../src/tools/fleet-memory-search';
 import { Graph } from '../../src/watcher/graph';
@@ -265,5 +267,80 @@ describe('fleet_memory_search: what a non-operator caller may see (scope)', () =
     const out = await run({ _botId: 'b1' }, { isTenantBot: (id: string) => id === 't1' });
     expect(out).not.toContain('Tenant helper');
     expect(out).toContain('Scout');
+  });
+});
+
+describe('buildFleetMemoryPrefetch', () => {
+  const canary = () =>
+    graph.addNeuron({
+      kind: 'fact',
+      text: 'The canary codeword for the heron project is heliotrope',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { operatorSourced: 'true' },
+    });
+
+  test('the operator gets a "What the fleet knows" section naming the supporting bot', async () => {
+    canary();
+    const out = await buildFleetMemoryPrefetch(
+      { graph },
+      'what is the canary codeword for the heron project',
+      { operator: true, botId: 'b2' },
+      logger
+    );
+    expect(out).toContain('## What the fleet knows');
+    expect(out).toContain('heliotrope');
+    expect(out).toContain('known by Jarvis');
+    expect(out).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT>>>');
+  });
+
+  test('ranked like the tool: at most 5 lines, best first', async () => {
+    for (let i = 0; i < 8; i++) add(`heron sighting number ${i} near the water tower`);
+    const out = (await buildFleetMemoryPrefetch(
+      { graph },
+      'heron sighting near the water tower',
+      { operator: true },
+      logger
+    )) as string;
+    expect(out.match(/^- \[/gm)?.length).toBe(FLEET_PREFETCH_RESULTS);
+  });
+
+  test('anyone else does not see operator-sourced material', async () => {
+    canary();
+    const out = await buildFleetMemoryPrefetch(
+      { graph },
+      'what is the canary codeword for the heron project',
+      { operator: false, botId: 'b1' },
+      logger
+    );
+    expect(out).toBeNull();
+  });
+
+  test('null for a short query or no match; an embedder that fails falls back to text', async () => {
+    canary();
+    expect(
+      await buildFleetMemoryPrefetch({ graph }, 'hola', { operator: true }, logger)
+    ).toBeNull();
+    expect(
+      await buildFleetMemoryPrefetch(
+        { graph },
+        'quarterly tax filing deadline',
+        { operator: true },
+        logger
+      )
+    ).toBeNull();
+    const failing = {
+      graph,
+      embed: async () => {
+        throw new Error('ollama down');
+      },
+    };
+    const out = await buildFleetMemoryPrefetch(
+      failing,
+      'canary codeword heron project',
+      { operator: true },
+      logger
+    );
+    expect(out).toContain('heliotrope');
   });
 });
