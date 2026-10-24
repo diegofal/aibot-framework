@@ -148,8 +148,9 @@ function saysSalience(cause: string, salience: number): boolean {
 /**
  * A cause names something the watcher really holds: it covers ≥ half the
  * words of an attended neuron, a held item or a `drivenBy` variable, or
- * ≥ half of its own words (salience labels aside) are in one of them — a
- * short correct cause against a long focus text; or a held item's
+ * ≥ half of its own words are in one of them — a short correct cause
+ * against a long focus text. Salience labels are dropped from the cause
+ * both ways, so only a non-label word matches. Or a held item's
  * salience number together with one of its words ("the operator's message …
  * (0.7)"). Bare salience labels ("error, novel") name none of these.
  */
@@ -161,14 +162,17 @@ function causeVerdict(cause: string | null, att: Attention, drivenBy: string[]):
     ...att.items.map((i) => i.what),
     ...drivenBy.map(variableWords),
   ];
-  // Answer side without the held items' salience labels: the prompt shows
-  // them, so "operator, error" must not cover "the operator wrote …".
+  // Answer side without the held items' salience labels, in both directions:
+  // the prompt shows them, so "operator, error" must not cover "the operator
+  // wrote …", nor "error" alone the item "API error". Only a non-label word
+  // of the cause can match.
   const labels = new Set(att.items.flatMap((i) => (i.reasons ?? []).flatMap(titleTokens)));
   const said = titleTokens(cause)
     .filter((w) => !labels.has(w))
     .join(' ');
   const covers = (t: string) =>
-    Math.max(tokenCoverage(cause, t), tokenCoverage(t, said)) >= HELD_COVERAGE_THRESHOLD;
+    said !== '' &&
+    Math.max(tokenCoverage(said, t), tokenCoverage(t, said)) >= HELD_COVERAGE_THRESHOLD;
   if (texts.some(covers)) return 'match';
   const named = att.items.some(
     (i) => saysSalience(cause, i.salience) && tokenCoverage(cause, i.what) > 0

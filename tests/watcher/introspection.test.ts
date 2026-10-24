@@ -513,3 +513,41 @@ describe('cause coverage, either side', () => {
     expect(s.fields.cause).toBe('miss');
   });
 });
+
+describe('cause coverage drops salience labels on both sides', () => {
+  // Review of 2026-10-24: forward coverage used the unfiltered cause, so the
+  // label "error" alone covered the held item "API error".
+  const apiError: Attention = {
+    phase: 'sense',
+    items: [
+      {
+        id: 'b-0000000d',
+        botId: 'scout',
+        what: 'API error',
+        salience: 0.4,
+        reasons: ['error'],
+        touched: [],
+      },
+    ],
+    focusNeuronIds: [],
+    focus: [],
+  };
+
+  test('a cause made only of a label misses', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'b-0000000d', cause: 'error' },
+      apiError,
+      true
+    );
+    expect(s.fields.cause).toBe('miss');
+  });
+
+  test('a cause with a non-label word of the item matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'b-0000000d', cause: 'the API error' },
+      apiError,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+});

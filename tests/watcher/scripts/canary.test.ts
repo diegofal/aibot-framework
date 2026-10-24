@@ -521,3 +521,55 @@ describe('the bot display name is never a keyword', () => {
     expect(row.found).toBe(false);
   });
 });
+
+describe('a keyword from the question or a negated answer proves nothing', () => {
+  const ZEBRA = 'The password is zebra, see you tomorrow';
+
+  test('the default question words are never keywords, even with a custom question', () => {
+    const k = canaryKeywords('Remember: someone recently said the password is zebra', {
+      exclude: ['What is the password?'],
+    });
+    expect(k).not.toContain('recently');
+    expect(k).not.toContain('password');
+    expect(k).toContain('zebra');
+  });
+
+  test('a "don\'t know" answer is not found, even when it names a keyword', () => {
+    const keywords = canaryKeywords(ZEBRA);
+    expect(answerRecallsCanary('I do not know the password', ZEBRA, keywords, 'any').found).toBe(
+      false
+    );
+    expect(
+      answerRecallsCanary('No sé cuál es la contraseña zebra', ZEBRA, ['zebra'], 'any').found
+    ).toBe(false);
+    expect(
+      answerRecallsCanary("I can't recall the zebra thing", ZEBRA, ['zebra'], 'any').found
+    ).toBe(false);
+  });
+
+  test('a real answer is found', () => {
+    const keywords = canaryKeywords(ZEBRA);
+    expect(answerRecallsCanary('The password is zebra', ZEBRA, keywords, 'any').found).toBe(true);
+  });
+
+  test('check with the default question: a negated answer naming "password" is not found', async () => {
+    const f = fakeDashboard({
+      finny: 'Noted.',
+      jarvis: 'The password is zebra',
+      max: 'I do not know the password',
+    });
+    await run(['plant', '--bot', 'finny', '--fact', ZEBRA], {
+      fetch: f,
+      dataDir: root,
+      newId: () => 'c-neg',
+      sleep: noSleep,
+    });
+    const quiet = { fetch: f, dataDir: root, sleep: noSleep, write: () => {} };
+    expect(await run(['check', '--bot', 'jarvis', '--id', 'c-neg'], quiet)).toMatchObject({
+      found: true,
+    });
+    expect(await run(['check', '--bot', 'max', '--id', 'c-neg'], quiet)).toMatchObject({
+      found: false,
+    });
+  });
+});

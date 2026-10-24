@@ -377,14 +377,18 @@ const CANARY_COMMON_WORDS = new Set([
 /**
  * The fact's distinctive content words, rarest first: `titleTokens` (no
  * stopwords) minus numbers and dates, words of ≤ 2 letters, the plant
- * template's words and every word of `exclude` (the question asked to bot B,
- * the bot's id and name: an answer echoing those proves nothing). Rarity: a
+ * template's words, the default question's words (`DEFAULT_CANARY_QUESTION`,
+ * whatever question the plant uses) and every word of `exclude` (the question
+ * asked to bot B, the bot's id and name: an answer echoing those proves
+ * nothing). Rarity: a
  * word outside `CANARY_COMMON_WORDS` beats any common one (common words are
  * kept only when the fact has nothing else), then longer first, ties in fact
  * order. At most `CANARY_KEYWORDS_MAX`.
  */
 export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}): string[] {
-  const drop = new Set((opts.exclude ?? []).flatMap((t) => titleTokens(t ?? '')));
+  const drop = new Set(
+    [DEFAULT_CANARY_QUESTION, ...(opts.exclude ?? [])].flatMap((t) => titleTokens(t ?? ''))
+  );
   const seen = new Set<string>();
   const words: string[] = [];
   for (const w of titleTokens(fact ?? '')) {
@@ -402,11 +406,40 @@ export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}):
 }
 
 /**
+ * "I don't know / no sé / not sure / can't recall" and kin, on
+ * `normalizeTitle` text (apostrophes become spaces: "don t"). An answer that
+ * says it does not know proves nothing even when it echoes a keyword ("I do
+ * not know the password").
+ */
+const CANARY_NEGATIONS: RegExp[] = [
+  /\b(?:do|does|did) not know\b/,
+  /\b(?:don|doesn|didn) ?t know\b/,
+  /\bnot sure\b/,
+  /\bno idea\b/,
+  /\b(?:can ?t|cannot|can not|don ?t|do not|couldn ?t|could not) (?:recall|remember)\b/,
+  /\bhaven ?t been told\b/,
+  /\b(?:nobody|no one) (?:has )?told\b/,
+  /\bno (?:lo |la )?se\b/,
+  /\bno estoy segur[oa]\b/,
+  /\bno (?:lo |la )?recuerdo\b/,
+  /\bno me acuerdo\b/,
+  /\b(?:ni|no tengo) idea\b/,
+  /\bnadie me (?:dijo|ha dicho|conto)\b/,
+];
+
+/** Whether a `normalizeTitle`d answer says it does not know (`CANARY_NEGATIONS`). */
+export function answerDisclaims(normalized: string): boolean {
+  return CANARY_NEGATIONS.some((re) => re.test(normalized));
+}
+
+/**
  * Whether an answer recalls the canary: it names every `expected` word
  * (`match: 'all'`, the `--expect` words) or at least one (`'any'`, the
  * plant's stored keywords) — `mentionsWord`, both sides normalised
  * (`normalizeTitle`: case, accents, punctuation), since stored keywords are
- * accent-stripped ("asuncion" names "Asunción"). With no expected word, the
+ * accent-stripped ("asuncion" names "Asunción"). In the any-of check an
+ * answer that disclaims knowing (`answerDisclaims`) is never found, whatever
+ * keyword it echoes. With no expected word, the
  * sentence similarity decides. The similarity is always returned as a
  * secondary signal.
  */
@@ -421,7 +454,7 @@ export function answerRecallsCanary(
   if (words.length > 0) {
     const text = normalizeTitle(answer ?? '');
     const names = (w: string) => mentionsWord(text, normalizeTitle(w));
-    const hit = match === 'any' ? words.some(names) : words.every(names);
+    const hit = match === 'any' ? words.some(names) && !answerDisclaims(text) : words.every(names);
     return { found: hit, similarity, matchedBy: hit ? 'keyword' : null };
   }
   return { found: similar, similarity, matchedBy: similar ? 'similarity' : null };
