@@ -474,6 +474,25 @@ describe('Sense novelty dedupe', () => {
     );
   });
 
+  test('3 identical errors touching a goal within a minute activate it once', () => {
+    const { graph, stream } = setup();
+    const goal = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    for (let i = 0; i < 3; i++) {
+      stream.emit('activity', {
+        ...fetchFailed(),
+        data: { ...fetchFailed().data, goalId: 'g-1' },
+      });
+      t += 10_000;
+    }
+    expect(graph.get(goal.id)?.activations).toBe(1);
+  });
+
   test('a repeat differing only in numbers and spacing is still a repeat', () => {
     const { stream, rows } = setup();
     stream.emit('activity', {

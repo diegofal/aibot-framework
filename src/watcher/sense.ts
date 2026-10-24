@@ -153,7 +153,8 @@ export class Sense {
     }
 
     // The same event from the same bot within the window is a repeat: not
-    // novel, no noticed row of its own, not buffered again; the summary counts it.
+    // novel, no noticed row of its own, no activation, not buffered again; the
+    // summary counts it.
     const key = repeatKey(event);
     const repeat = key !== undefined && this.seenRecently(key, nowMs);
     const scored = scoreEvent(event, { graph: this.deps.graph, nowMs });
@@ -176,10 +177,12 @@ export class Sense {
       this.windowTop = { what, salience: score.salience };
     }
 
+    // A repeat stops here, before activation: retries within the window would
+    // otherwise inflate the touched neurons' activations.
+    if (repeat) return null;
     for (const id of score.touched) this.deps.graph.activate(id);
     for (const id of this.ownersOf(score.touched)) this.deps.graph.activate(id);
 
-    if (repeat) return null;
     const bar = this.deps.config().notice.salienceBar;
     if (score.salience >= bar) {
       this.deps.log.say(
