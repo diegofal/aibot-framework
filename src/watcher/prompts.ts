@@ -121,6 +121,8 @@ export interface IntegrateInsightBroadcast {
   status: 'delivered' | 'failed' | 'deferred' | 'in flight';
   /** `fast-lane`: sent at once after a notice pass (O1), not by an integrate pass. */
   source?: 'fast-lane';
+  /** When the record was opened (not rendered; tells a failure newer than the last agenda pass). */
+  createdAt?: string;
 }
 
 /** A cross-bot `related` edge no insight stands on yet. */
@@ -130,6 +132,8 @@ export interface IntegrateAgendaPair {
   weight: number;
   a: Neuron;
   b: Neuron;
+  /** The edge's `createdAt` (not rendered; tells a pair newer than the last agenda pass). */
+  createdAt?: string;
 }
 
 export interface IntegrateAgenda {

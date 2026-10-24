@@ -582,6 +582,115 @@ describe('Integrator: wakes on salience, a changed agenda or the heartbeat (O2)'
   test('agendaEveryMs is kept (deprecated, unused) with its 6 h default', () => {
     expect(WATCHER_DEFAULTS.integrate.agendaEveryMs).toBe(6 * HOUR);
   });
+
+  // Review 2026-10-24: with a backlog larger than agendaMax (live ~1,388
+  // related links) covering one pair slid an old one into the top ids and
+  // every pass woke Opus again. Only an item created (or left unacted) after
+  // the last agenda pass is news, and agenda-only passes keep a floor.
+  describe('a backlog larger than agendaMax', () => {
+    /** `n` more cross-bot related pairs, weights below the setup pair's 0.9. */
+    function backlog(
+      s: ReturnType<typeof setup>,
+      n: number,
+      weight = (i: number) => 0.5 + i / 100
+    ) {
+      const ids: string[] = [];
+      for (let i = 0; i < n; i++) {
+        const c = s.graph.addNeuron({
+          kind: 'fact',
+          text: `Jarvis backlog fact number ${i} about topic ${i * 7}`,
+          support: { bots: ['b1'] },
+          createdBy: 'watcher',
+        });
+        const d = s.graph.addNeuron({
+          kind: 'fact',
+          text: `Scout backlog fact number ${i} about subject ${i * 11}`,
+          support: { bots: ['b2'] },
+          createdBy: 'watcher',
+        });
+        ids.push(
+          s.graph.addEdge({
+            from: c.id,
+            to: d.id,
+            rel: 'related',
+            weight: weight(i),
+            createdBy: 'watcher',
+          }).id
+        );
+      }
+      return ids;
+    }
+
+    test('covering one pair does not make the next pass due; a pair created later does, once', async () => {
+      const covers: string[][] = [];
+      const s = setup(() => ({ insights: [], agendaCovered: covers.shift() ?? [] }), {
+        ...quietCfg,
+        agendaMax: 8,
+      });
+      backlog(s, 19);
+      covers.push([s.edge.id]);
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      expect((await s.integrator.run({ trigger: 'agenda-changed' })).status).toBe('integrated');
+      expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
+      for (const step of [INTEGRATE_MIN_GAP_MS, 3 * HOUR, 12 * HOUR]) {
+        t += step;
+        expect(s.integrator.wake()).toBeNull();
+      }
+      expect(s.prompts).toHaveLength(1);
+      const [fresh] = backlog(s, 1, () => 0.95);
+      t += INTEGRATE_MIN_GAP_MS;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      expect(agendaOf(s.prompts[1] as string)).toContain(`[${fresh}]`);
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBeNull();
+    });
+
+    test('agenda-only passes keep a floor (integrate.agendaFloorMs, default 2 h)', async () => {
+      expect(WATCHER_DEFAULTS.integrate.agendaFloorMs).toBe(2 * HOUR);
+      const s = setup(() => ({ insights: [] }), quietCfg);
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 30 * 60_000;
+      newPair(s);
+      t += INTEGRATE_MIN_GAP_MS;
+      expect(s.integrator.wake()).toBeNull();
+      t += 2 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+    });
+
+    test('an insight whose broadcast failed after the last agenda pass is news again', async () => {
+      const s = setup(() => ({ insights: [] }), { ...quietCfg, agendaMax: 8 });
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 60_000;
+      const insight = s.graph.addNeuron({
+        kind: 'insight',
+        text: 'Jarvis and Scout both track the Q3 invoices',
+        support: { bots: ['b1', 'b2'] },
+        confidence: 'medium',
+        createdBy: 'watcher',
+      });
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+      await s.integrator.run({ trigger: 'agenda-changed' });
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBeNull();
+      // A fast-lane send for it fails later: it became unacted after that pass.
+      s.broadcaster.list = () => [
+        {
+          id: 'bc-1',
+          botId: 'b1',
+          kind: 'directive',
+          text: 'x',
+          insightId: insight.id,
+          reason: 'x',
+          createdAt: new Date(t).toISOString(),
+          deliveryError: 'chat not found',
+        } as never,
+      ];
+      t += 3 * HOUR;
+      expect(s.integrator.wake()).toBe('agenda-changed');
+    });
+  });
 });
 
 // O3 (stakes): what the watcher feels shapes what it does.

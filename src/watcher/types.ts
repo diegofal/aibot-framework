@@ -234,6 +234,8 @@ export interface WatcherConfig {
     agendaMax: number;
     /** Deprecated (O2): an agenda pass runs when the agenda changes. */
     agendaEveryMs: number;
+    /** An agenda-only pass runs at most once per this long, whatever the agenda gained. */
+    agendaFloorMs: number;
     maxPerDay: number;
     maxTokensPerDay: number;
     /** A pass wakes when the salience pending since the last one adds up to this. */
@@ -267,6 +269,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     minItems: 5,
     agendaMax: 8,
     agendaEveryMs: 21_600_000,
+    agendaFloorMs: 7_200_000,
     maxPerDay: 24,
     maxTokensPerDay: 600_000,
     wakeSalience: 3.0,

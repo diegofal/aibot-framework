@@ -899,6 +899,8 @@ export const WatcherConfigSchema = z
         agendaMax: z.number().int().min(0).default(8),
         /** Deprecated (O2, 2026-10-24): an agenda pass runs when the agenda changes; kept so live configs validate. */
         agendaEveryMs: z.number().int().min(60_000).default(21_600_000),
+        /** An agenda-only pass runs at most once per this long, whatever the agenda gained. */
+        agendaFloorMs: z.number().int().min(0).default(7_200_000),
         maxPerDay: z.number().int().min(0).default(24),
         maxTokensPerDay: z.number().int().min(0).default(600_000),
         /** A pass wakes when the salience pending since the last one adds up to this. */
