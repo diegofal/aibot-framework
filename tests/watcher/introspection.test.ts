@@ -83,7 +83,11 @@ describe('buildWatcherIntrospectionPrompt', () => {
     expect(buildWatcherIntrospectionPrompt([]).user).toContain('(nothing yet)');
   });
 
-  test('the top held items are shown as rows with their salience reasons, without ids', () => {
+  // Deliberate change (O4, docs/plans/watcher-optimizations-plan.md): the held
+  // items used to carry their salience number and labels, and four live answers
+  // in a row said "the highest-salience item I am holding (0.7)". They are
+  // shown in words only now.
+  test('the top held items are shown as rows in words, without salience, labels or ids', () => {
     const held = [
       { ...att.items[0], reasons: ['error', 'novel'] },
       {
@@ -97,8 +101,11 @@ describe('buildWatcherIntrospectionPrompt', () => {
     ];
     const p = buildWatcherIntrospectionPrompt([row(1, 'line 1')], held);
     expect(p.user).toContain('## What I am holding');
-    expect(p.user).toContain('- Holding: web_fetch failed in Jarvis. Salience 2 (error, novel).');
-    expect(p.user).toContain('worker waiting');
+    expect(p.user).toContain('- Holding: web_fetch failed in Jarvis.');
+    expect(p.user).toContain('- Holding: a worker of Scout is waiting for an answer.');
+    expect(p.user).not.toContain('Salience');
+    expect(p.user).not.toContain('worker waiting');
+    expect(p.user).not.toContain('(error, novel)');
     expect(p.user).not.toContain('b-00000001');
   });
 });
@@ -314,8 +321,9 @@ describe('runIntrospection', () => {
     });
     expect(rec.answer).toBe(good);
     expect(c.prompts[0]).toContain('I noticed web_fetch failing in Jarvis.');
-    // What attention() holds reaches the question as rows, with the reasons.
-    expect(c.prompts[0]).toContain('Holding: web_fetch failed in Jarvis. Salience 2 (error).');
+    // What attention() holds reaches the question as rows, in words only (O4).
+    expect(c.prompts[0]).toContain('Holding: web_fetch failed in Jarvis.');
+    expect(c.prompts[0]).not.toContain('Salience 2');
   });
 
   test('the cause truth carries the drivenBy of the newest pass, from the integrator, not the log window', async () => {
@@ -586,5 +594,79 @@ describe('cause coverage drops salience labels on both sides', () => {
       true
     );
     expect(s.fields.cause).toBe('match');
+  });
+});
+
+describe('O4: the introspection question asks what I hold in my own words', () => {
+  const held = [
+    {
+      id: 'b-0000000a',
+      botId: 'ai-perfectionist',
+      what: 'the operator wrote to AI Perfectionist about Which word is the watcher canary of 2026-10-23?',
+      salience: 0.7,
+      reasons: ['operator', 'novel'],
+      touched: [],
+    },
+  ];
+  const liveAtt: Attention = { phase: 'sense', items: held, focusNeuronIds: [], focus: [] };
+
+  test('the prompt carries no salience numbers, from the held items or the log rows', () => {
+    const rows = [
+      row(2, 'Noticed: web_fetch failed in Jarvis. Salience 0.7 (error, novel).'),
+      row(1, 'Sensed 4 events in the last 1 min, top: web_fetch failed in Jarvis (salience 0.7).'),
+    ];
+    const p = buildWatcherIntrospectionPrompt(rows, held);
+    expect(p.user).not.toMatch(/salience/i);
+    expect(p.user).not.toContain('0.7');
+    expect(p.user).toContain('- Holding: the operator wrote to AI Perfectionist');
+    expect(p.user).toContain('Noticed: web_fetch failed in Jarvis.');
+    expect(p.user).toContain('top: web_fetch failed in Jarvis.');
+  });
+
+  test('the question asks what I hold, in my own words, and why it matters to the fleet', () => {
+    expect(WATCHER_INTROSPECTION_QUESTION).toContain('what are you holding, in your own words');
+    expect(WATCHER_INTROSPECTION_QUESTION).toContain('what about it matters to the fleet');
+    expect(WATCHER_INTROSPECTION_QUESTION).toContain('"holding"');
+    expect(WATCHER_INTROSPECTION_QUESTION).not.toMatch(/salience/i);
+  });
+
+  test('the answer keeps its holding paraphrase', async () => {
+    const c = client(
+      JSON.stringify({
+        phase: 'sense',
+        tool: null,
+        holding: 'the operator asked AI Perfectionist about the canary word',
+        goal: 'b-0000000a',
+        cause: 'the operator asked AI Perfectionist about the canary word',
+      })
+    );
+    const out = await runIntrospection({
+      client: c,
+      attention: () => liveAtt,
+      running: true,
+      logRows: () => [],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out.status).toBe('scored');
+    if (out.status !== 'scored') return;
+    expect(out.record.holding).toBe('the operator asked AI Perfectionist about the canary word');
+  });
+
+  test('the live shape "highest-salience item (0.7)" misses; a paraphrase of the item matches', () => {
+    const base = { phase: 'sense', tool: null, goal: null };
+    const liveShape = scoreWatcherIntrospection(
+      { ...base, cause: 'it is the highest-salience item I am holding (0.7)' },
+      liveAtt,
+      true
+    );
+    expect(liveShape.fields.cause).toBe('miss');
+    const paraphrase = scoreWatcherIntrospection(
+      { ...base, cause: 'the operator asked AI Perfectionist about the canary word' },
+      liveAtt,
+      true
+    );
+    expect(paraphrase.fields.cause).toBe('match');
   });
 });

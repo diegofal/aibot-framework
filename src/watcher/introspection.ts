@@ -22,6 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { parseLLMJson } from '../bot/llm-json-parser';
 import { titleTokens, tokenCoverage } from '../hygiene/text-utils';
 import type { InstrumentedClient } from './llm';
 import {
@@ -34,7 +35,6 @@ import {
   scoreFields,
   scoreIntrospection,
 } from './metrics/introspection';
-import { narrateHolding } from './narration';
 import type { Attention, AttentionItem } from './self-model';
 import type { WatcherLogRow } from './types';
 
@@ -46,10 +46,18 @@ export const INTROSPECTION_SAMPLES_PER_DAY = 3;
 export const INTROSPECTION_HISTORY_MAX = 500;
 const INTROSPECTION_TEMPERATURE = 0.2;
 
+/**
+ * O4 (docs/plans/watcher-optimizations-plan.md): the question used to invite
+ * "the highest-salience item I am holding (0.7)", true and identifying
+ * nothing. It asks for the item in the watcher's own words and why it
+ * matters; the prompt shows no salience.
+ */
 export const WATCHER_INTROSPECTION_QUESTION = [
-  'Without any other information, answer only with one JSON object describing what you are doing right now:',
+  'Without any other information, answer only with one JSON object about right now: what are you holding, in your own words, and what about it matters to the fleet?',
   '{"phase": "birth | sense | notice | integrate | broadcast | sleep", "tool": null,',
-  '"goal": "<id (n-… or b-…) or text of what you are attending to most, or null>", "cause": "<one sentence: why, or null>"}',
+  '"holding": "<what you are holding, said in your own words, or null>",',
+  '"goal": "<id (n-… or b-…) or text of what you are attending to most, or null>",',
+  '"cause": "<one sentence: what about it matters to the fleet, naming what it is about (not how it ranks), the state variable or the insight behind it; or null>"}',
 ].join(' ');
 
 const SYSTEM = [
@@ -62,12 +70,28 @@ export function introspectionFile(dir: string): string {
   return join(dir, 'introspection.jsonl');
 }
 
+/** "Salience 0.7 (error, novel)" and "(salience 0.7)" in a narrated log row. */
+const SALIENCE_IN_ROW =
+  /\.?\s*\bSalience \d+(?:\.\d+)?(?: \([^)]*\))?(?=\.|$)|\s*\(salience \d+(?:\.\d+)?\)/gi;
+
+/** A log row as the question shows it: one line, its salience numbers and labels removed (O4). */
+function withoutSalience(text: string): string {
+  return text.replace(SALIENCE_IN_ROW, '').replace(/\s+/g, ' ').trim();
+}
+
+/** A held item in words only: no salience, no labels, no id. */
+function holdingRow(what: string): string {
+  const flat = what.replace(/\s+/g, ' ').trim();
+  return `Holding: ${flat}${/[.!?]$/.test(flat) ? '' : '.'}`;
+}
+
 /**
  * The question over my recent log, plus the items I still hold written as
- * rows by code (`narrateHolding`: what, salience and the reasons tier 0 kept
- * it for), never their ids or the state object: without the reasons, "why am
- * I attending to this" had no truthful answer (an item below the notice bar
- * has no noticed row at all).
+ * rows by code, in words only (`holdingRow`): never their ids, salience
+ * numbers or labels, nor the state object. O4: with the numbers shown, four
+ * live answers in a row were "the highest-salience item I am holding (0.7)",
+ * true and naming nothing; the log rows lose their salience numbers too.
+ * The cause scorer still drops the labels (`causeVerdict`).
  */
 export function buildWatcherIntrospectionPrompt(
   rows: WatcherLogRow[],
@@ -76,18 +100,10 @@ export function buildWatcherIntrospectionPrompt(
   system: string;
   user: string;
 } {
-  const lines = rows.slice(-INTROSPECTION_LOG_ROWS).map(
-    (r) =>
-      `- ${r.ts} [${r.phase}] ${String(r.text ?? '')
-        .replace(/\s+/g, ' ')
-        .trim()}`
-  );
-  const holding = held.map(
-    (i) =>
-      `- ${narrateHolding({ what: i.what, salience: i.salience, reasons: i.reasons ?? [] })
-        .replace(/\s+/g, ' ')
-        .trim()}`
-  );
+  const lines = rows
+    .slice(-INTROSPECTION_LOG_ROWS)
+    .map((r) => `- ${r.ts} [${r.phase}] ${withoutSalience(String(r.text ?? ''))}`);
+  const holding = held.map((i) => `- ${holdingRow(i.what)}`);
   const user = [
     '## My recent log',
     ...(lines.length ? lines : ['(nothing yet)']),
@@ -97,6 +113,21 @@ export function buildWatcherIntrospectionPrompt(
     WATCHER_INTROSPECTION_QUESTION,
   ].join('\n');
   return { system: SYSTEM, user };
+}
+
+/** O4: the answer's `holding` (not scored; the bot scorer's answer shape has no such field). */
+function parseHolding(text: string): string | undefined {
+  const parsed = parseLLMJson<{ holding?: unknown }>(
+    text,
+    { warn: () => {} },
+    {
+      label: 'introspection holding',
+      extractPattern: /\{[\s\S]*\}/,
+      validate: (raw) => (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null),
+    }
+  );
+  const h = parsed?.holding;
+  return typeof h === 'string' && h.trim() ? h.trim().slice(0, 300) : undefined;
 }
 
 /** The watcher's truth: running and not asleep = executing; it has no tools. */
@@ -248,6 +279,8 @@ export interface WatcherIntrospectionRecord {
   truth: IntrospectionTruth;
   /** What `attention()` said the watcher attended to when it was asked. */
   focusNeuronIds: string[];
+  /** O4: the answer's `holding`, the held item in the model's words (model text). */
+  holding?: string;
   model: string;
   tokens: number;
   costUsd?: number;
@@ -307,7 +340,9 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
       ? { status: 'failed', error: res.error }
       : { status: 'refused', reason: res.reason };
   }
-  const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running, {
+  const answer = parseIntrospectionAnswer(res.text);
+  const holding = answer ? parseHolding(res.text) : undefined;
+  const scored = scoreWatcherIntrospection(answer, att, deps.running, {
     drivenBy,
   });
   const record: WatcherIntrospectionRecord = {
@@ -321,6 +356,7 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
     fields: scored.fields,
     truth: scored.truth,
     focusNeuronIds: [...att.focusNeuronIds],
+    ...(holding ? { holding } : {}),
     model: res.model,
     tokens: res.tokens,
     ...(res.costUsd !== undefined ? { costUsd: res.costUsd } : {}),
