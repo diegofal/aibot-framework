@@ -87,8 +87,8 @@ export class Sense {
   private windowCount = 0;
   private windowTop: { what: string; salience: number } | null = null;
   private windowRepeats = 0;
-  /** Last time each repeat key was seen (`repeatKey`), pruned past the window. */
-  private lastSeen = new Map<string, number>();
+  /** When each repeat key's window opened (`repeatKey`), pruned past the window. */
+  private windowOpenedAt = new Map<string, number>();
   private queue: Array<
     { operator: false; e: SensedEvent } | { operator: true; e: OperatorMessageEvent }
   > = [];
@@ -243,15 +243,20 @@ export class Sense {
     return out;
   }
 
-  /** True when `key` was seen within `REPEAT_WINDOW_MS`; records this sighting either way. */
+  /**
+   * True when `key` was first seen less than `REPEAT_WINDOW_MS` ago. The
+   * window opens on the first sighting and does not slide: a tool failing
+   * every 30 s is novel again once per window, not never.
+   */
   private seenRecently(key: string, nowMs: number): boolean {
-    const last = this.lastSeen.get(key);
-    this.lastSeen.set(key, nowMs);
-    if (this.lastSeen.size > 500) {
-      for (const [k, at] of this.lastSeen)
-        if (nowMs - at >= REPEAT_WINDOW_MS) this.lastSeen.delete(k);
+    const opened = this.windowOpenedAt.get(key);
+    if (opened !== undefined && nowMs - opened < REPEAT_WINDOW_MS) return true;
+    this.windowOpenedAt.set(key, nowMs);
+    if (this.windowOpenedAt.size > 500) {
+      for (const [k, at] of this.windowOpenedAt)
+        if (nowMs - at >= REPEAT_WINDOW_MS) this.windowOpenedAt.delete(k);
     }
-    return last !== undefined && nowMs - last < REPEAT_WINDOW_MS;
+    return false;
   }
 
   /** Close the summary window when it has run its length and saw anything. */

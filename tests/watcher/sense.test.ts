@@ -493,6 +493,26 @@ describe('Sense novelty dedupe', () => {
     expect(graph.get(goal.id)?.activations).toBe(1);
   });
 
+  test('errors every 30 s for 3 min activate the goal once per window: 3 times', () => {
+    const { graph, stream } = setup();
+    const goal = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    for (let i = 0; i < 6; i++) {
+      stream.emit('activity', {
+        ...fetchFailed(),
+        data: { ...fetchFailed().data, goalId: 'g-1' },
+      });
+      t += 30_000;
+    }
+    // The window does not slide on each sighting: novel at 0 s, 60 s and 120 s.
+    expect(graph.get(goal.id)?.activations).toBe(3);
+  });
+
   test('a repeat differing only in numbers and spacing is still a repeat', () => {
     const { stream, rows } = setup();
     stream.emit('activity', {
