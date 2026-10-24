@@ -120,7 +120,7 @@ export async function mountClaudeAccounts(card) {
         return paint();
       }
       const testSlug = t.getAttribute('data-ca-test');
-      if (testSlug) return runTest(testSlug);
+      if (testSlug) return await runTest(testSlug);
       const relogin = t.getAttribute('data-ca-relogin');
       if (relogin) return startLogin({ slug: relogin }, true);
       const rename = t.getAttribute('data-ca-rename');
