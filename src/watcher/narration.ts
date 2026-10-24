@@ -111,6 +111,45 @@ export function narrateLinking(input: { neurons: number; edges: number }): strin
   return `Linking what I know: ${plural(input.neurons, 'neuron', 'neurons')}, ${plural(input.edges, 'edge', 'edges')} so far.`;
 }
 
+/** Daily maintenance embedded neurons birth (or a later sense) left without a vector. */
+export function narrateLateLink(input: {
+  embedded: number;
+  edges: number;
+  /** Set only when the run stopped at it. */
+  failure?: string;
+  /** Embeds that failed in a run that went on (a recovered transient error). */
+  skipped?: number;
+}): string {
+  const base = `Embedded ${plural(input.embedded, 'neuron', 'neurons')} I had not embedded yet: ${plural(input.edges, 'new related edge', 'new related edges')}.`;
+  if (input.failure)
+    return `${base} Stopped at an embedding error (${input.failure}); the rest at the next maintenance.`;
+  return input.skipped ? `${base} ${narrateSkipped(input.skipped, 'maintenance')}` : base;
+}
+
+/** Birth's link stage went through every neuron, but some embeds failed on the way. */
+export function narrateLinkSkipped(input: { skipped: number; failure?: string }): string {
+  const why = input.failure ? ` (${input.failure})` : '';
+  return `${plural(input.skipped, 'embed failed and was skipped', 'embeds failed and were skipped')}${why}; ${input.skipped === 1 ? 'it gets' : 'they get'} embedded at the next start or maintenance.`;
+}
+
+function narrateSkipped(skipped: number, next: string): string {
+  return `${plural(skipped, 'embed failed and was skipped', 'embeds failed and were skipped')}; the next ${next} tries again.`;
+}
+
+/** Maintenance embedded nothing: the real reason; nothing was re-placed. */
+export function narrateLinkFailed(input: { pending: number; reason: string }): string {
+  return `Could not embed the ${plural(input.pending, 'neuron', 'neurons')} without a vector (${input.reason}). I will try again at the next maintenance.`;
+}
+
+/** Birth's link stage embedded some neurons and then stopped at an embedding error. */
+export function narrateLinkStopped(input: {
+  embedded: number;
+  total: number;
+  failure: string;
+}): string {
+  return `Stopped at an embedding error after ${num(input.embedded)} of ${plural(input.total, 'neuron', 'neurons')} (${input.failure}). The rest get embedded at the next start or maintenance.`;
+}
+
 export function narrateNoEmbeddings(reason: string): string {
   return `Could not embed what I know (${reason}). Placing neurons by kind, without related edges.`;
 }

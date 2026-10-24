@@ -71,7 +71,7 @@ describe('Sense', () => {
     expect(buffer.size()).toBe(1);
   });
 
-  test('an event that touches a neuron activates it and logs', () => {
+  test('an event that touches a neuron below the bar activates it without a row', () => {
     const { graph, stream, rows, changes } = setup();
     const n = graph.addNeuron({
       kind: 'goal',
@@ -88,8 +88,127 @@ describe('Sense', () => {
     });
     expect(graph.get(n.id)?.activations).toBe(1);
     expect(changes.some((c) => c.type === 'activate')).toBe(true);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].neuronIds).toEqual([n.id]);
+    // Deliberate change (watcher cleanup): a touch below `notice.salienceBar`
+    // used to log a "salience 0" row; it now activates silently.
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(0);
+  });
+
+  test('a touched neuron above the bar logs a noticed row with its ids', () => {
+    const { graph, stream, rows } = setup();
+    const n = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    stream.emit('activity', {
+      type: 'worker:waiting',
+      botId: 'b1',
+      timestamp: t,
+      data: { goalId: 'g-1', question: 'which supplier should I pick' },
+    });
+    const noticed = rows.filter((r) => r.op === 'noticed');
+    expect(noticed).toHaveLength(1);
+    expect(noticed[0].neuronIds).toContain(n.id);
+  });
+
+  test('below the bar: no noticed row, the summary still counts the event', () => {
+    const { stream, sense, rows } = setup();
+    for (let i = 0; i < 5; i++)
+      stream.emit('activity', { type: 'llm:start', botId: 'b1', timestamp: t });
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(0);
+    t += 61_000;
+    expect(sense.tick()?.text).toBe('Sensed 5 events in the last 1 min.');
+  });
+
+  test('a touched goal also lights up the bot that owns it (owned_by), both activations emitted', () => {
+    const { graph, stream, changes } = setup();
+    const bot = graph.addNeuron({
+      kind: 'entity',
+      text: 'Jarvis',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { key: 'bot:b1' },
+    });
+    const goal = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    graph.addEdge({ from: goal.id, to: bot.id, rel: 'owned_by', weight: 1, createdBy: 'bot:b1' });
+    stream.emit('activity', {
+      type: 'task:changed',
+      botId: 'b1',
+      timestamp: t,
+      data: { taskId: 't-1', goalId: 'g-1' },
+    });
+    expect(graph.get(goal.id)?.activations).toBe(1);
+    expect(graph.get(bot.id)?.activations).toBe(1);
+    const activated = changes.flatMap((c) => (c.type === 'activate' ? [c.activation.id] : []));
+    expect(activated).toEqual([goal.id, bot.id]);
+  });
+
+  test('an owner is activated once even when it is touched too or owns two touched neurons', () => {
+    const { graph, sense } = setup();
+    const bot = graph.addNeuron({
+      kind: 'entity',
+      text: 'Jarvis',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { key: 'bot:b1' },
+    });
+    const owners = sense.ownersOf([bot.id, 'n-missing']);
+    expect(owners).toEqual([]);
+    const a = graph.addNeuron({
+      kind: 'topic',
+      text: 'suppliers',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+    });
+    const b = graph.addNeuron({
+      kind: 'goal',
+      text: 'Ship',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+    });
+    const f = graph.addNeuron({
+      kind: 'fact',
+      text: 'x',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+    });
+    for (const n of [a, b, f])
+      graph.addEdge({ from: n.id, to: bot.id, rel: 'owned_by', weight: 1, createdBy: 'watcher' });
+    expect(sense.ownersOf([a.id, b.id])).toEqual([bot.id]);
+    expect(sense.ownersOf([a.id, bot.id])).toEqual([]);
+    // only goal/topic neurons light their owner
+    expect(sense.ownersOf([f.id])).toEqual([]);
+  });
+
+  test('onBatch is called once per sensed batch (the watcher republishes its state)', async () => {
+    const calls: number[] = [];
+    const now = () => t;
+    const graph = new Graph(join(dir, 'g2'), { now });
+    graph.load();
+    const sense = new Sense({
+      graph,
+      buffer: new WorkingBuffer(),
+      log: new WatcherLog(join(dir, 'log2'), { now }),
+      now,
+      config: () => WATCHER_DEFAULTS,
+      onBatch: (n) => calls.push(n),
+    });
+    const stream = new EventEmitter();
+    sense.attach(stream, new EventEmitter());
+    stream.emit('activity', { type: 'llm:start', botId: 'b1', timestamp: t });
+    stream.emit('activity', { type: 'llm:end', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
+    expect(calls).toEqual([2]);
+    sense.flush();
+    expect(calls).toEqual([2]);
   });
 
   test('the summary row appears once per window', () => {

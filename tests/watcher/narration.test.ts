@@ -7,7 +7,11 @@ import {
   narrateGoals,
   narrateHistory,
   narrateIntrospection,
+  narrateLateLink,
   narrateLearned,
+  narrateLinkFailed,
+  narrateLinkSkipped,
+  narrateLinkStopped,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -120,6 +124,40 @@ describe('narration', () => {
   test('narrateLinking', () => {
     expect(narrateLinking({ neurons: 1240, edges: 3800 })).toBe(
       'Linking what I know: 1,240 neurons, 3,800 edges so far.'
+    );
+  });
+  test('narrateLateLink', () => {
+    expect(narrateLateLink({ embedded: 1, edges: 0 })).toBe(
+      'Embedded 1 neuron I had not embedded yet: 0 new related edges.'
+    );
+    expect(narrateLateLink({ embedded: 120, edges: 1 })).toBe(
+      'Embedded 120 neurons I had not embedded yet: 1 new related edge.'
+    );
+    expect(narrateLateLink({ embedded: 32, edges: 4, failure: 'ECONNREFUSED' })).toBe(
+      'Embedded 32 neurons I had not embedded yet: 4 new related edges. Stopped at an embedding error (ECONNREFUSED); the rest at the next maintenance.'
+    );
+    expect(narrateLateLink({ embedded: 31, edges: 2, skipped: 1 })).toBe(
+      'Embedded 31 neurons I had not embedded yet: 2 new related edges. 1 embed failed and was skipped; the next maintenance tries again.'
+    );
+  });
+  test('narrateLinkSkipped notes a recovered error without claiming a stop', () => {
+    expect(narrateLinkSkipped({ skipped: 1, failure: 'ECONNREFUSED' })).toBe(
+      '1 embed failed and was skipped (ECONNREFUSED); it gets embedded at the next start or maintenance.'
+    );
+    expect(narrateLinkSkipped({ skipped: 3 })).toBe(
+      '3 embeds failed and were skipped; they get embedded at the next start or maintenance.'
+    );
+  });
+  test('narrateLinkFailed names the real reason and claims no placement', () => {
+    const text = narrateLinkFailed({ pending: 300, reason: 'connect ECONNREFUSED' });
+    expect(text).toBe(
+      'Could not embed the 300 neurons without a vector (connect ECONNREFUSED). I will try again at the next maintenance.'
+    );
+    expect(text).not.toContain('Placing');
+  });
+  test('narrateLinkStopped says how far it got and that the rest follows', () => {
+    expect(narrateLinkStopped({ embedded: 3, total: 1200, failure: 'connect ECONNREFUSED' })).toBe(
+      'Stopped at an embedding error after 3 of 1,200 neurons (connect ECONNREFUSED). The rest get embedded at the next start or maintenance.'
     );
   });
   test('narrateNoEmbeddings', () => {

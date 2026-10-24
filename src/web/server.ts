@@ -243,6 +243,7 @@ export function startWebServer(deps: WebServerDeps): void {
     watcherRoutes({
       config,
       logger,
+      configPath: deps.configPath,
       watcher: () => deps.watcher,
       readCycles,
       semaphore: () => {

@@ -11,6 +11,7 @@ import { ProactiveThrottle } from '../../src/tools/send-proactive-message';
 import { graphFiles } from '../../src/watcher/paths';
 import { WATCHER_DEFAULTS, type WatcherEvent } from '../../src/watcher/types';
 import {
+  SENSE_STATE_EVERY_MS,
   Watcher,
   type WatcherDeps,
   createFleetWatcher,
@@ -1395,6 +1396,361 @@ describe('Watcher question broadcasts and the shared throttle (one pass)', () =>
     });
     expect(retry.status).toBe('delivered');
     expect(sent).toHaveLength(2);
+    await watcher.stop();
+  });
+});
+
+describe('Watcher: embedding what birth could not', () => {
+  test('a graph born no-embeddings is linked at the next start once an embedder works', async () => {
+    const first = make();
+    await first.watcher.start();
+    await first.watcher.idle();
+    expect(first.watcher.state().linkStatus).toBe('no-embeddings');
+    await first.watcher.stop();
+    t += 1000;
+    const second = make({ embed: async () => [1, 0, 0] });
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.watcher.state().linkStatus).toBe('ok');
+    expect(second.watcher.graph.embeddedIds().length).toBe(second.watcher.graph.liveCount());
+    expect(second.watcher.log.recent(50).filter((r) => r.op === 'maintain:link').length).toBe(1);
+    await second.watcher.stop();
+  });
+
+  test('daily maintenance embeds and links once the embedder comes back', async () => {
+    let up = false;
+    const { watcher } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    up = true;
+    await watcher.maintainNow();
+    expect(watcher.state().linkStatus).toBe('ok');
+    expect(watcher.graph.embeddedIds().length).toBe(watcher.graph.liveCount());
+    await watcher.stop();
+  });
+
+  test('a backfill that flips the link status on an idle watcher publishes one watcher:state', async () => {
+    let up = false;
+    const { watcher, events } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    up = true;
+    const before = events.length;
+    await watcher.maintainNow();
+    const states = events.slice(before).filter((e) => e.type === 'watcher:state');
+    expect(states.length).toBe(1);
+    expect((states[0]?.data as { linkStatus?: string }).linkStatus).toBe('ok');
+    await watcher.stop();
+  });
+
+  test('maintenance that leaves the link status as it was publishes no watcher:state', async () => {
+    const { watcher, events } = make({
+      embed: async () => {
+        throw new Error('ollama down');
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    const before = events.length;
+    await watcher.maintainNow();
+    expect(events.slice(before).filter((e) => e.type === 'watcher:state').length).toBe(0);
+    await watcher.stop();
+  });
+
+  test('maintenance that embedded publishes one layout, not two', async () => {
+    let up = false;
+    const { watcher, events } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    up = true;
+    const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
+    const before = layouts();
+    await watcher.maintainNow();
+    expect(watcher.state().linkStatus).toBe('ok');
+    expect(layouts()).toBe(before + 1);
+    await watcher.stop();
+  });
+
+  test('a stop during the maintenance backfill neither relays out nor persists positions', async () => {
+    let mode: 'down' | 'hang' = 'down';
+    let calls = 0;
+    let answer: ((v: number[]) => void) | undefined;
+    const { watcher, events } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        if (mode === 'down') return Promise.reject(new Error('ollama down'));
+        return new Promise<number[]>((r) => {
+          answer = r;
+        });
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    const positions = () =>
+      JSON.stringify(watcher.graph.list().map((n) => [n.id, watcher.graph.get(n.id)?.pos]));
+    const before = positions();
+    const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
+    const layoutsBefore = layouts();
+    mode = 'hang';
+    const seen = calls;
+    const maintenance = watcher.maintainNow();
+    expect(await until(() => calls > seen && !!answer)).toBe(true);
+    await watcher.stop();
+    answer?.([1, 0, 0]);
+    await maintenance;
+    expect(layouts()).toBe(layoutsBefore);
+    expect(positions()).toBe(before);
+    // nothing persisted either: a fresh load sees the same positions
+    const reloaded = make();
+    await reloaded.watcher.start();
+    await reloaded.watcher.idle();
+    expect(
+      JSON.stringify(
+        reloaded.watcher.graph.list().map((n) => [n.id, reloaded.watcher.graph.get(n.id)?.pos])
+      )
+    ).toBe(before);
+    await reloaded.watcher.stop();
+  });
+
+  async function until(check: () => boolean, ms = 1000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (check()) return true;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    return check();
+  }
+
+  async function bornWithoutEmbeddings() {
+    const first = make();
+    await first.watcher.start();
+    await first.watcher.idle();
+    await first.watcher.stop();
+    t += 1000;
+  }
+
+  const fake = { chat: async () => ({ text: '{}' }) } as unknown as LLMClient;
+  const llm = {
+    notice: { client: fake, model: 'claude-haiku-5-5', backend: 'claude-cli' as const },
+    integrate: { client: fake, model: 'claude-opus-5-5', backend: 'claude-cli' as const },
+  };
+  const tiersOn = {
+    notice: { ...WATCHER_DEFAULTS.notice, enabled: true },
+    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true },
+  };
+
+  test('an embedder that never answers does not hold the start: sense and tier timers come first', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    const { watcher } = make(
+      {
+        llm,
+        stopTimeoutMs: 30,
+        embed: () => {
+          calls++;
+          return new Promise<number[]>(() => {});
+        },
+      },
+      tiersOn
+    );
+    await watcher.start();
+    expect(await until(() => watcher.state().phase === 'sense')).toBe(true);
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    // the backfill is running (its probe is out), not finished
+    expect(calls).toBe(1);
+    expect(watcher.log.recent(50).some((r) => r.op === 'maintain:link')).toBe(false);
+    await watcher.stop();
+    expect(watcher.state().running).toBe(false);
+  });
+
+  test('a start after a stop during the backfill runs its own backfill, never the stale one', async () => {
+    await bornWithoutEmbeddings();
+    let hang = true;
+    let calls = 0;
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        return hang ? new Promise<number[]>(() => {}) : Promise.resolve([1, 0, 0]);
+      },
+    });
+    await watcher.start();
+    expect(await until(() => calls === 1)).toBe(true);
+    await watcher.stop();
+    hang = false;
+    await watcher.start();
+    expect(
+      await until(() => watcher.graph.embeddedIds().length === watcher.graph.liveCount(), 4000)
+    ).toBe(true);
+    expect(calls).toBeGreaterThan(1);
+    expect(watcher.log.recent(50).filter((r) => r.op === 'maintain:link')).toHaveLength(1);
+    await watcher.stop();
+  });
+
+  test('a stop during a slow probe: the next start probes at once, the stale probe answer is ignored', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    let probes = 0;
+    let answerStaleProbe: ((v: number[]) => void) | undefined;
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: (text: string) => {
+        calls++;
+        if (text === 'probe') probes++;
+        // The first run's probe: a cold model load that answers only much later.
+        if (calls === 1)
+          return new Promise<number[]>((r) => {
+            answerStaleProbe = r;
+          });
+        return Promise.resolve([1, 0, 0]);
+      },
+    });
+    await watcher.start();
+    expect(await until(() => calls === 1)).toBe(true);
+    await watcher.stop();
+    const started = Date.now();
+    await watcher.start();
+    expect(
+      await until(() => watcher.graph.embeddedIds().length === watcher.graph.liveCount(), 4000)
+    ).toBe(true);
+    // No grace wait for the stale run: the new one starts at once.
+    expect(Date.now() - started).toBeLessThan(700);
+    expect(probes).toBe(2);
+    const linkRows = () => watcher.log.recent(50).filter((r) => r.op === 'maintain:link').length;
+    expect(linkRows()).toBe(1);
+    const callsBefore = calls;
+    answerStaleProbe?.([1, 0, 0]);
+    await new Promise((r) => setTimeout(r, 100));
+    // The stale run's late probe answer starts nothing and writes nothing.
+    expect(calls).toBe(callsBefore);
+    expect(linkRows()).toBe(1);
+    await watcher.stop();
+  });
+
+  test('a slow-failing embedder at start: sense first, then one probe and one row with the real error', async () => {
+    await bornWithoutEmbeddings();
+    let calls = 0;
+    const { watcher } = make(
+      {
+        llm,
+        embed: async () => {
+          calls++;
+          await new Promise((r) => setTimeout(r, 30));
+          throw new Error('connect ECONNREFUSED 127.0.0.1:11434');
+        },
+      },
+      tiersOn
+    );
+    await watcher.start();
+    expect(await until(() => watcher.state().phase === 'sense')).toBe(true);
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    await watcher.idle();
+    expect(calls).toBe(1);
+    const rows = watcher.log.recent(50).filter((r) => r.op === 'maintain:link');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text).toContain('ECONNREFUSED');
+    expect(watcher.state().phase).toBe('sense');
+    await watcher.stop();
+  });
+});
+
+describe('Watcher: last tick follows sensing', () => {
+  test('a sense batch republishes the state with lastTickAt (throttled, trailing)', async () => {
+    const { watcher, events, activityStream } = make();
+    await watcher.start();
+    await watcher.idle();
+    t += SENSE_STATE_EVERY_MS + 1;
+    activityStream.emit('activity', { type: 'llm:start', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
+    const states = () =>
+      events
+        .filter((e) => e.type === 'watcher:state')
+        .map((e) => (e.data as { lastTickAt?: string }).lastTickAt);
+    expect(states().at(-1)).toBe(new Date(t).toISOString());
+    const count = states().length;
+    t += 1000;
+    activityStream.emit('activity', { type: 'llm:end', botId: 'b1', timestamp: t });
+    await new Promise((r) => setImmediate(r));
+    // throttled: no publish yet; the trailing one comes after the window
+    expect(states().length).toBe(count);
+    await watcher.stop();
+  });
+});
+
+describe('Watcher: live tier switches (applyConfig)', () => {
+  const fake = { chat: async () => ({ text: '{}' }) } as unknown as LLMClient;
+  const llm = {
+    notice: { client: fake, model: 'claude-haiku-5-5', backend: 'claude-cli' as const },
+    integrate: { client: fake, model: 'claude-opus-5-5', backend: 'claude-cli' as const },
+  };
+
+  test('turning notice and integrate on starts their timers without a restart; off stops them', async () => {
+    const { watcher, config } = make({ llm });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: false });
+    const w = config.watcher as { notice: { enabled: boolean }; integrate: { enabled: boolean } };
+    w.notice = { ...w.notice, enabled: true };
+    w.integrate = { ...w.integrate, enabled: true };
+    watcher.applyConfig();
+    expect(watcher.state().timers).toEqual({ notice: true, integrate: true });
+    w.notice = { ...w.notice, enabled: false };
+    watcher.applyConfig();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: true });
+    await watcher.stop();
+    expect(watcher.state().timers).toEqual({ notice: false, integrate: false });
+  });
+
+  test('applyConfig publishes a watcher:state carrying the new tier switches and caps', async () => {
+    const { watcher, config, events } = make({ llm });
+    await watcher.start();
+    await watcher.idle();
+    const w = config.watcher as {
+      notice: { enabled: boolean; maxPerDay: number };
+      integrate: { enabled: boolean; maxPerDay: number };
+    };
+    w.notice = { ...w.notice, enabled: true, maxPerDay: 7 };
+    w.integrate = { ...w.integrate, enabled: false, maxPerDay: 3 };
+    const before = events.length;
+    watcher.applyConfig();
+    const published = events.slice(before).filter((e) => e.type === 'watcher:state');
+    expect(published.length).toBe(1);
+    expect((published[0]?.data as { tiers?: unknown }).tiers).toEqual({
+      notice: { enabled: true, maxPerDay: 7 },
+      integrate: { enabled: false, maxPerDay: 3 },
+    });
+    expect(watcher.state().tiers?.notice.maxPerDay).toBe(7);
+    await watcher.stop();
+  });
+
+  test('before birth is done, applyConfig starts nothing (birth starts the timers when it ends)', async () => {
+    const { watcher, config } = make({ llm });
+    await watcher.start();
+    const w = config.watcher as { notice: { enabled: boolean } };
+    w.notice = { ...w.notice, enabled: true };
+    watcher.applyConfig();
+    expect(watcher.state().timers?.notice).toBe(false);
+    await watcher.idle();
+    expect(watcher.state().timers?.notice).toBe(true);
     await watcher.stop();
   });
 });

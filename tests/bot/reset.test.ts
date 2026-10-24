@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type BotResetDeps, BotResetService } from '../../src/bot/bot-reset';
+import * as configModule from '../../src/config';
 import type { SessionConfig } from '../../src/config';
 import type { Logger } from '../../src/logger';
 import { SessionManager } from '../../src/session';
@@ -695,6 +696,29 @@ describe('BotResetService production skills cleanup', () => {
     const persistedBots = JSON.parse(readFileSync(join(tmpDir, 'bots.json'), 'utf-8'));
     expect(persistedBots[0].skills).toEqual(['reminders']);
     expect(result.cleared.productionSkills).toEqual(['bookmarks']);
+  });
+
+  test('persists config.json through patchConfigFile: raw ${VAR}s kept, atomic, no .bak/.tmp', async () => {
+    setupProductionSkills(['streak-tracking']);
+    setupBuiltinSkills(['reminders']);
+    writeConfig({
+      apiKey: '${SECRET}',
+      skills: { enabled: ['reminders', 'streak-tracking'], config: {} },
+    });
+    const spy = spyOn(configModule, 'patchConfigFile');
+    try {
+      const service = createResetServiceWithConfig();
+      await service.reset('test-bot', soulDir);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy.mock.calls[0][0]).toBe(configPath);
+    } finally {
+      spy.mockRestore();
+    }
+    const persisted = JSON.parse(readFileSync(configPath, 'utf-8'));
+    expect(persisted.apiKey).toBe('${SECRET}');
+    expect(persisted.skills.enabled).toEqual(['reminders']);
+    expect('bots' in persisted).toBe(false);
+    expect(readdirSync(tmpDir).filter((f) => /\.(bak|tmp)/.test(f))).toEqual([]);
   });
 
   test('skips gracefully when no production dir exists', async () => {

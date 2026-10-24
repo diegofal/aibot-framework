@@ -9632,6 +9632,36 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-canvas:active {
   cursor: grabbing;
 }
+.watcher-tiers {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  margin-right: var(--s2);
+  font-size: var(--fs-sm);
+}
+.watcher-tier,
+.watcher-tier-cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.watcher-tier-cap input {
+  width: 4.5em;
+}
+.watcher-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  color: var(--stage-ink);
+  opacity: 0.45;
+  font-size: var(--fs-xs);
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.watcher-ball.engaged .watcher-hint {
+  opacity: 0;
+}
 @keyframes watcher-fade-in {
   from {
     opacity: 0;
@@ -9764,6 +9794,11 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 }
 .watcher-note.is-error {
   color: #f87171;
+}
+/* wrappers drawState updates in place; they add no box of their own */
+.watcher-notes,
+.watcher-tiers-host {
+  display: contents;
 }
 .watcher-state-actions {
   display: flex;

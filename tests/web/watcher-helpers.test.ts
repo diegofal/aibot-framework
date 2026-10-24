@@ -31,6 +31,7 @@ import {
   replayQueue,
   shellPosition,
   stateHtml,
+  syncStateButton,
   watcherDisabledHtml,
   watcherErrorHtml,
 } from '../../web/pages/watcher-helpers.js';
@@ -311,6 +312,12 @@ describe('stateHtml', () => {
     expect(stateHtml(runningState({ linkStatus: 'no-embeddings' }), NOW)).toContain(
       'no embeddings'
     );
+  });
+
+  it('explains a partial link in the amber note', () => {
+    const html = stateHtml(runningState({ linkStatus: 'partial' }), NOW);
+    expect(html).toContain('<div class="watcher-note">');
+    expect(html).toContain('partly linked');
   });
 
   it('escapes the last error', () => {
@@ -779,5 +786,52 @@ describe('canStartReplay (no double start)', () => {
     // A second click while the first is still fetching the day's log.
     expect(canStartReplay({ ball, replay: null, replayLoading: true })).toBe(false);
     expect(canStartReplay(null)).toBe(false);
+  });
+});
+
+describe('syncStateButton (Start/Stop updated in place, never re-created)', () => {
+  function fakeButton(attrs: Record<string, string>) {
+    const el = {
+      attrs: { ...attrs } as Record<string, string>,
+      className: attrs.class ?? '',
+      textContent: '',
+      disabled: false,
+      writes: 0,
+      getAttribute(k: string) {
+        return this.attrs[k] ?? null;
+      },
+      setAttribute(k: string, v: string) {
+        this.writes++;
+        this.attrs[k] = v;
+      },
+    };
+    return el;
+  }
+
+  it('toggles disabled and the label on the same element across busy republishes', () => {
+    const el = fakeButton({ 'data-action': 'watcher-start', class: 'btn btn-sm btn-primary' });
+    el.textContent = 'Start';
+    syncStateButton(el, { running: false }, { busy: true });
+    expect(el.disabled).toBe(true);
+    const writes = el.writes;
+    // the ≤ 5 s republish while busy changes nothing
+    syncStateButton(el, { running: false }, { busy: true });
+    syncStateButton(el, { running: false }, { busy: true });
+    expect(el.writes).toBe(writes);
+    expect(el.disabled).toBe(true);
+    syncStateButton(el, { running: true }, { busy: false });
+    expect(el.disabled).toBe(false);
+    expect(el.textContent).toBe('Stop');
+    expect(el.attrs['data-action']).toBe('watcher-stop');
+    expect(el.className).toBe('btn btn-sm');
+  });
+
+  it('matches the markup stateHtml builds', () => {
+    expect(stateHtml(runningState({ running: true }), NOW)).toContain(
+      '<button type="button" class="btn btn-sm" data-action="watcher-stop">Stop</button>'
+    );
+    expect(stateHtml(runningState({ running: false }), NOW, { busy: true })).toContain(
+      '<button type="button" class="btn btn-sm btn-primary" data-action="watcher-start" disabled>Start</button>'
+    );
   });
 });

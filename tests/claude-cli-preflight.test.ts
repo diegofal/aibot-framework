@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { checkClaudeCli, formatPreflight } from '../src/bot/claude-cli-preflight';
+import {
+  LEAN_FLAGS_MIN_VERSION,
+  checkClaudeCli,
+  compareVersions,
+  formatPreflight,
+} from '../src/bot/claude-cli-preflight';
 
 const realPlatform = process.platform;
 
@@ -216,5 +221,38 @@ describe('formatPreflight', () => {
       credentials: 'missing',
     });
     expect(line).toMatch(/not logged in|claude auth login/i);
+  });
+});
+
+describe('lean no-tools flags minimum version', () => {
+  test('warns when the CLI is older than the verified version for --tools/--setting-sources', () => {
+    const line = formatPreflight({
+      available: true,
+      version: '2.0.10',
+      configDir: '/app/data/claude',
+      credentials: 'present',
+    });
+    expect(line).toContain(LEAN_FLAGS_MIN_VERSION);
+    expect(line).toMatch(/--tools/);
+    // --setting-sources "" goes on every call (MCP path too), so an old CLI breaks all of them
+    expect(line).toMatch(/--setting-sources "" \(every call\)/);
+  });
+
+  test('no warning at or above the verified version, nor when the version is unknown', () => {
+    for (const version of [LEAN_FLAGS_MIN_VERSION, '2.2.0', '10.0.0', undefined]) {
+      const line = formatPreflight({
+        available: true,
+        version,
+        configDir: '/app/data/claude',
+        credentials: 'present',
+      });
+      expect(line).not.toMatch(/--tools/);
+    }
+  });
+
+  test('compareVersions orders dotted versions numerically', () => {
+    expect(compareVersions('2.1.289', '2.1.29')).toBeGreaterThan(0);
+    expect(compareVersions('2.1.0', '2.1.0')).toBe(0);
+    expect(compareVersions('1.9.9', '2.0.0')).toBeLessThan(0);
   });
 });

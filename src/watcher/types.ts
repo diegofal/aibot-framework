@@ -120,7 +120,8 @@ export interface BufferItem {
   fromOperator?: true;
 }
 
-export type LinkStatus = 'ok' | 'no-embeddings' | 'pending';
+/** `partial`: some neurons embedded, then an embedding error stopped the run; start/maintenance continue it. */
+export type LinkStatus = 'ok' | 'partial' | 'no-embeddings' | 'pending';
 
 export interface WatcherState {
   running: boolean;
@@ -135,6 +136,14 @@ export interface WatcherState {
   attending?: string[];
   /** When the last integrate pass set `attending`. */
   attendingAt?: string;
+  /** Whether the notice and integrate timers are running now (`Watcher.applyConfig`). */
+  timers?: { notice: boolean; integrate: boolean };
+  /**
+   * The live tier switches and daily caps (`tierSwitches`): every state
+   * publish carries them, so a change made in one dashboard tab
+   * (`POST /api/watcher/config` → `applyConfig`) reaches the others.
+   */
+  tiers?: Record<'notice' | 'integrate', { enabled: boolean; maxPerDay: number }>;
 }
 
 export type WatcherEventType =

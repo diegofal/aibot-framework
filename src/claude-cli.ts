@@ -478,6 +478,70 @@ export function resolveClaudeBin(path: string, which: WhichFn = (cmd) => Bun.whi
 }
 
 /**
+ * Every call, both paths: `--setting-sources ""` reads no user/project/local
+ * settings (`settings.json` in `CLAUDE_CONFIG_DIR`: hooks, plugins, output
+ * style, `env`, `apiKeyHelper`, `model`). Uniform on purpose: such a setting
+ * applies to no framework call, never to tools calls only (configure the CLI
+ * through the process env instead; the login credentials are not settings).
+ * Measured 2026-10-23 on CLI 2.1.300, Haiku, "Reply ok." from an empty cwd
+ * (context tokens): default 34.2k; `--tools ""` alone 10.5k;
+ * `--setting-sources ""` alone 18.6k; both 3.2k. On the MCP path (one tool
+ * call) 79.3k → 40.4k with it, and the bridge tool still answers.
+ */
+export const NO_SETTINGS_FLAGS: readonly string[] = ['--setting-sources', ''];
+
+/**
+ * Flags every no-tools call carries: `--tools ""` loads none of the CLI's
+ * native tools, plus `NO_SETTINGS_FLAGS`. With our own `--system-prompt` too,
+ * a Haiku call is ~565 tokens. `--tools ""` is never used on the MCP path:
+ * there `--allowedTools` / `--disallowedTools` scope the tools and it would
+ * hide the bridge.
+ */
+export const NO_TOOLS_LEAN_FLAGS: readonly string[] = ['--tools', '', ...NO_SETTINGS_FLAGS];
+
+/** argv (+ stdin) for a no-tools `claude -p` call. Pure; `bin` is already resolved. */
+export function buildClaudeGenerateArgs(
+  bin: string,
+  prompt: string,
+  opts: Pick<ClaudeGenerateOptions, 'model' | 'systemPrompt' | 'images'>
+): { args: string[]; stdin?: string } {
+  const input = buildClaudePromptInput(prompt, opts.images);
+  const args = [bin, ...input.args, SKIP_PERMISSIONS_FLAG, ...NO_TOOLS_LEAN_FLAGS];
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.systemPrompt) args.push('--system-prompt', opts.systemPrompt);
+  return input.stdin === undefined ? { args } : { args, stdin: input.stdin };
+}
+
+/** argv (+ stdin) for an MCP-bridge call. Pure. */
+export function buildClaudeToolsArgs(
+  bin: string,
+  prompt: string,
+  opts: Pick<ClaudeGenerateOptions, 'model' | 'systemPrompt' | 'images'> & {
+    mcpConfigPath: string;
+    allowedTools: string[];
+    disallowedNativeTools?: string[];
+  }
+): { args: string[]; stdin?: string } {
+  const input = buildClaudePromptInput(prompt, opts.images);
+  const args = [
+    bin,
+    ...input.args,
+    '--mcp-config',
+    opts.mcpConfigPath,
+    '--no-session-persistence',
+    '--allowedTools',
+    opts.allowedTools.join(','),
+    ...NO_SETTINGS_FLAGS,
+  ];
+  if (opts.disallowedNativeTools && opts.disallowedNativeTools.length > 0) {
+    args.push('--disallowedTools', opts.disallowedNativeTools.join(','));
+  }
+  if (opts.model) args.push('--model', opts.model);
+  if (opts.systemPrompt) args.push('--system-prompt', opts.systemPrompt);
+  return input.stdin === undefined ? { args } : { args, stdin: input.stdin };
+}
+
+/**
  * Spawn Claude CLI in prompt mode and return the text output + usage.
  * Uses --output-format json to capture token usage metadata.
  * Throws on timeout, non-zero exit, or empty output so callers can fall back.
@@ -502,14 +566,8 @@ async function runClaudeGenerate(
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const input = buildClaudePromptInput(prompt, opts.images);
-  const args = [resolveClaudeBin(claudePath), ...input.args, SKIP_PERMISSIONS_FLAG];
-  if (opts.model) {
-    args.push('--model', opts.model);
-  }
-  if (opts.systemPrompt) {
-    args.push('--system-prompt', opts.systemPrompt);
-  }
+  const input = buildClaudeGenerateArgs(resolveClaudeBin(claudePath), prompt, opts);
+  const args = input.args;
 
   const proc = Bun.spawn(args, {
     cwd: tmpdir(), // Isolated dir — no CLAUDE.md, no auto-memory leakage
@@ -734,25 +792,12 @@ async function runClaudeGenerateWithTools(
     // Claude CLI names MCP tools as "mcp__<server>__<tool>".
     const allowedTools = mcpDefs.map((t) => `mcp__aibot-tools__${t.name}`);
 
-    const input = buildClaudePromptInput(prompt, opts.images);
-    const args = [
-      claudePath,
-      ...input.args,
-      '--mcp-config',
+    const input = buildClaudeToolsArgs(claudePath, prompt, {
+      ...opts,
       mcpConfigPath,
-      '--no-session-persistence',
-      '--allowedTools',
-      allowedTools.join(','),
-    ];
-    if (opts.disallowedNativeTools && opts.disallowedNativeTools.length > 0) {
-      args.push('--disallowedTools', opts.disallowedNativeTools.join(','));
-    }
-    if (opts.model) {
-      args.push('--model', opts.model);
-    }
-    if (opts.systemPrompt) {
-      args.push('--system-prompt', opts.systemPrompt);
-    }
+      allowedTools,
+    });
+    const args = input.args;
 
     opts.logger.info(
       { toolCount: opts.tools.length, callbackPort },

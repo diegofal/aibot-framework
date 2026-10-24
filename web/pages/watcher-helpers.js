@@ -269,11 +269,19 @@ const fmt = (n) => Number(n).toLocaleString('en-US');
 
 const LINK_NOTES = {
   'no-embeddings': 'no embeddings: neurons sit on shells by kind, without related links',
+  partial:
+    'partly linked: an embedding error stopped the run; the rest get linked at the next start or maintenance',
   pending: 'linking what it knows…',
 };
 
-/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
-export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
+/**
+ * The pieces of the state bar, each its own HTML: `main` (dot, phase, ages),
+ * `counts`, `notes`, `tiers` (the tier controls) and `button` (Start/Stop).
+ * `drawState` updates them in place so a republish never rebuilds the tier
+ * inputs under the operator's cursor. `button` is built only when read (the
+ * first render, `stateHtml`): afterwards `syncStateButton` updates it in place.
+ */
+export function stateParts(state, nowMs = Date.now(), { busy = false } = {}) {
   const s = state ?? {};
   const running = !!s.running;
   const main = [
@@ -311,16 +319,116 @@ export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
     notes.push(`<div class="watcher-note">${LINK_NOTES[s.linkStatus]}</div>`);
   if (s.lastError) notes.push(`<div class="watcher-note is-error">${esc(s.lastError)}</div>`);
 
-  const action = running ? 'watcher-stop' : 'watcher-start';
-  const button = `<button type="button" class="btn btn-sm${running ? '' : ' btn-primary'}" data-action="${action}"${
-    busy ? ' disabled' : ''
-  }>${running ? 'Stop' : 'Start'}</button>`;
+  return {
+    main: main.join('<span class="watcher-sep">·</span>'),
+    counts: chips.join(''),
+    notes: notes.join(''),
+    tiers: tierControlsHtml(s.config, { busy }),
+    get button() {
+      return stateButtonHtml(s, { busy });
+    },
+  };
+}
 
-  return `<div class="watcher-state"><div class="watcher-state-main">${main.join(
-    '<span class="watcher-sep">·</span>'
-  )}</div><div class="watcher-counts">${chips.join('')}</div>${notes.join(
-    ''
-  )}<div class="watcher-state-actions">${button}</div></div>`;
+/** What the Start/Stop button of the state bar shows. */
+function stateButtonSpec(state, { busy = false } = {}) {
+  const running = !!state?.running;
+  return {
+    action: running ? 'watcher-stop' : 'watcher-start',
+    className: `btn btn-sm${running ? '' : ' btn-primary'}`,
+    label: running ? 'Stop' : 'Start',
+    disabled: !!busy,
+  };
+}
+
+/**
+ * Update the Start/Stop button in place (action, class, label, disabled),
+ * touching only what changed: re-creating it on every `watcher:state`
+ * republish lost its focus (an `outerHTML` compare never matched while busy,
+ * the DOM serialises `disabled=""`).
+ */
+export function syncStateButton(button, state, { busy = false } = {}) {
+  if (!button) return;
+  const b = stateButtonSpec(state, { busy });
+  if (button.getAttribute('data-action') !== b.action) button.setAttribute('data-action', b.action);
+  if (button.className !== b.className) button.className = b.className;
+  if (button.textContent !== b.label) button.textContent = b.label;
+  if (button.disabled !== b.disabled) button.disabled = b.disabled;
+}
+
+/** The Start/Stop button's HTML, for the first render of the state bar. */
+function stateButtonHtml(state, { busy = false } = {}) {
+  const b = stateButtonSpec(state, { busy });
+  return `<button type="button" class="${b.className}" data-action="${b.action}"${
+    b.disabled ? ' disabled' : ''
+  }>${b.label}</button>`;
+}
+
+/** Running dot, phase, age, counts by kind (non-zero only), edges, Start/Stop. */
+export function stateHtml(state, nowMs = Date.now(), { busy = false } = {}) {
+  const p = stateParts(state, nowMs, { busy });
+  return `<div class="watcher-state"><div class="watcher-state-main">${p.main}</div><div class="watcher-counts">${p.counts}</div><div class="watcher-notes">${p.notes}</div><div class="watcher-state-actions"><span class="watcher-tiers-host">${p.tiers}</span>${p.button}</div></div>`;
+}
+
+/** What the tier controls show: the server values per tier and whether they are disabled. */
+function tierKey(view) {
+  const c = view?.config && typeof view.config === 'object' ? view.config : null;
+  const tiers = Object.keys(TIER_LABELS).map((t) =>
+    c?.[t] ? [!!c[t].enabled, Number(c[t].maxPerDay)] : null
+  );
+  return JSON.stringify([tiers, !!view?.busy]);
+}
+
+/**
+ * Rebuild the tier controls? `prev` / `next` are `{ config, busy }` (`prev`
+ * null on the first draw). Only when what they show changed and no control has
+ * the focus (the operator is typing there); `force` when the page must undo a
+ * value it did not send.
+ */
+export function shouldRedrawTiers(prev, next, focused, { force = false } = {}) {
+  if (force) return true;
+  if (focused) return false;
+  return !prev || tierKey(prev) !== tierKey(next);
+}
+
+const TIER_LABELS = { notice: 'Notice', integrate: 'Integrate' };
+
+/**
+ * The live switches of the LLM tiers (`POST /api/watcher/config`): per tier
+ * an on/off checkbox and its daily call cap. Empty without a config.
+ */
+export function tierControlsHtml(config, { busy = false } = {}) {
+  if (!config || typeof config !== 'object') return '';
+  const dis = busy ? ' disabled' : '';
+  return `<div class="watcher-tiers">${Object.keys(TIER_LABELS)
+    .filter((tier) => config[tier])
+    .map((tier) => {
+      const t = config[tier];
+      const cap = Number.isFinite(Number(t.maxPerDay)) ? Number(t.maxPerDay) : 0;
+      return `<label class="watcher-tier"><input type="checkbox" data-tier="${tier}" data-field="enabled"${
+        t.enabled ? ' checked' : ''
+      }${dis}> ${TIER_LABELS[tier]}</label><label class="watcher-tier-cap" title="${TIER_LABELS[tier]} calls per day"><input type="number" min="0" step="1" data-tier="${tier}" data-field="maxPerDay" value="${cap}"${dis}>/day</label>`;
+    })
+    .join('')}</div>`;
+}
+
+/** The `POST /api/watcher/config` body for one changed control, or null when invalid. */
+export function tierPatchFromInput(tier, field, value) {
+  if (!(tier in TIER_LABELS)) return null;
+  if (field === 'enabled') return { [tier]: { enabled: !!value } };
+  if (field === 'maxPerDay') {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    return { [tier]: { maxPerDay: Number(text) } };
+  }
+  return null;
+}
+
+/** A new state over the previous one, keeping the tier `config` an event does not carry. */
+export function mergeWatcherState(prev, next) {
+  const tiers = next?.tiers && typeof next.tiers === 'object' ? next.tiers : null;
+  const config = next?.config ?? tiers ?? prev?.config;
+  return { ...(next ?? {}), ...(config ? { config } : {}), enabled: true };
 }
 
 /** Colour key for the ball: one dot per kind, plus the origin pair. */
@@ -480,7 +588,7 @@ export function applyWatcherEvent(model, event) {
       return { kind: 'log', row: data };
     }
     case 'watcher:state':
-      model.state = { ...data, enabled: true };
+      model.state = mergeWatcherState(model.state, data);
       return { kind: 'state' };
     default:
       return NONE;
@@ -673,4 +781,94 @@ export function neuronSheetBody(detail, nowMs = Date.now(), { textOf = () => nul
       ? `<ul class="watcher-sheet-edges">${edgeItems.join('')}${more}</ul>`
       : '<div class="text-dim">No connections yet.</div>'
   }</div>`;
+}
+
+/* ── Activity on the ball ─────────────────────────────────────────── */
+
+/** How long auto-rotation holds still after a pulse, so the eye can find it. */
+export const PULSE_ROTATE_PAUSE_MS = 2000;
+/** How long the edge from a pulsed neuron to its bot stays brightened. */
+export const EDGE_FLASH_MS = 1200;
+
+/**
+ * The `owned_by` edge from neuron `id` to the bot (`entity`) that owns it,
+ * or null. The server activates that bot with its goal or topic; the page
+ * brightens this edge between the two.
+ */
+/**
+ * The vertices of the bright pulsed edges at `nowMs`: `live` (the flashes
+ * still lit), and flat `position` / `color` arrays (two vertices per flash,
+ * colours scaled by `edgeFlashLevel`). `slotOf` maps neuron id → slot in
+ * `arr.position` / `arr.aColor`. No flashes (a cleared ball) → empty arrays,
+ * which is what the ball writes on `clear()` so no stale bright edge stays. Pure.
+ */
+export function flashBuffers(flashes, nowMs, slotOf, arr) {
+  const live = (flashes ?? []).filter((f) => edgeFlashLevel(nowMs - f.at) > 0);
+  const position = [];
+  const color = [];
+  for (const f of live) {
+    const level = edgeFlashLevel(nowMs - f.at);
+    const i = slotOf.get(f.from);
+    const j = slotOf.get(f.to);
+    if (i === undefined || j === undefined) continue;
+    for (const k of [i, j]) {
+      position.push(arr.position[k * 3], arr.position[k * 3 + 1], arr.position[k * 3 + 2]);
+      color.push(
+        Math.min(1, arr.aColor[k * 3] * 0.4 + 0.6) * level,
+        Math.min(1, arr.aColor[k * 3 + 1] * 0.4 + 0.6) * level,
+        Math.min(1, arr.aColor[k * 3 + 2] * 0.4 + 0.6) * level
+      );
+    }
+  }
+  return { live, position, color };
+}
+
+export function ownerEdgeOf(model, id) {
+  if (!model?.edges || !model.neurons || typeof id !== 'string') return null;
+  for (const e of model.edges.values()) {
+    if (e?.rel !== 'owned_by' || e.from !== id) continue;
+    if (model.neurons.get(e.to)?.kind === 'entity') return e;
+  }
+  return null;
+}
+
+/**
+ * What one model effect does to the ball beyond its own bookkeeping: for a
+ * pulse, `{ pulse, flashEdge: { from, to } | null, pauseRotateMs }`; null for
+ * every effect that touches no neuron the page has (log rows such as the
+ * sense summary, state, none).
+ */
+export function ballPlanFor(model, effect) {
+  if (!effect || effect.kind !== 'pulse' || !model?.neurons?.has(effect.id)) return null;
+  const edge = ownerEdgeOf(model, effect.id);
+  return {
+    pulse: effect.id,
+    flashEdge: edge ? { from: edge.from, to: edge.to } : null,
+    pauseRotateMs: PULSE_ROTATE_PAUSE_MS,
+  };
+}
+
+/** Auto-rotate this frame? Not while dragging, after recent input, or in a pulse pause. */
+export function autoRotates(
+  nowMs,
+  { lastInputMs = 0, pausedUntilMs = 0, dragging = false, idleMs }
+) {
+  if (dragging) return false;
+  if (nowMs - lastInputMs <= idleMs) return false;
+  return nowMs >= pausedUntilMs;
+}
+
+/** Brightness (1 → 0, linear) of a flashed edge `elapsedMs` after the flash. */
+export function edgeFlashLevel(elapsedMs) {
+  if (!(elapsedMs >= 0) || elapsedMs >= EDGE_FLASH_MS) return 0;
+  return 1 - elapsedMs / EDGE_FLASH_MS;
+}
+
+/**
+ * Does the wheel zoom the ball? Only once the ball is engaged (clicked, until
+ * the pointer leaves) or with Ctrl/Cmd held; otherwise the page scrolls.
+ */
+export function wheelZooms(input) {
+  if (!input) return false;
+  return !!(input.engaged || input.ctrlKey || input.metaKey);
 }

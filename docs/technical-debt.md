@@ -232,6 +232,60 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** About an hour: skip a re-proposal while a deferred record for the same insight and kind is newer than the throttle's retry time.
 
+### Lean Claude CLI flags verified on one CLI version only
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/claude-cli.ts` (`NO_SETTINGS_FLAGS`, `NO_TOOLS_LEAN_FLAGS`), `src/bot/claude-cli-preflight.ts` (`LEAN_FLAGS_MIN_VERSION`) |
+| **Decided by** | lead, watcher cleanup |
+
+**What was deferred.** Every call passes `--setting-sources ""` (the MCP path too, since 2026-10-23) and every no-tools call `--tools ""`. They were measured on CLI 2.1.289 and again on 2.1.300 (the version pinned in the Dockerfile); the first version that accepts both is not known, so the preflight only warns below 2.1.289 instead of dropping the flags on an older CLI. Passing empty-string arguments through the Windows `claude.cmd` wrapper was not tried either.
+
+**Why it was the right call then.** The container runs exactly 2.1.289 and the saving is ~17× per call; probing the flags at runtime would add a spawn per boot for a case that does not exist today.
+
+**What it costs while it stands.** On an older CLI, or a Windows host using the npm `.cmd` shim, every planner, strategist, memory, watcher and (for `--setting-sources`) MCP tools call could fail with `unknown option` (the preflight line says so). The three direct spawns of the CLI outside `src/claude-cli.ts` carry the same flags and the same risk: `src/bot/soul-memory-consolidator.ts` (`buildConsolidationCliArgs`, `--tools ""` and `--setting-sources ""`), `src/bot/soul-quality-reviewer.ts` (`buildQualityReviewCliArgs`) and `src/tools/improve.ts` (`buildImproveCliArgs`), both `--setting-sources ""` only because they use the CLI's Read/Edit/Write tools.
+
+**The trigger.** Pinning a different `CLAUDE_CLI_VERSION`, or running the bots on Windows outside the container.
+
+**Estimated cost to pay.** About an hour: run `claude --help` once at boot and drop each flag the CLI does not list.
+
+### Bookkeeping facts already in a born watcher graph stay
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `src/watcher/birth.ts` (`isBookkeepingLine`, memory stage) |
+| **Decided by** | lead, watcher cleanup |
+
+**What was deferred.** Birth now skips operational lines of the daily logs, but the live graph was born before the filter: its `ask_human … enviada` / `t-…` facts stay until they are archived as inactive (`graph.archiveAfterDays`, 30 days).
+
+**Why it was the right call then.** Archiving neurons by a text rule is a destructive pass over the operator's graph; the facts are noise, not wrong, and fade on their own.
+
+**What it costs while it stands.** Bookkeeping facts can still show in `fleet_memory_search` results and the ball for up to a month.
+
+**The trigger.** The operator sees one of them in a recall or asks to clean the graph.
+
+**Estimated cost to pay.** Half a day: a hygiene routine with preview/apply that archives live `birth:memory` facts matching `isBookkeepingLine`.
+
+### Ball pulse, edge flash and wheel gating are not under test
+
+| | |
+|---|---|
+| **Added** | 2026-10-23 |
+| **Where** | `web/pages/watcher-ball.js` |
+| **Decided by** | lead, watcher cleanup |
+
+**What was deferred.** The decisions are pure helpers with tests (`ballPlanFor`, `ownerEdgeOf`, `autoRotates`, `edgeFlashLevel`, `wheelZooms`); the WebGL wiring that uses them (flash `LineSegments`, rotation pause, wheel listener, hint) was not exercised in a browser.
+
+**Why it was the right call then.** The dashboard login blocks browser automation and the watcher is off in production.
+
+**What it costs while it stands.** A wiring bug shows only when someone opens the Watcher page with the watcher on.
+
+**The trigger.** Turning the watcher on in the live container.
+
+**Estimated cost to pay.** Fifteen minutes by hand on the page: click, scroll, watch a goal pulse light its bot.
+
 ## Paid
 
 ### Time-of-day-dependent test in `tests/session-end.test.ts` — paid 2026-10-12 (commit "fix(session): the daily reset also fires before the reset hour")

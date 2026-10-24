@@ -17,6 +17,7 @@ import { mountBall } from './watcher-ball.js';
 import {
   SPAWN_PACE,
   applyWatcherEvent,
+  ballPlanFor,
   birthDate,
   canStartReplay,
   createWatcherModel,
@@ -24,12 +25,17 @@ import {
   legendHtml,
   logListHtml,
   mergeLogRows,
+  mergeWatcherState,
   needsGraphRefetch,
   neuronSheetBody,
   readWatcherMessage,
   reconcileGraph,
   replayQueue,
+  shouldRedrawTiers,
   stateHtml,
+  stateParts,
+  syncStateButton,
+  tierPatchFromInput,
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
@@ -88,9 +94,40 @@ function showOff() {
 
 /* ── Rendering ───────────────────────────────────────────────────── */
 
-function drawState() {
+/**
+ * The state bar. First draw builds it; afterwards counts, phase, notes and the
+ * button are updated in place and the tier controls are rebuilt only when
+ * their values changed and none has the focus (`shouldRedrawTiers`): the ≤ 5 s
+ * `watcher:state` republish never wipes a cap being typed. `forceTiers` puts
+ * the controls back to the last known state (a change the page did not send).
+ */
+function drawState({ forceTiers = false } = {}) {
   const host = $('#watcher-state');
-  if (host) host.innerHTML = stateHtml(page.model.state, Date.now(), { busy: page.busy });
+  if (!host) return;
+  const state = page.model.state;
+  const view = { config: state?.config ?? null, busy: !!page.busy };
+  const bar = host.querySelector('.watcher-state');
+  if (!bar) {
+    host.innerHTML = stateHtml(state, Date.now(), { busy: page.busy });
+    page.tierView = view;
+    return;
+  }
+  const parts = stateParts(state, Date.now(), { busy: page.busy });
+  const set = (sel, html) => {
+    const node = bar.querySelector(sel);
+    if (node && node.innerHTML !== html) node.innerHTML = html;
+  };
+  set('.watcher-state-main', parts.main);
+  set('.watcher-counts', parts.counts);
+  set('.watcher-notes', parts.notes);
+  const button = bar.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
+  syncStateButton(button, state, { busy: page.busy });
+  const tiers = bar.querySelector('.watcher-tiers-host');
+  const focused = !!tiers?.contains(document.activeElement);
+  if (tiers && shouldRedrawTiers(page.tierView, view, focused, { force: forceTiers })) {
+    tiers.innerHTML = parts.tiers;
+    page.tierView = view;
+  }
 }
 
 function drawLog() {
@@ -281,9 +318,15 @@ function onEffect(effect) {
     case 'archive':
       if (ballLive) page.ball.update(effect.id);
       break;
-    case 'pulse':
-      if (ballLive) page.ball.pulse(effect.id);
+    case 'pulse': {
+      const plan = ballLive ? ballPlanFor(page.model, effect) : null;
+      if (plan) {
+        page.ball.pulse(plan.pulse);
+        if (plan.flashEdge) page.ball.flashEdge(plan.flashEdge.from, plan.flashEdge.to);
+        page.ball.pauseRotation(plan.pauseRotateMs);
+      }
       break;
+    }
     case 'edge':
       if (ballLive) page.ball.edgesChanged();
       break;
@@ -373,8 +416,26 @@ async function setRunning(action) {
     showToast(`Could not ${action} the watcher: ${res?.error || 'no response'}`, {
       tone: 'danger',
     });
-  else page.model.state = { ...res, enabled: true };
+  else page.model.state = mergeWatcherState(page.model.state, res);
   drawState();
+}
+
+async function setTiers(patch) {
+  // A change while another request is out is not sent: put the controls back
+  // to the last known state instead of leaving the unsent value showing.
+  if (page.busy) return drawState({ forceTiers: true });
+  page.busy = true;
+  drawState({ forceTiers: true });
+  const res = await api('/api/watcher/config', { method: 'POST', body: patch }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!page) return;
+  page.busy = false;
+  if (isWatcherOff(res)) return showOff();
+  if (!res || res.error)
+    showToast(`Could not change the watcher: ${res?.error || 'no response'}`, { tone: 'danger' });
+  else page.model.state = mergeWatcherState(page.model.state, res);
+  drawState({ forceTiers: true });
 }
 
 function selectRow(li) {
@@ -580,6 +641,23 @@ function wire(el, signal) {
       if (neuronLink) return openNeuron(neuronLink.dataset.watcherNeuron);
       const li = e.target.closest('li.watcher-row');
       if (li && !page.replay && li.dataset.neurons) selectRow(li);
+    },
+    { signal }
+  );
+  // Notice / Integrate switches and daily caps (`POST /api/watcher/config`).
+  el.addEventListener(
+    'change',
+    (e) => {
+      if (!page) return;
+      const input = e.target.closest?.('[data-tier][data-field]');
+      if (!input) return;
+      const value = input.dataset.field === 'enabled' ? input.checked : input.value;
+      const patch = tierPatchFromInput(input.dataset.tier, input.dataset.field, value);
+      if (!patch) {
+        showToast('A daily cap is a whole number, 0 or more.', { tone: 'danger' });
+        return drawState({ forceTiers: true });
+      }
+      return setTiers(patch);
     },
     { signal }
   );

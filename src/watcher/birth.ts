@@ -31,7 +31,7 @@ import type { ContactEntry, UserDirectory } from '../bot/user-directory';
 import type { Config } from '../config';
 import { readTasksSnapshot } from '../goals/task-store';
 import type { Logger } from '../logger';
-import { SoulLoader } from '../soul';
+import { SoulLoader, parseIdentityField, parseIdentityName } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { type AgentCycleRecord, readAgentCycles } from '../stats/readers/agent-cycles';
 import { parseGoals } from '../tools/goals';
@@ -42,7 +42,11 @@ import {
   narrateBorn,
   narrateGoals,
   narrateHistory,
+  narrateLateLink,
   narrateLearned,
+  narrateLinkFailed,
+  narrateLinkSkipped,
+  narrateLinkStopped,
   narrateLinking,
   narrateMetBot,
   narrateMetPerson,
@@ -69,6 +73,14 @@ import {
 
 const DAY_MS = 86_400_000;
 const EMBED_BATCH = 32;
+/**
+ * Budget of the one embed before a backfill. The first call may load the
+ * model (a cold Ollama load takes 6–10 s on CPU, and it unloads again after
+ * `keep_alive`), so a late answer within this is an embedder that is up. A
+ * connection error (ECONNREFUSED, ENOTFOUND) rejects at once and never waits
+ * for it.
+ */
+export const EMBED_PROBE_TIMEOUT_MS = 60_000;
 const RELATED_PER_NEURON = 5;
 const TEXT_MAX = 300;
 
@@ -257,10 +269,12 @@ function stageFleet(ctx: StageCtx): void {
     if (ctx.graph.findByKey(key)) continue;
     const soulDir = soulDirOf(ctx.config, bot);
     const loader = loaderFor(ctx, soulDir);
-    const identity = parseKeyValues(loader.readIdentity());
-    const name = identity.name ?? bot.name ?? bot.id;
+    // Same block rule as the relay's `readIdentityName`, so both agree on the name.
+    const identityRaw = loader.readIdentity();
+    const name = parseIdentityName(identityRaw) ?? bot.name ?? bot.id;
+    const vibe = parseIdentityField(identityRaw, 'vibe');
     const purpose =
-      bot.description || identity.vibe || firstCoreDrive(loader.readMotivations()) || undefined;
+      bot.description || vibe || firstCoreDrive(loader.readMotivations()) || undefined;
     const channel = describeChannel(ctx.channelState?.(bot.id), bot.enabled !== false);
     const activeGoals = parseGoals(loader.readGoals()).active.length;
     const traits = readTraits(ctx.config, bot.id);
@@ -550,6 +564,47 @@ function stageKnowledge(ctx: StageCtx): void {
 }
 
 const DAILY_LINE = /^\s*-\s*\[\d{1,2}:\d{2}\]\s+(.+)$/;
+
+/** Operational traces a bot's daily log carries next to real facts. */
+const BOOKKEEPING_MARKS: RegExp[] = [
+  /\bask_human\s+[0-9a-f]{6,}\b/i,
+  // "enviado/enviada" only in a bookkeeping shape (a tool name or an id next
+  // to it, or a question/message sent to the operator), never the bare word:
+  // "el informe fue enviado al cliente" is a fact.
+  /\b(?:ask_\w+|send_\w+|[0-9a-f]{6,})\s+enviad[ao]s?\b/i,
+  /\benviad[ao]s?\s*\(?\s*id\s*[:#]?\s*[0-9a-f]{6,}/i,
+  /\b(?:pregunta|mensaje|recordatorio|notificaci[oó]n|aviso)e?s?\s+enviad[ao]s?\s+al\s+operador\b/i,
+  /\[agent-loop\]/i,
+  /\[error\]/i,
+  // a leading tag that names an error or the agent loop: "[tool-error] …"
+  /^\[[^\]]*(?:agent-loop|error)[^\]]*\]/i,
+  // The framework's cron ids only (`cron-<jobId>-<ms>-<rand>`, older
+  // `cron-<ms>-<rand>`) and `cron job <uuid>` traces, never the bare prefix:
+  // "the operator uses cron-job.org" is a fact.
+  /\bcron-(?:[\w-]+-)?\d{10,}-[a-z0-9]+\b/i,
+  /\bcron\s+job\s+[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i,
+  /\bsend_proactive/i,
+  /\btask_progress\b/i,
+];
+const URL_RE = /<?https?:\/\/\S+>?/gi;
+const ID_RE = /\b[tg]-[0-9a-f]{6,8}\b/gi;
+
+/**
+ * A daily-log line that is bookkeeping, not a fact: an `ask_human <id>` /
+ * "<tool|id> enviada" / "mensaje enviado al operador" trace, an
+ * `[agent-loop]` / `[error]` (or `[…error…]`-tagged) row, a cron run (its
+ * message id or `cron job <id>`), a
+ * `send_proactive` / `task_progress` call, or a line that is only task/goal
+ * ids or only URLs. Birth's memory stage skips these. Pure.
+ */
+export function isBookkeepingLine(text: string): boolean {
+  const t = (text ?? '').trim();
+  if (!t) return true;
+  if (BOOKKEEPING_MARKS.some((re) => re.test(t))) return true;
+  const rest = t.replace(URL_RE, ' ').replace(ID_RE, ' ');
+  return !/\p{L}{2,}/u.test(rest);
+}
+
 const BULLET = /^\s*[-*]\s+(.+)$/;
 
 function stageMemory(ctx: StageCtx): void {
@@ -582,8 +637,8 @@ function stageMemory(ctx: StageCtx): void {
       for (const line of content.split('\n')) {
         const m = DAILY_LINE.exec(line);
         if (!m) continue;
+        if (isBookkeepingLine(m[1])) continue;
         const tagged = /^\[([^\]]+)\]\s+(.+)$/.exec(m[1].trim());
-        if (tagged && /agent-loop|error/i.test(tagged[1])) continue;
         facts.push({
           text: (tagged ? tagged[2] : m[1]).trim(),
           source: `memory/${file}`,
@@ -730,64 +785,302 @@ async function stageLink(ctx: StageCtx): Promise<void> {
     );
     return finish('no-embeddings');
   }
+  const res = await linkUnembedded(ctx, {
+    onBatch: (batch, edgeIds) =>
+      ctx.log.say(
+        'birth',
+        'birth:link',
+        narrateLinking({ neurons: ctx.graph.embeddedIds().length, edges: ctx.graph.edgeCount() }),
+        { neuronIds: batch.map((n) => n.id), ...(edgeIds.length ? { edgeIds } : {}) }
+      ),
+  });
+  if (res.cancelled) return;
+  if (res.failure && res.status === 'no-embeddings') {
+    ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(res.failure));
+  } else if (res.stopped && res.failure) {
+    ctx.log.say(
+      'birth',
+      'birth:link',
+      narrateLinkStopped({ embedded: res.embedded, total: res.pending, failure: res.failure })
+    );
+  } else if (res.skipped > 0) {
+    ctx.log.say(
+      'birth',
+      'birth:link',
+      narrateLinkSkipped({ skipped: res.skipped, ...(res.failure ? { failure: res.failure } : {}) })
+    );
+  }
+  finish(res.status);
+}
+
+export interface LinkResult {
+  /**
+   * `no-embeddings` when no live neuron has a vector; otherwise `partial` when
+   * the call stopped with neurons left unattempted (`stopped`), `ok` when it
+   * went through every pending neuron (some may be `skipped`).
+   */
+  status: LinkStatus;
+  /** Neurons embedded by this call. */
+  embedded: number;
+  /** Live neurons without a vector when the call started. */
+  pending: number;
+  /**
+   * Neurons the call attempted and left without a vector while it went on (a
+   * transient error the hold-back recovered from, or an empty vector): a note,
+   * not a stop. The next start or maintenance tries them again.
+   */
+  skipped: number;
+  /**
+   * The call ended at a batch that embedded nothing (every embed failed or
+   * returned no vector); the neurons after it were never attempted.
+   */
+  stopped?: boolean;
+  /** `related` edges this call added. */
+  edges: number;
+  /**
+   * The first real embedding error of the call (also one it recovered from),
+   * or "the embedder returned no vectors" when it stopped without one.
+   */
+  failure?: string;
+  cancelled?: boolean;
+  /** `linkMissing` already recomputed the layout (callers must not relayout again). */
+  relaidOut?: boolean;
+}
+
+/**
+ * Embed every live neuron that has no vector yet, in batches, and link each
+ * one to its nearest neighbours with `related` edges. Used by birth's link
+ * stage and by daily maintenance (`linkMissing`). Never relayouts and never
+ * logs by itself: `onBatch` is called after each batch that embedded.
+ * `pending` is the list to embed when the caller already scanned the graph.
+ */
+export async function linkUnembedded(
+  deps: BirthDeps,
+  opts: { onBatch?: (batch: Neuron[], edgeIds: string[]) => void; pending?: Neuron[] } = {}
+): Promise<LinkResult> {
+  const graph = deps.graph;
+  const embed = deps.embed;
+  const pending = opts.pending ?? unembeddedNeurons(graph);
+  const result: LinkResult = {
+    status: 'no-embeddings',
+    embedded: 0,
+    skipped: 0,
+    edges: 0,
+    pending: pending.length,
+  };
+  const done = () => {
+    result.status =
+      graph.embeddedIds().length === 0 ? 'no-embeddings' : result.stopped ? 'partial' : 'ok';
+    return result;
+  };
+  if (!embed) return done();
   const threshold =
-    ctx.config.watcher?.graph?.relatedThreshold ?? WATCHER_DEFAULTS.graph.relatedThreshold;
+    deps.config.watcher?.graph?.relatedThreshold ?? WATCHER_DEFAULTS.graph.relatedThreshold;
   const concurrency = Math.max(
     1,
-    (ctx.config.soul as { search?: { concurrency?: number } } | undefined)?.search?.concurrency ?? 3
+    (deps.config.soul as { search?: { concurrency?: number } } | undefined)?.search?.concurrency ??
+      3
   );
-  const pending = ctx.graph.list().filter((n) => !n.archivedAt && !ctx.graph.getEmbedding(n.id));
-  let embeddedAny = ctx.graph.embeddedIds().length > 0;
   for (let i = 0; i < pending.length; i += EMBED_BATCH) {
-    if (ctx.isCancelled?.()) return;
+    if (deps.isCancelled?.()) return { ...result, cancelled: true };
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
-    await mapLimit(batch, concurrency, async (n) => {
-      // A cancelled run neither starts another embedding nor stores one that
-      // settled after the stop: its writes belong to no live run.
-      if (ctx.isCancelled?.()) return;
-      try {
-        const vec = await ctx.embed?.(`${n.kind}: ${n.text}`);
-        if (ctx.isCancelled?.()) return;
-        if (Array.isArray(vec) && vec.length > 0) ctx.graph.setEmbedding(n.id, vec);
-      } catch (err) {
-        failure ??= err;
-      }
-    });
-    if (ctx.isCancelled?.()) return;
-    if (failure && !embeddedAny && ctx.graph.embeddedIds().length === 0) {
-      const msg = failure instanceof Error ? failure.message : String(failure);
-      ctx.log.say('birth', 'birth:link', narrateNoEmbeddings(msg));
-      return finish('no-embeddings');
+    let batchEmbedded = 0;
+    // An embed failed (or returned no vector) and none has succeeded since.
+    let missSinceSuccess = false;
+    let queue = batch;
+    while (queue.length > 0) {
+      const heldBack: Neuron[] = [];
+      await mapLimit(queue, concurrency, async (n) => {
+        // A cancelled run neither starts another embedding nor stores one that
+        // settled after the stop: its writes belong to no live run.
+        if (deps.isCancelled?.()) return;
+        // An embedder whose last answer was a miss looks down: hold the rest
+        // back instead of queueing it behind its connect timeout, until the
+        // embeds in flight settle.
+        if (missSinceSuccess) {
+          heldBack.push(n);
+          return;
+        }
+        try {
+          const vec = await embed(`${n.kind}: ${n.text}`);
+          if (deps.isCancelled?.()) return;
+          if (Array.isArray(vec) && vec.length > 0) {
+            graph.setEmbedding(n.id, vec);
+            result.embedded++;
+            batchEmbedded++;
+            missSinceSuccess = false;
+          } else {
+            missSinceSuccess = true;
+          }
+        } catch (err) {
+          failure ??= err;
+          missSinceSuccess = true;
+        }
+      });
+      // Settled with a miss and no success after it: the embedder is down.
+      // Otherwise an embed in flight succeeded after the miss (a transient
+      // error): the held-back ones run too.
+      if (missSinceSuccess || deps.isCancelled?.()) break;
+      queue = heldBack;
     }
-    embeddedAny = true;
+    if (deps.isCancelled?.()) return { ...result, cancelled: true };
+    if (failure) result.failure ??= failure instanceof Error ? failure.message : String(failure);
+    // The embedder looks down: stop after linking what this batch embedded;
+    // the neurons left get embedded at the next start or maintenance.
+    if (missSinceSuccess) {
+      result.failure ??= 'the embedder returned no vectors';
+      result.stopped = true;
+    } else {
+      result.skipped += batch.length - batchEmbedded;
+    }
     const edgeIds: string[] = [];
     for (const n of batch) {
-      const vec = ctx.graph.getEmbedding(n.id);
+      const vec = graph.getEmbedding(n.id);
       if (!vec) continue;
-      const hits = ctx.graph
-        .findSimilarEmbedding(vec, threshold)
-        .filter((h) => h.neuron.id !== n.id);
+      const hits = graph.findSimilarEmbedding(vec, threshold).filter((h) => h.neuron.id !== n.id);
       for (const h of hits.slice(0, RELATED_PER_NEURON)) {
-        const before = ctx.graph.edgeCount();
-        const e = ctx.graph.addEdge({
+        const before = graph.edgeCount();
+        const e = graph.addEdge({
           from: n.id,
           to: h.neuron.id,
           rel: 'related',
           weight: Math.round(h.score * 1000) / 1000,
           createdBy: 'watcher',
         });
-        if (ctx.graph.edgeCount() > before) edgeIds.push(e.id);
+        if (graph.edgeCount() > before) edgeIds.push(e.id);
       }
     }
-    ctx.log.say(
-      'birth',
-      'birth:link',
-      narrateLinking({ neurons: ctx.graph.embeddedIds().length, edges: ctx.graph.edgeCount() }),
-      { neuronIds: batch.map((n) => n.id), ...(edgeIds.length ? { edgeIds } : {}) }
+    result.edges += edgeIds.length;
+    if (batchEmbedded > 0) opts.onBatch?.(batch, edgeIds);
+    if (result.stopped) return done();
+  }
+  return done();
+}
+
+/**
+ * Daily maintenance (and once at start): a graph born `no-embeddings`, or
+ * neurons added since without a vector, get embedded and linked once an
+ * embedder works. Undefined (and no row) when there is no embedder or every
+ * live neuron already has a vector; otherwise one `maintain:link` row, a
+ * relayout when something was embedded, and `birth.json` updated to the run's
+ * status (`ok`, or `partial` when it stopped with neurons unattempted). A run
+ * that embedded nothing leaves `birth.json` as it was. A cancelled run (also
+ * one cancelled during its probe) stops at once and writes nothing.
+ */
+export async function linkMissing(
+  deps: BirthDeps,
+  opts: { probeTimeoutMs?: number } = {}
+): Promise<LinkResult | undefined> {
+  const embed = deps.embed;
+  if (!embed) return undefined;
+  const list = unembeddedNeurons(deps.graph);
+  const pending = list.length;
+  if (pending === 0) return undefined;
+  // One embed with a short timeout first: an embedder that is down costs one
+  // call, not a connect timeout per neuron.
+  const probeFailure = await probeEmbedder(
+    embed,
+    opts.probeTimeoutMs ?? EMBED_PROBE_TIMEOUT_MS,
+    deps.isCancelled
+  );
+  if (deps.isCancelled?.()) {
+    return { status: 'no-embeddings', embedded: 0, skipped: 0, edges: 0, pending, cancelled: true };
+  }
+  const res: LinkResult = probeFailure
+    ? {
+        status: deps.graph.embeddedIds().length > 0 ? 'partial' : 'no-embeddings',
+        embedded: 0,
+        skipped: 0,
+        edges: 0,
+        pending,
+        stopped: true,
+        failure: probeFailure,
+      }
+    : await linkUnembedded(deps, { pending: list });
+  if (res.cancelled) return res;
+  if (res.failure) {
+    deps.logger.warn(
+      { err: res.failure, embedded: res.embedded, skipped: res.skipped, pending },
+      'Watcher: embedding the neurons without a vector failed'
     );
   }
-  finish(ctx.graph.embeddedIds().length > 0 ? 'ok' : 'no-embeddings');
+  res.relaidOut = res.embedded > 0;
+  if (res.embedded > 0) {
+    relayout(deps.graph);
+    deps.log.say(
+      'birth',
+      'maintain:link',
+      narrateLateLink({
+        embedded: res.embedded,
+        edges: res.edges,
+        ...(res.stopped && res.failure ? { failure: res.failure } : {}),
+        ...(!res.stopped && res.skipped > 0 ? { skipped: res.skipped } : {}),
+      })
+    );
+  } else {
+    // Nothing was embedded, so nothing moved: say why, never "placing by kind".
+    deps.log.say(
+      'birth',
+      'maintain:link',
+      narrateLinkFailed({ pending, reason: res.failure ?? 'the embedder returned no vectors' })
+    );
+  }
+  // A run that embedded nothing leaves the recorded status as it was (an
+  // embedder answering [] never turns it `ok`).
+  const record = readBirthRecord(deps.dir);
+  if (record && res.embedded > 0 && record.linkStatus !== res.status) {
+    writeBirthRecord(deps, { ...record, linkStatus: res.status });
+  }
+  return res;
+}
+
+/** Live neurons without a vector. */
+function unembeddedNeurons(graph: Graph): Neuron[] {
+  return graph.list().filter((n) => !n.archivedAt && !graph.getEmbedding(n.id));
+}
+
+/** How often a probe in flight checks whether its run was cancelled. */
+const PROBE_CANCEL_POLL_MS = 50;
+
+/**
+ * Undefined when one embed answered with a vector within `timeoutMs`; otherwise
+ * why not. With `isCancelled`, a run cancelled while the probe is out resolves
+ * within {@link PROBE_CANCEL_POLL_MS} and its late answer is dropped. Never throws.
+ */
+async function probeEmbedder(
+  embed: NonNullable<BirthDeps['embed']>,
+  timeoutMs: number,
+  isCancelled?: () => boolean
+): Promise<string | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let poll: ReturnType<typeof setInterval> | undefined;
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(
+      () => resolve(`the embedder did not answer within ${timeoutMs} ms`),
+      timeoutMs
+    );
+    if (isCancelled) {
+      poll = setInterval(() => {
+        if (isCancelled()) resolve('cancelled');
+      }, PROBE_CANCEL_POLL_MS);
+    }
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(() => embed('probe'))
+        .then(
+          (vec) =>
+            Array.isArray(vec) && vec.length > 0 ? undefined : 'the embedder returned no vectors',
+          (err: unknown) => (err instanceof Error ? err.message : String(err))
+        ),
+      timeout,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (poll) clearInterval(poll);
+  }
 }
 
 function stageDone(ctx: StageCtx): void {
@@ -847,15 +1140,6 @@ function describeChannel(status: ChannelStatus | undefined, enabled: boolean): s
       ? 'dashboard only'
       : `telegram ${status.state}`;
   return enabled ? base : `${base}, disabled`;
-}
-
-function parseKeyValues(raw: string | null): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of (raw ?? '').split('\n')) {
-    const m = /^[-*\s]*(\w+)\s*:\s*(.+)$/.exec(line);
-    if (m && !out[m[1].toLowerCase()]) out[m[1].toLowerCase()] = m[2].trim();
-  }
-  return out;
 }
 
 function firstCoreDrive(raw: string | null): string | undefined {

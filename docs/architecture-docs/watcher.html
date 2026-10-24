@@ -110,7 +110,8 @@ baseline-*.json  canaries.jsonl                            # phase 0 scripts</co
               <tr><th>Route</th><th>Answer</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>GET /api/watcher</code>, <code>POST /start</code>, <code>POST /stop</code></td><td><code>WatcherState</code> (running, phase, counts, edges, linkStatus, attending)</td></tr>
+              <tr><td><code>GET /api/watcher</code>, <code>POST /start</code>, <code>POST /stop</code></td><td><code>WatcherState</code> (running, phase, counts, edges, linkStatus, attending, timers); <code>GET /</code> also <code>config</code> (each tier's switch and daily cap)</td></tr>
+              <tr><td><code>POST /api/watcher/config</code></td><td><code>{ notice?: { enabled?, maxPerDay? }, integrate?: { enabled?, maxPerDay? } }</code>: validated (400 otherwise), persisted into the loaded config file (raw, only these fields, merged <code>watcher</code> block checked by <code>WatcherConfigSchema</code>, previous file as <code>.bak</code>, atomic), applied live; the watcher starts or stops its notice / integrate timers without a restart (<code>Watcher.applyConfig</code>). Answers the state plus <code>config</code> and <code>persisted</code></td></tr>
               <tr><td><code>GET /graph</code>, <code>GET /log</code>, <code>GET /neurons/:id</code>, <code>GET /birth</code></td><td>Graph snapshot, log rows, one neuron with its edges and Why, birth record</td></tr>
               <tr><td><code>GET /metrics?window=7d|30d</code></td><td>8 metrics and 4 guards, computed from records only</td></tr>
               <tr><td><code>GET /broadcasts</code>, <code>POST /neurons/:id/signal</code></td><td>Broadcasts with Why; 👍/👎 on insights, contradictions, predictions and broadcasts</td></tr>

@@ -30,8 +30,10 @@ import { readAgentCycles } from '../stats/readers/agent-cycles';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
   type BirthDeps,
+  type LinkResult,
   beginBirth,
   continueBirth,
+  linkMissing,
   readBirthRecord,
   relayout,
   runResync,
@@ -45,6 +47,7 @@ import {
 } from './broadcast';
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
+import { tierSwitches } from './config-file';
 import { Graph, type GraphChange } from './graph';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
@@ -93,6 +96,8 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
+/** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
+export const SENSE_STATE_EVERY_MS = 5_000;
 /** How often the notice timer asks whether a pass is due (`Noticer.due`). */
 export const NOTICE_CHECK_MS = 30_000;
 /** How often the integrate timer asks whether a pass is due (`Integrator.due`). */
@@ -182,9 +187,22 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private stopping = false;
   private phase: WatcherPhase = 'sleep';
   private lastError?: string;
-  private background: Promise<void> = Promise.resolve();
+  private background: Promise<unknown> = Promise.resolve();
+  /**
+   * The `linkMissing` run in flight (start backfill or daily maintenance),
+   * keyed to the run that started it: a run cancelled by `stop()` is stale and
+   * is never reused by a later start.
+   */
+  private linkRun: {
+    promise: Promise<LinkResult | undefined>;
+    isCancelled: () => boolean;
+  } | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
+  private lastSenseStateAt = 0;
+  /** Birth or resync finished in this run: tier timers may run (`applyConfig`). */
+  private timersReady = false;
+  private senseStateTimer: ReturnType<typeof setTimeout> | undefined;
   private noticeRun: Promise<NoticeOutcome | null> | null = null;
   /** The run signal of `noticeRun` / `integrateRun`: a stopped run's pass is never shared. */
   private noticeRunSignal: AbortSignal | null = null;
@@ -237,6 +255,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         if (item.fromOperator) this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
         this.integrator?.observe(item);
       },
+      onBatch: () => this.senseStateChanged(),
       logger: this.logger,
     });
     this.budget = new DailyBudget({
@@ -660,7 +679,12 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
           })
         );
         this.setPhase('birth');
-        this.background = this.runBackground(deps, () => runResync(deps).then(() => undefined));
+        // Resync, then `sense` and the tier timers, and only then the backfill:
+        // a graph born `no-embeddings` (or neurons sensed since) gets its
+        // vectors now that an embedder may work, but an embedder that is down
+        // never holds the phase nor the timers.
+        const resync = this.runBackground(deps, () => runResync(deps).then(() => undefined));
+        this.background = resync.then(() => this.backfill(deps));
       }
       this.sense.attach(this.deps.activityStream, this.deps.hooks);
       this.startTimers();
@@ -683,6 +707,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     }
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    this.clearSenseStateTimer();
+    this.timersReady = false;
     this.stopNoticeTimer();
     this.stopIntegrateTimer();
     this.stopIntrospectTimer();
@@ -701,6 +727,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.presence.detach();
       for (const t of this.timers) clearInterval(t);
       this.timers = [];
+      this.clearSenseStateTimer();
+      this.timersReady = false;
       this.stopNoticeTimer();
       this.stopIntegrateTimer();
       this.stopIntrospectTimer();
@@ -761,9 +789,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     }
   }
 
-  /** Resolves when birth or resync (whatever runs in the background) is done. */
+  /** Resolves when birth or resync (and the start backfill after it) is done. */
   idle(): Promise<void> {
-    return this.background;
+    return this.background.then(() => undefined);
   }
 
   readBirth(): BirthRecord | null {
@@ -781,6 +809,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       counts: this.graph.counts(),
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),
+      timers: { notice: !!this.noticeTimer, integrate: !!this.integrateTimer },
+      tiers: tierSwitches(this.cfg()),
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.integrator ? { attending: this.integrator.attending() } : {}),
       ...(this.integrator?.state().attendingAt
@@ -829,12 +859,82 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         // A run that was cancelled never moves the phase nor starts timers:
         // the watcher is asleep, or a newer run owns them.
         if (this.running && !this.stopping && !deps.isCancelled?.()) {
+          this.timersReady = true;
           this.setPhase('sense');
           this.startNoticeTimer();
           this.startIntegrateTimer();
           this.startIntrospectTimer();
         }
       });
+  }
+
+  /**
+   * Embed and link the live neurons without a vector (`linkMissing`), at most
+   * one run at a time. Never throws; a cancelled run does nothing.
+   * Resolves to the result, or undefined when nothing ran.
+   */
+  private async backfill(deps: BirthDeps): Promise<LinkResult | undefined> {
+    const current = this.linkRun;
+    if (current && !current.isCancelled()) return current.promise;
+    // A run a previous stop() left behind is cancelled: it drops its probe
+    // answer and stops (`linkMissing` honours `isCancelled`), so this run
+    // starts its own at once.
+    if (!this.running || this.stopping || deps.isCancelled?.()) return undefined;
+    const isCancelled = () => deps.isCancelled?.() ?? false;
+    const statusBefore = this.linkStatus(readBirthRecord(this.dir));
+    const entry = {
+      isCancelled,
+      promise: linkMissing(deps)
+        .then((res) => {
+          // An idle watcher publishes nothing else: an open dashboard would
+          // keep the old embedding status until the next event.
+          if (
+            !isCancelled() &&
+            this.running &&
+            !this.stopping &&
+            this.linkStatus(readBirthRecord(this.dir)) !== statusBefore
+          ) {
+            this.publish('watcher:state', this.state());
+          }
+          return res;
+        })
+        .catch((err) => {
+          if (!isCancelled()) this.logger.warn({ err }, 'Watcher: linking the unembedded failed');
+          return undefined;
+        })
+        .finally(() => {
+          if (this.linkRun === entry) this.linkRun = null;
+        }),
+    };
+    this.linkRun = entry;
+    return entry.promise;
+  }
+
+  /**
+   * Re-read `notice.enabled` / `integrate.enabled` (the live config changed,
+   * `POST /api/watcher/config`): start or stop the tier timers without a
+   * restart. Before birth/resync is done nothing starts (it starts them when
+   * it ends). Publishes the state, which carries the new `tiers`, so every
+   * open dashboard tab redraws its tier controls. Never throws.
+   */
+  applyConfig(): void {
+    try {
+      if (this.running && !this.stopping && this.timersReady) {
+        const cfg = this.cfg();
+        if (cfg.notice.enabled) {
+          this.startNoticeTimer();
+          this.startIntrospectTimer();
+        } else {
+          this.stopNoticeTimer();
+          this.stopIntrospectTimer();
+        }
+        if (cfg.integrate.enabled) this.startIntegrateTimer();
+        else this.stopIntegrateTimer();
+      }
+      this.publish('watcher:state', this.state());
+    } catch (err) {
+      this.logger.warn({ err }, 'Watcher: could not apply the config change');
+    }
   }
 
   /** Begins only after birth or resync; checks `notice.enabled` on every tick too. */
@@ -954,16 +1054,29 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private startTimers(): void {
     const every = this.cfg().log.senseSummaryEveryMs;
     const summary = setInterval(() => this.sense.tick(), every);
-    const daily = setInterval(() => this.maintain(), DAY_MS);
+    const daily = setInterval(() => void this.maintainNow(), DAY_MS);
     for (const t of [summary, daily]) (t as { unref?: () => void }).unref?.();
     this.timers = [summary, daily];
   }
 
-  /** Daily: archive what has not fired within `archiveAfterDays`, recompute the layout. */
-  private maintain(): void {
+  /**
+   * Daily: archive what has not fired within `archiveAfterDays`, embed and link
+   * live neurons without a vector (`linkMissing`), recompute the layout. Never
+   * throws; skipped while birth is still running (its own link stage does it).
+   * A run that `stop()` cancelled during the backfill neither relays out nor
+   * persists positions.
+   */
+  async maintainNow(): Promise<void> {
     try {
       this.graph.archiveInactive(this.cfg().graph.archiveAfterDays * DAY_MS);
-      relayout(this.graph);
+      let linked: LinkResult | undefined;
+      if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
+        const deps = this.birthDeps();
+        linked = await this.backfill(deps);
+        if (linked?.cancelled || deps.isCancelled?.()) return;
+      }
+      // linkMissing relays out when it embedded: one layout broadcast, not two.
+      if (!linked?.relaidOut) relayout(this.graph);
     } catch (err) {
       this.logger.warn({ err }, 'Watcher: daily maintenance failed');
     }
@@ -994,6 +1107,34 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       contact = undefined;
     }
     return inboundSender(e, { contact });
+  }
+
+  /**
+   * A sense batch moved `lastTickAt`: republish the state so the header's
+   * "last tick" follows sensing, not only phase changes (notice passes). At
+   * most once per `SENSE_STATE_EVERY_MS`, with a trailing publish.
+   */
+  private senseStateChanged(): void {
+    if (!this.running || this.stopping) return;
+    const since = this.now() - this.lastSenseStateAt;
+    if (since >= SENSE_STATE_EVERY_MS) {
+      this.lastSenseStateAt = this.now();
+      this.publish('watcher:state', this.state());
+      return;
+    }
+    if (this.senseStateTimer) return;
+    this.senseStateTimer = setTimeout(() => {
+      this.senseStateTimer = undefined;
+      if (!this.running || this.stopping) return;
+      this.lastSenseStateAt = this.now();
+      this.publish('watcher:state', this.state());
+    }, SENSE_STATE_EVERY_MS - since);
+    (this.senseStateTimer as { unref?: () => void }).unref?.();
+  }
+
+  private clearSenseStateTimer(): void {
+    if (this.senseStateTimer) clearTimeout(this.senseStateTimer);
+    this.senseStateTimer = undefined;
   }
 
   private setPhase(phase: WatcherPhase): void {

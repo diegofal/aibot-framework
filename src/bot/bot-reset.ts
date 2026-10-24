@@ -1,17 +1,8 @@
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CollaborationSessionManager } from '../collaboration-session';
 import type { CollaborationTracker } from '../collaboration-tracker';
-import { type Config, persistBots } from '../config';
+import { type Config, patchConfigFile, persistBots } from '../config';
 import type { ConversationsService } from '../conversations/service';
 import type { KarmaService } from '../karma/service';
 import type { Logger } from '../logger';
@@ -316,19 +307,22 @@ export class BotResetService {
         delete config.skills.config[id];
       }
 
-      // Persist skills to config.json (read raw → mutate → write back)
+      // Persist skills to config.json (the one raw, atomic config writer)
       try {
-        const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-        if (raw.skills?.enabled) {
-          raw.skills.enabled = raw.skills.enabled.filter((id: string) => !removeSet.has(id));
-        }
-        if (raw.skills?.config) {
-          for (const id of productionOnlySkills) {
-            delete raw.skills.config[id];
+        patchConfigFile(configPath, (raw) => {
+          const skills = raw.skills as
+            | { enabled?: string[]; config?: Record<string, unknown> }
+            | undefined;
+          if (Array.isArray(skills?.enabled)) {
+            skills.enabled = skills.enabled.filter((id) => !removeSet.has(id));
           }
-        }
-        raw.bots = undefined; // bots live in bots.json now
-        writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+          if (skills?.config) {
+            for (const id of productionOnlySkills) {
+              delete skills.config[id];
+            }
+          }
+          raw.bots = undefined; // bots live in bots.json now
+        });
       } catch (err) {
         logger.warn(
           { err, configPath },

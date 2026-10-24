@@ -1,8 +1,7 @@
-import { readFileSync, writeFileSync } from 'node:fs';
 import { Hono } from 'hono';
 import type { BotManager } from '../../bot';
 import { CLAUDE_CLI_MODEL_OPTIONS } from '../../claude-cli';
-import type { Config, McpServerEntry } from '../../config';
+import { type Config, type McpServerEntry, patchConfigFile } from '../../config';
 
 import { discoverProductionSkillPaths } from '../../core/external-skill-loader';
 import type { Logger } from '../../logger';
@@ -387,51 +386,53 @@ export function settingsRoutes(deps: {
 }
 
 function persistEvolution(configPath: string, evolution: Config['evolution']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.evolution = evolution;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.evolution = evolution;
+  });
 }
 
 function persistMcp(configPath: string, mcp: Config['mcp']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.mcp = mcp;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.mcp = mcp;
+  });
 }
 
 function persistSession(configPath: string, session: Config['session']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.session = session;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.session = session;
+  });
 }
 
 function persistCollaboration(configPath: string, collaboration: Config['collaboration']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.collaboration = collaboration;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.collaboration = collaboration;
+  });
 }
 
 function persistSkillsFolders(configPath: string, skillsFolders: Config['skillsFolders']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.skillsFolders = skillsFolders;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.skillsFolders = skillsFolders;
+  });
 }
 
 function persistMemorySearch(configPath: string, search: Config['soul']['search']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  if (!raw.soul) raw.soul = {};
-  raw.soul.search = search;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    const soul = (raw.soul ?? {}) as Record<string, unknown>;
+    soul.search = search;
+    raw.soul = soul;
+  });
 }
 
 function persistHealthCheck(configPath: string, healthCheck: Config['soul']['healthCheck']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  if (!raw.soul) raw.soul = {};
-  raw.soul.healthCheck = healthCheck;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    const soul = (raw.soul ?? {}) as Record<string, unknown>;
+    soul.healthCheck = healthCheck;
+    raw.soul = soul;
+  });
 }
 
 function persistClaudeCli(configPath: string, claudeCli: Config['claudeCli']): void {
-  const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
-  raw.claudeCli = claudeCli;
-  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
+  patchConfigFile(configPath, (raw) => {
+    raw.claudeCli = claudeCli;
+  });
 }

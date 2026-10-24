@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
+import { NO_SETTINGS_FLAGS, SKIP_PERMISSIONS_FLAG, resolveClaudeBin } from '../claude-cli';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
@@ -186,17 +186,7 @@ async function runClaudeCliReview(opts: QualityReviewOptions): Promise<string> {
   env.CLAUDECODE = undefined;
   env.TERM = 'dumb';
 
-  const claudeArgs = [
-    resolveClaudeBin(claudePath),
-    '-p',
-    prompt,
-    '--allowedTools',
-    'Read,Edit,Write',
-    SKIP_PERMISSIONS_FLAG,
-  ];
-  if (claudeModel) {
-    claudeArgs.push('--model', claudeModel);
-  }
+  const claudeArgs = buildQualityReviewCliArgs(resolveClaudeBin(claudePath), prompt, claudeModel);
 
   const proc = Bun.spawn(claudeArgs, {
     cwd: resolve(soulDir),
@@ -278,6 +268,25 @@ async function runOllamaReview(opts: QualityReviewOptions): Promise<string> {
     logger.warn({ err: message }, 'Soul quality review: error');
     return `Quality review error: ${message}`;
   }
+}
+
+/**
+ * argv of the quality review: its file tools (`Read,Edit,Write`), so no
+ * `--tools ""`, but `--setting-sources ""` (`NO_SETTINGS_FLAGS`) like every
+ * framework call. Pure; `bin` is already resolved.
+ */
+export function buildQualityReviewCliArgs(bin: string, prompt: string, model?: string): string[] {
+  const args = [
+    bin,
+    '-p',
+    prompt,
+    '--allowedTools',
+    'Read,Edit,Write',
+    SKIP_PERMISSIONS_FLAG,
+    ...NO_SETTINGS_FLAGS,
+  ];
+  if (model) args.push('--model', model);
+  return args;
 }
 
 export async function runQualityReview(opts: QualityReviewOptions): Promise<string> {
