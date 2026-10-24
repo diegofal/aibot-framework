@@ -33,6 +33,7 @@ afterAll(() => {
 });
 
 let failTest = false;
+let staleLimits = false;
 mock.module('../../web/pages/shared.js', () => ({
   escapeHtml: (s: string) => String(s),
   api: async (url: string) => {
@@ -47,7 +48,9 @@ mock.module('../../web/pages/shared.js', () => ({
           label: 'A',
           active: true,
           loggedIn: true,
-          limits: { checkedAt: new Date().toISOString(), status: 'allowed' },
+          limits: staleLimits
+            ? undefined
+            : { checkedAt: new Date().toISOString(), status: 'allowed' },
         },
       ],
     };
@@ -69,6 +72,24 @@ describe('claude accounts card mount', () => {
     await mountClaudeAccounts(card);
     failTest = true;
     await listeners.click({ target: new FakeElement({ 'data-ca-test': 'a' }) });
+    expect(card.innerHTML).toContain('network down');
+    expect(card.innerHTML).not.toContain('Testing the connection');
+  });
+
+  test('a background re-test that throws settles its row instead of staying pending', async () => {
+    failTest = true;
+    const { mountClaudeAccounts } = await import('../../web/pages/claude-accounts.js');
+    const card = {
+      innerHTML: '',
+      isConnected: true,
+      querySelector: () => null,
+      addEventListener: () => {},
+    };
+    staleLimits = true;
+    await mountClaudeAccounts(card);
+    await new Promise((r) => setTimeout(r, 20));
+    staleLimits = false;
+    expect(card.innerHTML).not.toContain('Testing the connection');
     expect(card.innerHTML).toContain('network down');
   });
 });
