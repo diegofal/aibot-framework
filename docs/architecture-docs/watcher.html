@@ -98,8 +98,10 @@ birth.json  buffer.json  integrate.json  taste.json
 budget-YYYY-MM-DD.json                                     # calls and tokens per tier, per UTC day
 broadcasts.jsonl                                           # last line per id wins
 introspection.jsonl  introspection-schedule.json
+passes/&lt;tier&gt;-&lt;ms&gt;-&lt;rand&gt;.json                       # prompt + response per model call, 14 days / 500 files
 baseline-*.json  canaries.jsonl                            # phase 0 scripts</code></pre>
           <p>Readers never throw. Birth reads shared memory only, never <code>memory/users/&lt;id&gt;/</code>.</p>
+          <p><strong>Records and upkeep (optimizations O5&ndash;O7).</strong> Every call <code>instrumented()</code> sends to a model (notice, integrate, introspect; answered or failed, never an aborted one) leaves a pass record in <code>passes/</code> (<code>src/watcher/pass-records.ts</code>): the system and user prompt with every line clipped to 300 chars, the response, model, tokens, cost and the cycle ids the prompt named, so "why did it decide that" is read, not inferred. <code>GET /api/watcher/passes</code> lists them and <code>/passes/:id</code> returns one; the page's "What it saw" fold under a pass row finds its record by caller, exact duration and end time (the log row does not carry the id). The hygiene routine <code>watcher-graph</code> cleans the graph through the running watcher, never its files: it archives birth facts that are bookkeeping lines or bare date headers and merges one bot's near-duplicate facts (similarity &ge; 0.9) into the oldest with <code>Graph.mergeInto</code>; nothing is deleted ("Clean the graph" on the page, never part of <code>all</code>). <code>GET /api/stats/infra</code> probes the embedding service (one embed, cached 5 min) and the page header shows "embeddings: ok" or "down since &hellip;".</p>
         </div>
 
         <div class="card">
@@ -129,6 +131,7 @@ baseline-*.json  canaries.jsonl                            # phase 0 scripts</co
           <ul>
             <li><code>bun scripts/watcher/baseline.ts</code> &mdash; the phase 0 baseline report.</li>
             <li><code>bun scripts/watcher/canary.ts</code> &mdash; plant a fact through one bot (addressed once by its display name, <code>--name</code> or <code>GET /api/agents/:id</code>), check recall through another: <code>plant</code> requires <code>--expect &lt;word&gt;</code> and <code>check</code> passes only when the answer names every expected word.</li>
+            <li><code>bun scripts/watcher/tenant-paths.ts [--config …] [--json]</code> &mdash; assessment only (O8): per bot and data-path site, the path resolved today (any <code>tenantId</code>) against <code>isTenantBot</code>; changes nothing.</li>
             <li><code>bun scripts/watcher/introspect.ts --bot &lt;id&gt;</code> or <code>--subject watcher</code> &mdash; ask and score; appends <code>introspection.jsonl</code> (the watcher route appends server-side).</li>
           </ul>
         </div>
