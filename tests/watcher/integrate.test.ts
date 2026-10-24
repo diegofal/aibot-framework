@@ -455,6 +455,18 @@ describe('Integrator.run', () => {
     expect(pass?.drivenBy).toEqual(['operatorSilenceHours', 'bufferSalience']);
   });
 
+  test('phase 4: the newest pass keeps its drivenBy in the state, across a restart', async () => {
+    const s = setup({
+      reply: answer(() => ({ insights: [], drivenBy: ['operatorSilenceHours', 'nope'] })),
+      deps: { interoception: () => ({ operatorSilenceHours: 30 }) },
+    });
+    expect(s.integrator.drivenBy()).toEqual([]);
+    await ran(s);
+    expect(s.integrator.drivenBy()).toEqual(['operatorSilenceHours']);
+    expect(s.integrator.state().drivenBy).toEqual(['operatorSilenceHours']);
+    expect(s.make().drivenBy()).toEqual(['operatorSilenceHours']);
+  });
+
   test('phase 4: without an interoception record drivenBy is not written', async () => {
     const s = setup({
       reply: answer(() => ({ insights: [], drivenBy: ['operatorSilenceHours'] })),

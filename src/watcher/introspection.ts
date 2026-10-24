@@ -129,16 +129,6 @@ function causeText(att: Attention, drivenBy: string[] = []): string | null {
   return parts.length ? parts.join('; ') : null;
 }
 
-/** The `drivenBy` of the newest `integrate:pass` row, empty without one. */
-function lastDrivenBy(rows: WatcherLogRow[]): string[] {
-  let best: WatcherLogRow | undefined;
-  for (const r of rows) {
-    if (r?.op !== 'integrate:pass' || !Array.isArray(r.drivenBy)) continue;
-    if (!best || r.ts > best.ts) best = r;
-  }
-  return (best?.drivenBy ?? []).filter((x): x is string => typeof x === 'string');
-}
-
 /**
  * Field-level score of a watcher self-report: phase against the current
  * phase, goal against the best of the attended neurons (or, without a focus,
@@ -207,6 +197,12 @@ export interface IntrospectionDeps {
   attention: () => Attention;
   running: boolean;
   logRows: () => WatcherLogRow[];
+  /**
+   * The `drivenBy` of the newest integrate pass (`Integrator.drivenBy`), read
+   * at question time. Not scraped from `logRows`: passes are hourly and the
+   * window is 20 rows, so a pass row is almost never in it.
+   */
+  drivenBy?: () => string[];
   dir: string;
   now: () => number;
   trigger: IntrospectionTrigger;
@@ -217,9 +213,11 @@ export interface IntrospectionDeps {
 export async function runIntrospection(deps: IntrospectionDeps): Promise<IntrospectionOutcome> {
   let att: Attention;
   let rows: WatcherLogRow[];
+  let drivenBy: string[];
   try {
     att = deps.attention();
     rows = deps.logRows();
+    drivenBy = deps.drivenBy?.() ?? [];
   } catch (err) {
     return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
   }
@@ -242,7 +240,7 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
       : { status: 'refused', reason: res.reason };
   }
   const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running, {
-    drivenBy: lastDrivenBy(rows),
+    drivenBy,
   });
   const record: WatcherIntrospectionRecord = {
     ts: new Date(deps.now()).toISOString(),

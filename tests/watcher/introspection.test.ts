@@ -201,23 +201,46 @@ describe('runIntrospection', () => {
     expect(c.prompts[0]).toContain('Holding: web_fetch failed in Jarvis. Salience 2 (error).');
   });
 
-  test('the cause truth carries the drivenBy of the newest integrate pass row', async () => {
-    const pass = (seq: number, drivenBy: string[]): WatcherLogRow => ({
-      ...row(seq, 'Integrated 3 events.', 'integrate'),
+  test('the cause truth carries the drivenBy of the newest pass, from the integrator, not the log window', async () => {
+    // The window is 20 rows and passes are hourly: a pass row is rarely in it.
+    // A pass row that is in it is not the source either.
+    const passRow: WatcherLogRow = {
+      ...row(25, 'Integrated 3 events.', 'integrate'),
       op: 'integrate:pass',
-      drivenBy,
-    });
+      drivenBy: ['budgetLeft'],
+    };
+    const window = [
+      passRow,
+      ...Array.from({ length: 20 }, (_, i) => row(20 - i, 'Sensed 3 events.')),
+    ];
     const out = await runIntrospection({
       client: client(good),
       attention: () => att,
       running: true,
-      logRows: () => [pass(5, ['budgetLeft']), pass(1, ['operatorSilenceHours'])],
+      logRows: () => window,
+      drivenBy: () => ['operatorSilenceHours'],
       dir,
       now: () => t,
       trigger: 'manual',
     });
     expect(out.status === 'scored' && out.record.truth.plan).toContain('operator silence hours');
     expect(out.status === 'scored' && out.record.truth.plan).not.toContain('budget');
+  });
+
+  test('without a drivenBy source the cause truth has none', async () => {
+    const out = await runIntrospection({
+      client: client(good),
+      attention: () => ({ ...att, focus: [], items: [] }),
+      running: true,
+      logRows: () => [
+        { ...row(1, 'Integrated.', 'integrate'), op: 'integrate:pass', drivenBy: ['budgetLeft'] },
+      ],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out.status).toBe('scored');
+    expect(out.status === 'scored' && out.record.truth).not.toHaveProperty('plan');
   });
 
   test('an unparsable answer is still a measurement (score 0)', async () => {

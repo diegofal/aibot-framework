@@ -552,6 +552,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       attention: () => this.attention(),
       running: this.running,
       logRows: () => this.log.recent(INTROSPECTION_LOG_ROWS).reverse(),
+      drivenBy: () => this.integrator?.drivenBy() ?? [],
       dir: this.dir,
       now: this.now,
       trigger,

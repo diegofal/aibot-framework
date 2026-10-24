@@ -169,6 +169,8 @@ export interface IntegrateState {
   agendaCovered?: string[];
   /** Last applied pass that showed a non-empty standing agenda (rate-limits agenda-only passes). */
   lastAgendaAt?: string;
+  /** The `drivenBy` of the newest applied pass shown a "How I am" record (introspection reads it). */
+  drivenBy?: string[];
 }
 
 export interface IntegrateDeps {
@@ -304,6 +306,7 @@ function readState(dir: string): IntegrateState {
       },
       ...(Array.isArray(raw.agendaCovered) ? { agendaCovered: strList(raw.agendaCovered) } : {}),
       ...(typeof raw.lastAgendaAt === 'string' ? { lastAgendaAt: raw.lastAgendaAt } : {}),
+      ...(Array.isArray(raw.drivenBy) ? { drivenBy: strList(raw.drivenBy) } : {}),
     };
   } catch {
     return emptyState();
@@ -351,6 +354,11 @@ export class Integrator {
 
   attending(): string[] {
     return [...this.st.attending];
+  }
+
+  /** What the newest pass said drove it (only "How I am" keys it was shown); empty before one. */
+  drivenBy(): string[] {
+    return [...(this.st.drivenBy ?? [])];
   }
 
   state(): IntegrateState {
@@ -629,6 +637,9 @@ export class Integrator {
     this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
     this.st.attendingAt = nowIso;
     this.st.lastRunAt = nowIso;
+    const shownVariables = new Set(Object.keys(interoception ?? {}));
+    const drivenBy = uniq(out.drivenBy.filter((k) => shownVariables.has(k)));
+    if (shownVariables.size) this.st.drivenBy = drivenBy;
     // Only a pass that applied an answer uses up the agenda slot: a refused,
     // failed, unparsable or cancelled one leaves the agenda due again.
     if (hasAgenda) this.st.lastAgendaAt = nowIso;
@@ -699,8 +710,6 @@ export class Integrator {
 
     if (isCancelled()) return { status: 'cancelled' };
 
-    const shownVariables = new Set(Object.keys(interoception ?? {}));
-    const drivenBy = uniq(out.drivenBy.filter((k) => shownVariables.has(k)));
     const delivered = broadcasts.filter((b) => b.status === 'delivered').length;
     const createdIds = [...createdInsights, ...contradictions, ...preds].map((n) => n.id);
     log.say(
