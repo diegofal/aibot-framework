@@ -6,7 +6,7 @@
  * insights by id, and a `whyNoBroadcast` on every insight that should have
  * acted and did not.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -462,6 +462,62 @@ describe('Integrator: the standing agenda keeps the heartbeat alive (review 2026
     expect(s.integrator.state().lastAgendaAt).toBeUndefined();
     t += INTEGRATE_MIN_GAP_MS;
     expect(s.integrator.due()).toBe(true);
+  });
+
+  const agendaSpy = (s: ReturnType<typeof setup>) =>
+    spyOn(s.integrator as unknown as { standingAgenda: () => unknown }, 'standingAgenda');
+
+  test('an agenda-only pass computes the standing agenda once: due() carries it into the pass', async () => {
+    const s = setup(() => ({ insights: [] }), {
+      heartbeatMs: HOUR,
+      minItems: 5,
+      salienceBar: 100,
+      agendaEveryMs: 6 * HOUR,
+    });
+    const spy = agendaSpy(s);
+    t += HOUR;
+    expect(s.integrator.due()).toBe(true);
+    expect((await s.integrator.run()).status).toBe('integrated');
+    expect(agendaOf(s.prompts[0] as string)).toContain(`[${s.edge.id}]`);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test('a pass with items pending computes the agenda once', async () => {
+    const s = setup(() => ({ insights: [] }));
+    const spy = agendaSpy(s);
+    expect((await pass(s)).status).toBe('integrated');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  test('a direct run with nothing pending and the agenda slot used is idle without computing it', async () => {
+    const s = setup(() => ({ insights: [] }), {
+      heartbeatMs: HOUR,
+      salienceBar: 100,
+      agendaEveryMs: 6 * HOUR,
+    });
+    t += HOUR;
+    await s.integrator.run();
+    t += INTEGRATE_MIN_GAP_MS;
+    const spy = agendaSpy(s);
+    expect((await s.integrator.run()).status).toBe('idle');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test('an agenda carried by due() goes stale: a later pass computes its own', async () => {
+    const s = setup(() => ({ insights: [] }), {
+      heartbeatMs: HOUR,
+      minItems: 5,
+      salienceBar: 100,
+      agendaEveryMs: 6 * HOUR,
+    });
+    t += HOUR;
+    expect(s.integrator.due()).toBe(true);
+    // No run follows that due(); the graph may change before the next pass.
+    s.integrator.observe(item());
+    t += INTEGRATE_MIN_GAP_MS;
+    const spy = agendaSpy(s);
+    await s.integrator.run();
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   test('an empty agenda and 2 pending (below minItems): not due', () => {

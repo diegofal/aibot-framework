@@ -319,6 +319,8 @@ export class Integrator {
   private readonly bornAt: number;
   /** When `due` last found the standing agenda empty (the scan reads the whole graph). */
   private emptyAgendaAt: number | undefined;
+  /** The non-empty agenda `due` computed, for the pass it triggers (fresh for `INTEGRATE_MIN_GAP_MS`). */
+  private carriedAgenda: { agenda: IntegrateAgenda; at: number } | undefined;
 
   constructor(private readonly deps: IntegrateDeps) {
     this.st = readState(deps.dir);
@@ -405,7 +407,20 @@ export class Integrator {
     const agenda = this.standingAgenda(max, this.broadcastsByInsight());
     const any = agenda.pairs.length > 0 || agenda.insights.length > 0;
     this.emptyAgendaAt = any ? undefined : nowMs;
+    this.carriedAgenda = any ? { agenda, at: nowMs } : undefined;
     return any;
+  }
+
+  /** The agenda `due` carried when still fresh (taken once), else a new scan. */
+  private takeAgenda(
+    max: number,
+    sent: Map<string, IntegrateInsightBroadcast[]>,
+    nowMs: number
+  ): IntegrateAgenda {
+    const carried = this.carriedAgenda;
+    this.carriedAgenda = undefined;
+    if (carried && nowMs - carried.at < INTEGRATE_MIN_GAP_MS) return carried.agenda;
+    return this.standingAgenda(max, sent);
   }
 
   /**
@@ -440,18 +455,18 @@ export class Integrator {
     const cfg = this.deps.config();
     if (!cfg.integrate.enabled) return { status: 'idle' };
     const pending = this.st.pending;
-    const sentByInsight = this.broadcastsByInsight();
-    const agenda = this.standingAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight);
-    const hasAgenda = agenda.pairs.length > 0 || agenda.insights.length > 0;
+    const nothingPending = pending.items.length === 0 && pending.neurons.length === 0;
     // Nothing pending: only the agenda can justify a pass, and at most once
-    // per `agendaEveryMs` (also when `run` is called directly).
-    if (
-      pending.items.length === 0 &&
-      pending.neurons.length === 0 &&
-      !(hasAgenda && this.agendaPassAllowed(this.deps.now()))
-    ) {
+    // per `agendaEveryMs` (also when `run` is called directly); checked before
+    // the agenda scan, which reads the whole graph.
+    if (nothingPending && !this.agendaPassAllowed(this.deps.now())) {
+      this.carriedAgenda = undefined;
       return { status: 'idle' };
     }
+    const sentByInsight = this.broadcastsByInsight();
+    const agenda = this.takeAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight, this.deps.now());
+    const hasAgenda = agenda.pairs.length > 0 || agenda.insights.length > 0;
+    if (nothingPending && !hasAgenda) return { status: 'idle' };
     if (isCancelled()) return { status: 'cancelled' };
 
     // Snapshot what this pass reads: anything observed meanwhile stays pending.
