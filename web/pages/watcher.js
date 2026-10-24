@@ -48,7 +48,12 @@ import {
   insightRowsHtml,
   metricsStripHtml,
 } from './watcher-metrics-helpers.js';
-import { graphCleanSummary, matchPassRecord, passRecordBodyHtml } from './watcher-ops-helpers.js';
+import {
+  graphCleanSummary,
+  logView,
+  matchPassRecord,
+  passRecordBodyHtml,
+} from './watcher-ops-helpers.js';
 import {
   attendingHtml,
   focusHighlightIds,
@@ -139,15 +144,8 @@ function drawState({ forceTiers = false } = {}) {
 function drawLog() {
   const body = $('#watcher-log-body');
   if (!body) return;
-  if (page.replay) {
-    body.innerHTML = logListHtml(page.replay.shown, Date.now());
-    return;
-  }
-  body.innerHTML = logListHtml(page.model.log, Date.now(), {
-    filterId: page.filterId,
-    selectedSeq: page.selectedSeq,
-    openPass: page.openPass,
-  });
+  const { rows, options } = logView(page);
+  body.innerHTML = logListHtml(rows, Date.now(), options);
 }
 
 function drawLogHead() {

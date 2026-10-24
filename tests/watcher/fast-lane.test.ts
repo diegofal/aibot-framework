@@ -174,7 +174,7 @@ describe('fastLaneCandidates', () => {
     ).toEqual([]);
   });
 
-  test('an operatorSourced fact never goes out; an operatorSourced pattern (bot activity) does', () => {
+  test('an operatorSourced fact never goes out; a notice pattern with an explicit operatorMessage false does', () => {
     const sourced = { [OPERATOR_SOURCED]: 'true' };
     expect(
       fastLaneCandidates(
@@ -182,7 +182,37 @@ describe('fastLaneCandidates', () => {
         FAST_LANE_DEFAULTS
       )
     ).toEqual([]);
-    expect(fastLaneCandidates([n({ meta: sourced })], FAST_LANE_DEFAULTS)).toHaveLength(1);
+    const clean = { ...sourced, source: 'notice', [OPERATOR_MESSAGE]: 'false' };
+    expect(fastLaneCandidates([n({ meta: clean })], FAST_LANE_DEFAULTS)).toHaveLength(1);
+    expect(
+      fastLaneCandidates([n({ kind: 'fact', confidence: 'high', meta: clean })], FAST_LANE_DEFAULTS)
+    ).toEqual([]);
+  });
+
+  // Review 2026-10-24: the live graph predates `operatorMessage`. An
+  // operator-sourced pattern without the flag may rest on an operator
+  // message: a missing flag counts as one.
+  test('a legacy operatorSourced pattern without the operatorMessage flag is skipped', () => {
+    expect(
+      fastLaneCandidates([n({ meta: { [OPERATOR_SOURCED]: 'true' } })], FAST_LANE_DEFAULTS)
+    ).toEqual([]);
+    expect(
+      fastLaneCandidates(
+        [n({ meta: { [OPERATOR_SOURCED]: 'true', source: 'notice' } })],
+        FAST_LANE_DEFAULTS
+      )
+    ).toEqual([]);
+    // An explicit false from a writer other than notice is not trusted either.
+    expect(
+      fastLaneCandidates(
+        [
+          n({
+            meta: { [OPERATOR_SOURCED]: 'true', source: 'integrate', [OPERATOR_MESSAGE]: 'false' },
+          }),
+        ],
+        FAST_LANE_DEFAULTS
+      )
+    ).toEqual([]);
   });
 });
 
@@ -244,6 +274,26 @@ describe('runFastLane', () => {
     expect(row?.text).toContain('Scout');
     expect(row?.text).toContain('Finny');
     expect(row?.neuronIds).toEqual([pattern.id]);
+  });
+
+  // Review 2026-10-24: one notice pass creates the pattern from finny and
+  // perf, then recognises it from scout. The `created` snapshot still says
+  // finny + perf; scout now supports it and must not be told its own lesson.
+  test('reads the current support at send time, never the pass snapshot', async () => {
+    const { graph, pattern } = world();
+    const snapshot = graph.get(pattern.id) as Neuron;
+    const frozen = {
+      ...snapshot,
+      support: { ...snapshot.support, bots: [...snapshot.support.bots] },
+    };
+    graph.addSupport(pattern.id, { bots: ['scout'] });
+    const { d, directives } = deps(graph, {
+      toolsUsed: (botId) => (botId === 'jarvis' ? ['web_fetch'] : []),
+    });
+    const out = await runFastLane(d, [frozen]);
+    expect(directives.map((x) => x.botId)).toEqual(['jarvis']);
+    expect(directives[0].text).toContain('Scout');
+    expect(out).toEqual([{ neuronId: pattern.id, sent: ['jarvis'] }]);
   });
 
   test('two third bots each get their own directive (one per bot, not one per pattern)', async () => {

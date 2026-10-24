@@ -11,8 +11,12 @@
  * unions the pass's bots into the neuron's support, so two bots hitting the
  * same wall in different passes qualify on the second. Privacy: the directive
  * quotes the neuron text, so a neuron an operator message supports
- * (`OPERATOR_MESSAGE`) is never a candidate, nor is an `operatorSourced` fact;
- * a pattern resting on bot activity is. Its targets (`fastLaneTargets`) are the
+ * (`OPERATOR_MESSAGE`) is never a candidate, nor is any `operatorSourced`
+ * neuron except a notice `pattern` created with `operatorMessage` explicitly
+ * `'false'` (a missing flag predates it and counts as an operator message).
+ * Candidates and each send read the neuron's current support from the graph,
+ * never the pass's snapshot: a bot that joined the support in the same pass is
+ * not a target. Its targets (`fastLaneTargets`) are the
  * eligible bots (enabled, not a customer tenant's: the caller passes them, and
  * the broadcaster refuses a tenant bot anyway) that are NOT among its
  * supporting bots and that relate to it: a `related` edge between the pattern
@@ -63,6 +67,18 @@ export interface FastLaneTargetContext {
   toolsUsed?: (botId: string) => string[];
 }
 
+/**
+ * An operator-sourced neuron the fast lane may still quote: a `pattern` notice
+ * created with `operatorMessage` explicitly `'false'` (written at creation
+ * since the flag exists). A missing flag (the live graph predates it), another
+ * kind or another writer counts as an operator message behind it.
+ */
+function isCleanNoticePattern(n: Neuron): boolean {
+  return (
+    n.kind === 'pattern' && n.meta?.source === 'notice' && n.meta?.[OPERATOR_MESSAGE] === 'false'
+  );
+}
+
 /** The fast-lane candidates among the neurons a notice pass created or recognised. Pure. */
 export function fastLaneCandidates(created: Neuron[], cfg: FastLaneConfig): FastLaneCandidate[] {
   if (!cfg.enabled) return [];
@@ -75,7 +91,7 @@ export function fastLaneCandidates(created: Neuron[], cfg: FastLaneConfig): Fast
     // message supports, and never an operator-sourced fact (it may be their
     // words); a pattern resting on bot activity is the lesson itself.
     if (n.meta?.[OPERATOR_MESSAGE] === 'true') continue;
-    if (n.kind !== 'pattern' && isOperatorSourced(n)) continue;
+    if (isOperatorSourced(n) && !isCleanNoticePattern(n)) continue;
     const bots = [...new Set(n.support.bots)];
     if (bots.length < cfg.minBots) continue;
     out.push({ neuronId: n.id, bots, text: n.text });
@@ -188,7 +204,10 @@ export async function runFastLane(
   const out: FastLaneOutcome[] = [];
   try {
     const cfg = deps.config();
-    const candidates = fastLaneCandidates(created, cfg);
+    // The pass's snapshot can be stale (a neuron created then recognised from
+    // another bot in the same pass): candidates come from the current graph.
+    const current = [...new Map(created.map((n) => [n.id, deps.graph.get(n.id) ?? n])).values()];
+    const candidates = fastLaneCandidates(current, cfg);
     if (candidates.length === 0) return out;
     const botName = deps.botName ?? ((id: string) => id);
     const tools = new Map<string, string[]>();
@@ -225,8 +244,12 @@ export async function runFastLane(
       );
     };
 
-    for (const c of candidates) {
+    for (const candidate of candidates) {
       if (isCancelled()) return out;
+      // Re-read at send time: an earlier send awaited, the graph may have moved.
+      const live = deps.graph.get(candidate.neuronId);
+      const c = live ? fastLaneCandidates([live], cfg)[0] : candidate;
+      if (!c) continue;
       const targets = fastLaneTargets(c, {
         graph: deps.graph,
         bots: deps.bots(),
@@ -236,6 +259,7 @@ export async function runFastLane(
       const sent: string[] = [];
       for (const target of targets) {
         if (isCancelled()) break;
+        if (deps.graph.get(c.neuronId)?.support.bots.includes(target.botId)) continue;
         if (usedToday >= cfg.maxPerDay) {
           capped();
           break;

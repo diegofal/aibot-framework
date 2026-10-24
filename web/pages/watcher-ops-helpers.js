@@ -60,6 +60,20 @@ export function passFoldHtml(row, bodyHtml) {
 const pre = (text) => `<pre class="watcher-pass-pre">${esc(text ?? '')}</pre>`;
 
 /** The inside of an open fold: system, prompt, response (or the error). */
+/**
+ * What the log list renders, live or in a replay: the rows and the
+ * `logListHtml` options. Both honour the open "What it saw" fold; only live
+ * applies the neuron filter and the selected row (a replay shows every row).
+ */
+export function logView(page) {
+  const openPass = page.openPass ?? null;
+  if (page.replay) return { rows: page.replay.shown, options: { openPass } };
+  return {
+    rows: page.model.log,
+    options: { filterId: page.filterId ?? null, selectedSeq: page.selectedSeq ?? null, openPass },
+  };
+}
+
 export function passRecordBodyHtml(record) {
   if (!record) {
     return '<div class="text-dim">No record of this pass (kept 14 days; older passes and passes from before records existed have none).</div>';

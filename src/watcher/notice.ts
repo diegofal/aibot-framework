@@ -545,7 +545,9 @@ export class Noticer {
         model,
         ...(eventAt ? { eventAt } : {}),
         ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
-        ...(operatorMessage ? { [OPERATOR_MESSAGE]: 'true' } : {}),
+        // Always written, `'false'` too: the fast lane reads a missing flag
+        // (neurons older than it) as an operator message behind the neuron.
+        [OPERATOR_MESSAGE]: operatorMessage ? 'true' : 'false',
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

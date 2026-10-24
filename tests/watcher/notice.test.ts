@@ -729,7 +729,10 @@ describe('Noticer provenance (phase 3)', () => {
     from = [err.id];
     s2.buffer.push(err);
     const p = ((await s2.noticer.run()) as { created: Neuron[] }).created[0] as Neuron;
-    expect(p.meta?.operatorMessage).toBeUndefined();
+    // Written explicitly at creation: the fast lane reads a missing flag as an
+    // operator message (the live graph predates it).
+    expect(p.meta?.operatorMessage).toBe('false');
+    expect(p.meta?.source).toBe('notice');
     const op2 = item(operatorSays('b2', 'wiley blocks you'), 0.9, { fromOperator: true });
     from = [op2.id];
     s2.buffer.push(op2);

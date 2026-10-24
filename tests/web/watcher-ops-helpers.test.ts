@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { logRowHtml, stateHtml, stateParts } from '../../web/pages/watcher-helpers.js';
+import { logListHtml, logRowHtml, stateHtml, stateParts } from '../../web/pages/watcher-helpers.js';
 import {
   embeddingStatusHtml,
   graphCleanSummary,
   isPassRow,
+  logView,
   matchPassRecord,
   passFoldHtml,
   passRecordBodyHtml,
@@ -169,5 +170,40 @@ describe('graphCleanSummary', () => {
     expect(
       graphCleanSummary({ dryRun: true, findings: f('watcher-unavailable'), applied: [] })
     ).toContain('not enabled');
+  });
+});
+
+// Review 2026-10-24: "What it saw" during a replay fetched the record and
+// never showed it, because the replay render dropped `openPass`.
+describe('logView', () => {
+  const live = { ...row, seq: 9 };
+  const openPass = { seq: 7, html: '<div class="saw">the prompt</div>' };
+
+  test('a replay renders its shown rows with the open fold, without the live filter or selection', () => {
+    const page = {
+      replay: { shown: [row] },
+      model: { log: [live] },
+      filterId: 'n-x',
+      selectedSeq: 7,
+      openPass,
+    };
+    const view = logView(page);
+    expect(view.rows).toEqual([row]);
+    expect(view.options).toEqual({ openPass });
+    expect(logListHtml(view.rows, NOW, view.options)).toContain('the prompt');
+  });
+
+  test('live renders the model log with the filter, the selection and the open fold', () => {
+    const page = { replay: null, model: { log: [live] }, filterId: null, selectedSeq: 9, openPass };
+    expect(logView(page)).toEqual({
+      rows: [live],
+      options: { filterId: null, selectedSeq: 9, openPass },
+    });
+  });
+
+  test('no open fold: null', () => {
+    expect(logView({ replay: { shown: [] }, model: { log: [] } }).options).toEqual({
+      openPass: null,
+    });
   });
 });

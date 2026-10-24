@@ -302,7 +302,9 @@ export const OPERATOR_SOURCED = 'operatorSourced';
  * `Neuron.meta` key set to `'true'` when an operator message (a buffer item
  * `fromOperator`) is among the items behind the neuron, at creation or at a
  * later recognition. Narrower than `OPERATOR_SOURCED`: the neuron's text may be
- * the operator's own words, so the fast lane never quotes it to a bot.
+ * the operator's own words, so the fast lane never quotes it to a bot. Notice
+ * writes `'false'` explicitly at creation; a neuron without the key predates
+ * it, and the fast lane treats an operator-sourced one as `'true'`.
  */
 export const OPERATOR_MESSAGE = 'operatorMessage';
 
