@@ -63,6 +63,11 @@ export class DailyBudget {
     this.now = deps.now ?? Date.now;
   }
 
+  /** The watcher dir the budget files live in (pass records sit next to them). */
+  get dir(): string {
+    return this.deps.dir;
+  }
+
   allow(tier: WatcherTier): BudgetDecision {
     if (this.deps.isCircuitOpen?.(tier)) return { ok: false, reason: 'breaker' };
     const used = this.current()[tier];
