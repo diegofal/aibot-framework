@@ -66,7 +66,6 @@ import {
   type NeuronKind,
   OPERATOR_SOURCED,
   type Vec3,
-  WATCHER_DEFAULTS,
   type WatcherConfig,
   isOperatorSourced,
   isPublicHumanItem,
@@ -393,8 +392,7 @@ export class Integrator {
 
   /** An agenda-only pass runs at most once per `integrate.agendaEveryMs`. */
   private agendaPassAllowed(nowMs: number): boolean {
-    const every =
-      this.deps.config().integrate.agendaEveryMs ?? WATCHER_DEFAULTS.integrate.agendaEveryMs;
+    const every = this.deps.config().integrate.agendaEveryMs;
     const last = this.st.lastAgendaAt ? Date.parse(this.st.lastAgendaAt) : undefined;
     return last === undefined || !Number.isFinite(last) || nowMs - last >= every;
   }
