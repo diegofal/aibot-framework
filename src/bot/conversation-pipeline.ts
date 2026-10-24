@@ -10,6 +10,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import type { RelayParty } from '../relay/types';
 import { unflushedMessageCount } from '../session';
+import { buildFleetMemoryPrefetch } from '../tools/fleet-memory-search';
 import { type ToolActor, callerIdentity } from '../tools/operator-gate';
 import { generateSpeech } from '../tts';
 import { HUMAN_INBOUND_HOOK, type HumanInboundEvent } from './agent-loop-utils';
@@ -224,6 +225,43 @@ export class ConversationPipeline {
   }
 
   /**
+   * "## What the fleet knows" for an operator turn: the watcher's graph
+   * searched for the message (`buildFleetMemoryPrefetch`, the ranking of
+   * `fleet_memory_search`, top 5, operator visibility). Null unless the
+   * watcher is enabled and running, and never for a tenant bot. Runs in
+   * parallel with the RAG prefetch; a failure is logged and never breaks the
+   * turn. Callers decide the turn is the operator's (`isOperatorTurn`).
+   */
+  async prefetchFleetMemory(
+    userText: string,
+    botId: string,
+    botLogger: Logger
+  ): Promise<string | null> {
+    try {
+      const config = this.ctx.config;
+      if (!config.watcher?.enabled) return null;
+      if (config.multiTenant?.enabled && config.bots?.find((b) => b.id === botId)?.tenantId) {
+        return null;
+      }
+      const source = this.ctx.fleetMemory?.();
+      if (!source) return null;
+      const section = await buildFleetMemoryPrefetch(
+        source,
+        userText,
+        { operator: true, botId },
+        botLogger
+      );
+      if (section) {
+        botLogger.info({ query: userText.substring(0, 80) }, 'Fleet memory prefetch injected');
+      }
+      return section;
+    } catch (err) {
+      botLogger.warn({ err }, 'Fleet memory prefetch failed (non-fatal)');
+      return null;
+    }
+  }
+
+  /**
    * Core conversation pipeline shared by text and media handlers.
    * Handles session expiry, history, system prompt, Ollama chat, and persistence.
    */
@@ -323,6 +361,13 @@ export class ConversationPipeline {
     const ragPromise = turn.synthetic
       ? Promise.resolve(null)
       : this.prefetchMemoryContext(userText, isGroup, botLogger, config.id, userId, memoryViewer);
+    // What the whole fleet knows, for the operator only (privacy rule of
+    // fleet_memory_search: the graph holds operator material).
+    const operatorTurn = isOperatorTurn(requester, executorScope);
+    const fleetPromise =
+      operatorTurn && !turn.synthetic
+        ? this.prefetchFleetMemory(userText, config.id, botLogger)
+        : Promise.resolve(null);
 
     // Stamp the message before an expiry clears the session: the gap since the
     // previous message is what tells the model this is not a live thread.
@@ -373,6 +418,7 @@ export class ConversationPipeline {
 
       // Await RAG pre-fetch
       const ragContext = await ragPromise;
+      const fleetMemoryContext = await fleetPromise;
 
       // Topic guard pre-filter (merge tenant overlay if present)
       const rawTopicGuard = config.topicGuard as TopicGuardConfig | undefined;
@@ -435,7 +481,8 @@ export class ConversationPipeline {
         previousSession,
         relayContext,
         speaker: requester,
-        operatorTurn: isOperatorTurn(requester, executorScope),
+        operatorTurn,
+        fleetMemoryContext,
       });
 
       // In groups, prefix messages with sender name
@@ -1048,6 +1095,10 @@ export class ConversationPipeline {
       userId,
       memoryViewer
     );
+    const operatorTurn = isOperatorTurn(requester, executorScope);
+    const fleetPromise = operatorTurn
+      ? this.prefetchFleetMemory(msg.text, config.id, botLogger)
+      : Promise.resolve(null);
 
     const envelope = formatEnvelope(
       new Date(),
@@ -1089,6 +1140,7 @@ export class ConversationPipeline {
 
       // Await RAG
       const ragContext = await ragPromise;
+      const fleetMemoryContext = await fleetPromise;
 
       // Topic guard pre-filter (merge tenant overlay if present)
       const rawChannelTopicGuard = config.topicGuard as TopicGuardConfig | undefined;
@@ -1151,7 +1203,8 @@ export class ConversationPipeline {
         previousSession,
         relayContext,
         speaker: requester,
-        operatorTurn: isOperatorTurn(requester, executorScope),
+        operatorTurn,
+        fleetMemoryContext,
       });
 
       // In groups, prefix messages with sender name

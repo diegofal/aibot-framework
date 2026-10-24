@@ -161,3 +161,21 @@ export function localDate(date: Date): string {
 export function localTime(date: Date): string {
   return date.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
 }
+
+/** `s` with every regular-expression metacharacter escaped, for `new RegExp`. */
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Whether `text` names `word` as a whole word, case-insensitive: not inside a
+ * longer run of letters or digits ("Max" is not in "maximum"). An empty word
+ * is never mentioned.
+ */
+export function mentionsWord(text: string, word: string): boolean {
+  const w = (word ?? '').trim();
+  if (!w) return false;
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(w)}($|[^\\p{L}\\p{N}])`, 'iu').test(
+    text ?? ''
+  );
+}

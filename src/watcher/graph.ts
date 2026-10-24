@@ -299,6 +299,18 @@ export class Graph {
     return next;
   }
 
+  /** Remove attributes from a neuron's `meta`. Not a firing; a no-op when none is set. */
+  dropMeta(id: string, keys: string[]): Neuron | undefined {
+    const n = this.neurons.get(id);
+    if (!n) return undefined;
+    if (!n.meta || !keys.some((k) => k in (n.meta ?? {}))) return n;
+    const meta = { ...n.meta };
+    for (const k of keys) delete meta[k];
+    const next: Neuron = { ...n, meta };
+    this.writeNeuron(next);
+    return next;
+  }
+
   archive(id: string): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n || n.archivedAt) return n;

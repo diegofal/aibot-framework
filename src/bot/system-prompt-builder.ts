@@ -21,6 +21,9 @@ const MISSING_CAPABILITY_NOTE = `## When you cannot do something
 
 If you have no tool or connection for what is asked (a calendar, an email account, an app), say so plainly in the person's words, e.g. "todavía no tengo tu calendario conectado", and offer what you can do now. Never name internal mechanisms (MCP servers, tool names, connectors, config files) unless the person is asking how the system works.`;
 
+const FLEET_MEMORY_HINT =
+  'For anything about what other agents in the fleet are doing or know, you may call `fleet_memory_search`.';
+
 export interface SystemPromptOptions {
   /** 'conversation' includes all tool blocks; 'collaboration' only memory_search + soul; 'autonomous' for agent loop */
   mode: 'conversation' | 'collaboration' | 'autonomous';
@@ -50,6 +53,11 @@ export interface SystemPromptOptions {
    * watcher's "## Your current state" (plan, goal, fleet focus).
    */
   operatorTurn?: boolean;
+  /**
+   * "## What the fleet knows" (`buildFleetMemoryPrefetch`), conversation mode
+   * and operator turns only: shown next to the RAG block.
+   */
+  fleetMemoryContext?: string | null;
 }
 
 export class SystemPromptBuilder {
@@ -160,6 +168,15 @@ export class SystemPromptBuilder {
     // RAG context injection (near end for recency bias)
     if (mode === 'conversation' && ragContext) {
       prompt += `\n\n${ragContext}`;
+    }
+
+    // What other bots know (the watcher's graph): only on an operator turn,
+    // the privacy rule of fleet_memory_search.
+    if (mode === 'conversation' && options.operatorTurn === true) {
+      if (options.fleetMemoryContext) prompt += `\n\n${options.fleetMemoryContext}`;
+      if (defs.some((d) => d.function.name === 'fleet_memory_search')) {
+        prompt += `\n\n${FLEET_MEMORY_HINT}`;
+      }
     }
 
     if (mode === 'conversation' && options.previousSession) {

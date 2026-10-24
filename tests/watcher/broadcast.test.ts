@@ -6,10 +6,12 @@ import { readGoalEvents } from '../../src/bot/goal-events';
 import { parseGoals } from '../../src/tools/goals';
 import {
   BROADCAST_DAILY_CAP,
+  BROADCAST_INFLIGHT_MAX_MS,
   BROADCAST_PENDING_MS,
   type BroadcastDelivery,
   Broadcaster,
   broadcastsFile,
+  isStaleOpen,
   writeWatcherGoal,
 } from '../../src/watcher/broadcast';
 import { WatcherLog } from '../../src/watcher/log';
@@ -241,6 +243,77 @@ describe('Broadcaster.send', () => {
   test('a kind without a delivery dep fails', async () => {
     const b = new Broadcaster({ dir, now: () => t, delivery: {} });
     expect((await send(b)).status).toBe('failed');
+  });
+});
+
+describe('Broadcaster: records left open by a process exit', () => {
+  const writeOpen = (ageMs: number, id = 'b-0000open') => {
+    mkdirSync(dir, { recursive: true });
+    const rec = {
+      id,
+      botId: 'b1',
+      kind: 'wake',
+      text: 'x',
+      insightId: 'n-ins00001',
+      createdAt: new Date(t - ageMs).toISOString(),
+    };
+    writeFileSync(broadcastsFile(dir), `${JSON.stringify(rec)}\n`, 'utf-8');
+  };
+
+  test('isStaleOpen: open and older than BROADCAST_INFLIGHT_MAX_MS', () => {
+    const at = (ageMs: number) => ({ createdAt: new Date(t - ageMs).toISOString() });
+    expect(isStaleOpen(at(BROADCAST_INFLIGHT_MAX_MS + 1), t)).toBe(true);
+    expect(isStaleOpen(at(BROADCAST_INFLIGHT_MAX_MS - 1), t)).toBe(false);
+    expect(isStaleOpen({ ...at(BROADCAST_INFLIGHT_MAX_MS * 2), deliveredAt: 'x' }, t)).toBe(false);
+    expect(isStaleOpen({ ...at(BROADCAST_INFLIGHT_MAX_MS * 2), deliveryError: 'x' }, t)).toBe(
+      false
+    );
+  });
+
+  test('on load, an open record older than the limit is closed as failed and persisted', () => {
+    writeOpen(BROADCAST_INFLIGHT_MAX_MS + 60_000);
+    const { b, make } = setup();
+    expect(b.get('b-0000open')?.deliveryError).toContain('interrupted');
+    expect(b.get('b-0000open')?.deliveredAt).toBeUndefined();
+    expect(make().get('b-0000open')?.deliveryError).toContain('interrupted');
+    expect(readFileSync(broadcastsFile(dir), 'utf-8').trim().split('\n')).toHaveLength(2);
+  });
+
+  test('a younger open record stays open on load and still blocks a duplicate', async () => {
+    writeOpen(60_000);
+    const { b } = setup();
+    expect(b.get('b-0000open')?.deliveryError).toBeUndefined();
+    expect((await send(b)).status).toBe('duplicate');
+  });
+
+  test('a delivery of this process hanging past the limit is still in flight: a re-proposal is a duplicate', async () => {
+    let release: () => void = () => {};
+    const hanging = new Promise<void>((r) => {
+      release = r;
+    });
+    const asked: string[] = [];
+    const { b } = setup({
+      question: async (bot) => {
+        asked.push(bot);
+        if (asked.length === 1) await hanging;
+        return { ok: true, detail: 'sent' };
+      },
+    });
+    const first = send(b, { kind: 'question' });
+    await Promise.resolve();
+    t += BROADCAST_INFLIGHT_MAX_MS + 60_000;
+    expect((await send(b, { kind: 'question' })).status).toBe('duplicate');
+    expect(asked).toEqual(['b1']);
+    release();
+    expect((await first).status).toBe('delivered');
+  });
+
+  test('an open record that went stale after load no longer blocks a retry', async () => {
+    writeOpen(60_000);
+    const { b, calls } = setup();
+    t += BROADCAST_INFLIGHT_MAX_MS;
+    expect((await send(b)).status).toBe('delivered');
+    expect(calls).toEqual(['wake:b1']);
   });
 });
 

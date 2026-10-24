@@ -241,6 +241,8 @@ export class ToolRegistry {
    */
   setFleetMemory(getSource: () => FleetMemorySource | undefined): void {
     if (!this.ctx.config.watcher?.enabled) return;
+    // The conversation pipeline's operator-turn prefetch reads the same source.
+    this.ctx.fleetMemory = getSource;
     const name = 'fleet_memory_search';
     removeToolsInPlace(this.ctx.tools, (t) => t.definition.function.name === name);
     this.ctx.tools.push(

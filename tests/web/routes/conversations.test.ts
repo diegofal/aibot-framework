@@ -472,6 +472,53 @@ describe('conversations routes', () => {
       expect(created[0][9]).toEqual({ actor: 'operator' });
     });
 
+    test('the dashboard thread is an operator turn: fleet memory prefetched into the prompt', async () => {
+      const deps = makeDeps();
+      const bm = deps.botManager as any;
+      bm.prefetchFleetMemory = mock(() =>
+        Promise.resolve('## What the fleet knows\n- [fact] codeword heliotrope (known by Finny)')
+      );
+      const convo = deps.conversationsService.createConversation('bot1');
+      await makeApp(deps).request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'What is the canary codeword?' }),
+      });
+      await tick(300);
+      expect(bm.prefetchFleetMemory.mock.calls[0]).toEqual([
+        'What is the canary codeword?',
+        'bot1',
+      ]);
+      const opts = bm.buildSystemPrompt.mock.calls[0][0];
+      expect(opts.operatorTurn).toBe(true);
+      expect(opts.fleetMemoryContext).toContain('heliotrope');
+    });
+
+    test("a tenant's thread is not an operator turn: no fleet memory", async () => {
+      const deps = makeDeps();
+      const bm = deps.botManager as any;
+      bm.prefetchFleetMemory = mock(() => Promise.resolve('## What the fleet knows'));
+      const convo = deps.conversationsService.createConversation('bot1');
+      const app = new Hono();
+      app.use('*', async (c, next) => {
+        c.set('tenant' as never, { tenantId: 't1' } as never);
+        await next();
+      });
+      app.route('/api/conversations', conversationsRoutes(deps));
+      await app.request(`http://localhost/api/conversations/bot1/${convo.id}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: 'What is the canary codeword?' }),
+      });
+      await tick(300);
+      expect(bm.prefetchFleetMemory).not.toHaveBeenCalled();
+      const opts = bm.buildSystemPrompt.mock.calls[0]?.[0];
+      if (opts) {
+        expect(opts.operatorTurn).not.toBe(true);
+        expect(opts.fleetMemoryContext ?? null).toBeNull();
+      }
+    });
+
     test('skips RAG prefetch for short messages', async () => {
       const deps = makeDeps();
 

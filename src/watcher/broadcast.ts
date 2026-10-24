@@ -14,6 +14,12 @@
  * the cap; a failed delivery still counts toward the daily cap, but is not a
  * duplicate: only a delivered (or still in flight) broadcast blocks another
  * of the same kind for the same insight, so a failed one may be retried.
+ * A record still open (neither delivered nor failed) after
+ * `BROADCAST_INFLIGHT_MAX_MS` was left by a process that exited mid-delivery
+ * (`isStaleOpen`): it no longer blocks a retry, and on load it is closed as
+ * failed ("interrupted"), so it keeps its slot of that day's cap. A record
+ * this instance opened is in flight until its delivery settles, however
+ * slow: it always blocks a duplicate.
  * A question the shared proactive throttle refused is `deferred`, not failed:
  * nothing was attempted, so it neither counts toward the cap nor blocks a
  * retry once the cooldown is over.
@@ -40,7 +46,19 @@ export { BROADCAST_KINDS, type BroadcastKind };
 export const BROADCAST_DAILY_CAP = 3;
 /** A delivered broadcast waits this long for a planner to see it. */
 export const BROADCAST_PENDING_MS = 86_400_000;
+/** An open record older than this was left by a process that died mid-delivery. */
+export const BROADCAST_INFLIGHT_MAX_MS = 10 * 60_000;
 const MAX_TEXT = 500;
+
+/** Neither delivered nor failed, and created more than `BROADCAST_INFLIGHT_MAX_MS` ago. */
+export function isStaleOpen(
+  b: Pick<Broadcast, 'createdAt' | 'deliveredAt' | 'deliveryError'>,
+  nowMs: number
+): boolean {
+  if (b.deliveredAt || b.deliveryError !== undefined) return false;
+  const at = Date.parse(b.createdAt);
+  return Number.isFinite(at) && nowMs - at > BROADCAST_INFLIGHT_MAX_MS;
+}
 
 export type BroadcastSignal = 'up' | 'down';
 
@@ -160,11 +178,22 @@ export function readBroadcasts(dir: string): Broadcast[] {
 
 export class Broadcaster {
   private byId = new Map<string, Broadcast>();
+  /** Records this instance opened and has not closed yet: in flight, however slow. */
+  private readonly delivering = new Set<string>();
   private readonly now: () => number;
 
   constructor(private readonly deps: BroadcasterDeps) {
     this.now = deps.now ?? Date.now;
-    for (const b of readBroadcasts(deps.dir)) this.byId.set(b.id, b);
+    const stale: Broadcast[] = [];
+    for (const b of readBroadcasts(deps.dir)) {
+      this.byId.set(b.id, b);
+      if (isStaleOpen(b, this.now())) stale.push(b);
+    }
+    // Left open by a process that exited mid-delivery: closed as failed (a
+    // retry is allowed, the cap slot stays taken).
+    for (const b of stale) {
+      this.put({ ...b, deliveryError: 'interrupted: the process stopped during delivery' });
+    }
   }
 
   get cap(): number {
@@ -215,6 +244,9 @@ export class Broadcaster {
       if (b.insightId !== insightId || b.kind !== kind) continue;
       // A failed or deferred delivery may be retried; a delivered or in-flight one may not.
       if (b.deliveryError !== undefined && !b.deliveredAt) continue;
+      // Stale only when another process left it open; a slow delivery of
+      // this instance is still in flight (a retry would deliver twice).
+      if (!this.delivering.has(b.id) && isStaleOpen(b, this.now())) continue;
       return { status: 'duplicate' };
     }
     if (this.countToday(botId) >= this.cap) {
@@ -236,6 +268,7 @@ export class Broadcaster {
       createdAt: this.iso(),
     };
     this.put(created);
+    this.delivering.add(created.id);
 
     let outcome: { ok: boolean; detail?: string; deferred?: boolean };
     try {
@@ -257,6 +290,7 @@ export class Broadcaster {
     // Recorded (not dropped) so the record that held the cap slot while in
     // flight is closed; `deferred` takes it out of the cap and the duplicates.
     this.put(done);
+    this.delivering.delete(created.id);
     const status = outcome.ok ? 'delivered' : outcome.deferred ? 'deferred' : 'failed';
     this.deps.log?.say(
       'broadcast',

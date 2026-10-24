@@ -145,3 +145,97 @@ describe('buildIntegratePrompt', () => {
     expect(user).toContain('· from the operator');
   });
 });
+
+describe('buildIntegratePrompt: making integrate act', () => {
+  test('the system prompt states broadcast criteria with examples, per kind', () => {
+    const { system } = buildIntegratePrompt(input());
+    expect(system).toContain('directive: two bots duplicate work');
+    expect(system).toContain("one bot's finding changes another's plan");
+    expect(system).toContain('question: only the operator can decide');
+    expect(system).toContain('which of two duplicate briefs to keep');
+    expect(system).toContain("wake: new evidence is relevant to a bot's active goal");
+    expect(system).toContain('goal: only when no bot owns the work');
+    expect(system).toContain('whyNoBroadcast');
+  });
+
+  test('the bots show their broadcasts today against the cap', () => {
+    const { user } = buildIntegratePrompt(
+      input({
+        bots: [
+          { id: 'b1', name: 'Jarvis', broadcastsToday: 1 },
+          { id: 'b2', name: 'Scout', broadcastsToday: 3 },
+        ],
+        broadcastCap: 3,
+      })
+    );
+    expect(user).toContain('- b1: Jarvis · broadcasts today 1/3');
+    expect(user).toContain('- b2: Scout · broadcasts today 3/3 (capped)');
+  });
+
+  test('each insight says what was already broadcast for it, or why not', () => {
+    const { user } = buildIntegratePrompt(
+      input({
+        insights: [
+          {
+            ...neuron('n-ins00001', 'insight', 'Two bots chase the same publishers', ['b1', 'b2']),
+            confidence: 'medium',
+          },
+          neuron('n-ins00002', 'insight', 'Scout repeats itself'),
+          {
+            ...neuron('n-ins00003', 'insight', 'Old news'),
+            meta: { whyNoBroadcast: 'Nothing to change' },
+          },
+        ],
+        insightBroadcasts: {
+          'n-ins00001': [{ bot: 'Jarvis', kind: 'directive', status: 'delivered' }],
+        },
+      })
+    );
+    expect(user).toContain(
+      '- [n-ins00001] Two bots chase the same publishers (medium; bots: b1, b2) · broadcast: directive to Jarvis (delivered)'
+    );
+    expect(user).toContain('- [n-ins00002] Scout repeats itself (bots: b1) · broadcast: none');
+    expect(user).toContain(
+      '- [n-ins00003] Old news (bots: b1) · no broadcast: "Nothing to change"'
+    );
+  });
+
+  test('a standing agenda lists cross-bot related pairs and insights waiting for a broadcast', () => {
+    const { user } = buildIntegratePrompt(
+      input({
+        agenda: {
+          pairs: [
+            {
+              id: 'e-pair0001',
+              weight: 0.91,
+              a: neuron('n-brief001', 'fact', 'Jarvis writes the Monday AI-engineer brief', ['b1']),
+              b: neuron('n-brief002', 'fact', 'Scout writes the Monday AI-engineer brief', ['b2']),
+            },
+          ],
+          insights: [
+            {
+              ...neuron('n-ins00009', 'insight', 'Two Monday briefs', ['b1', 'b2']),
+              confidence: 'high',
+            },
+          ],
+        },
+      })
+    );
+    expect(user).toContain('## Standing agenda');
+    expect(user).toContain(
+      '- [e-pair0001] related 0.91 across b1 and b2: [n-brief001] fact: Jarvis writes the Monday AI-engineer brief | [n-brief002] fact: Scout writes the Monday AI-engineer brief'
+    );
+    expect(user).toContain(
+      '- [n-ins00009] Two Monday briefs (high; bots: b1, b2) · no broadcast and no reason yet'
+    );
+    expect(user).toContain('"agendaCovered"');
+  });
+
+  test('no agenda, no section; the contract offers whyNoBroadcast, insightId and noBroadcast', () => {
+    const { user } = buildIntegratePrompt(input());
+    expect(user).not.toContain('## Standing agenda');
+    expect(user).toContain('"whyNoBroadcast"');
+    expect(user).toContain('"insightId"');
+    expect(user).toContain('"noBroadcast"');
+  });
+});

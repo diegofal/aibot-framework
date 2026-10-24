@@ -174,6 +174,60 @@ describe('SystemPromptBuilder', () => {
     });
   });
 
+  describe('what the fleet knows (watcher prefetch)', () => {
+    const section =
+      '## What the fleet knows\n- [fact] The canary codeword is heliotrope (known by Finny)';
+
+    test('operator turns carry the prefetched section and the fleet_memory_search hint', () => {
+      const builder = new SystemPromptBuilder(
+        createMockCtx([]),
+        createMockToolRegistry([makeDef('fleet_memory_search')])
+      );
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        operatorTurn: true,
+        fleetMemoryContext: section,
+      });
+      expect(prompt).toContain('## What the fleet knows');
+      expect(prompt).toContain('heliotrope');
+      expect(prompt).toContain('you may call `fleet_memory_search`');
+    });
+
+    test('never on a non-operator turn, even if a section was passed', () => {
+      const builder = new SystemPromptBuilder(
+        createMockCtx([]),
+        createMockToolRegistry([makeDef('fleet_memory_search')])
+      );
+      for (const operatorTurn of [undefined, false]) {
+        const prompt = builder.build({
+          mode: 'conversation',
+          botId: 'testbot',
+          botConfig,
+          isGroup: false,
+          ...(operatorTurn === undefined ? {} : { operatorTurn }),
+          fleetMemoryContext: section,
+        });
+        expect(prompt).not.toContain('## What the fleet knows');
+        expect(prompt).not.toContain('you may call `fleet_memory_search`');
+      }
+    });
+
+    test('no hint without the tool', () => {
+      const builder = new SystemPromptBuilder(createMockCtx([]), createMockToolRegistry([]));
+      const prompt = builder.build({
+        mode: 'conversation',
+        botId: 'testbot',
+        botConfig,
+        isGroup: false,
+        operatorTurn: true,
+      });
+      expect(prompt).not.toContain('fleet_memory_search');
+    });
+  });
+
   describe('create_agent instructions', () => {
     test('includes agent creation section when create_agent tool is present', () => {
       const bots = [

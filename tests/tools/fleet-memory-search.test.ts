@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   FLEET_MEMORY_MAX_RESULTS,
+  FLEET_PREFETCH_RESULTS,
+  buildFleetMemoryPrefetch,
   createFleetMemorySearchTool,
 } from '../../src/tools/fleet-memory-search';
 import { Graph } from '../../src/watcher/graph';
@@ -71,14 +73,19 @@ describe('fleet_memory_search', () => {
   });
 
   test('a failing embed falls back to text', async () => {
-    add('The blue heron nests behind the old water tower');
+    // The neuron has an embedding, so the query is embedded (and the embed throws).
+    const n = add('The blue heron nests behind the old water tower');
+    graph.setEmbedding(n.id, [1, 0]);
+    let calls = 0;
     const tool = createFleetMemorySearchTool(() => ({
       graph,
       embed: async () => {
+        calls++;
         throw new Error('ollama down');
       },
     }));
     const res = await tool.execute({ query: 'heron nests', ...asB1 }, logger);
+    expect(calls).toBe(1);
     expect(res.content).toContain('blue heron');
   });
 
@@ -265,5 +272,139 @@ describe('fleet_memory_search: what a non-operator caller may see (scope)', () =
     const out = await run({ _botId: 'b1' }, { isTenantBot: (id: string) => id === 't1' });
     expect(out).not.toContain('Tenant helper');
     expect(out).toContain('Scout');
+  });
+});
+
+describe('buildFleetMemoryPrefetch', () => {
+  const canary = () =>
+    graph.addNeuron({
+      kind: 'fact',
+      text: 'The canary codeword for the heron project is heliotrope',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { operatorSourced: 'true' },
+    });
+
+  test('the operator gets a "What the fleet knows" section naming the supporting bot', async () => {
+    canary();
+    const out = await buildFleetMemoryPrefetch(
+      { graph },
+      'what is the canary codeword for the heron project',
+      { operator: true, botId: 'b2' },
+      logger
+    );
+    expect(out).toContain('## What the fleet knows');
+    expect(out).toContain('heliotrope');
+    expect(out).toContain('known by Jarvis');
+    expect(out).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT>>>');
+  });
+
+  test('ranked like the tool: at most 5 lines, best first', async () => {
+    for (let i = 0; i < 8; i++) add(`heron sighting number ${i} near the water tower`);
+    const out = (await buildFleetMemoryPrefetch(
+      { graph },
+      'heron sighting near the water tower',
+      { operator: true },
+      logger
+    )) as string;
+    expect(out.match(/^- \[/gm)?.length).toBe(FLEET_PREFETCH_RESULTS);
+  });
+
+  test('anyone else does not see operator-sourced material', async () => {
+    canary();
+    const out = await buildFleetMemoryPrefetch(
+      { graph },
+      'what is the canary codeword for the heron project',
+      { operator: false, botId: 'b1' },
+      logger
+    );
+    expect(out).toBeNull();
+  });
+
+  test('null for a short query or no match; an embedder that fails falls back to text', async () => {
+    // Embedded, so the failing embedder below is actually called.
+    graph.setEmbedding(canary().id, [1, 0]);
+    expect(
+      await buildFleetMemoryPrefetch({ graph }, 'hola', { operator: true }, logger)
+    ).toBeNull();
+    expect(
+      await buildFleetMemoryPrefetch(
+        { graph },
+        'quarterly tax filing deadline',
+        { operator: true },
+        logger
+      )
+    ).toBeNull();
+    let calls = 0;
+    const failing = {
+      graph,
+      embed: async () => {
+        calls++;
+        throw new Error('ollama down');
+      },
+    };
+    const out = await buildFleetMemoryPrefetch(
+      failing,
+      'canary codeword heron project',
+      { operator: true },
+      logger
+    );
+    expect(out).toContain('heliotrope');
+    expect(calls).toBe(1);
+  });
+});
+
+describe('buildFleetMemoryPrefetch: the query embedding', () => {
+  const counting = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      embed: async (text: string) => {
+        calls.push(text);
+        return [1, 0];
+      },
+    };
+  };
+
+  test('not embedded when no visible live neuron has an embedding', async () => {
+    add('the canary codeword for the heron project is heliotrope');
+    const e = counting();
+    const out = await buildFleetMemoryPrefetch(
+      { graph, embed: e.embed },
+      'canary codeword heron project',
+      { operator: true },
+      logger
+    );
+    expect(out).toContain('heliotrope');
+    expect(e.calls).toEqual([]);
+  });
+
+  test('not embedded when the only embedded neurons are archived or not visible', async () => {
+    const other = add('Scout tracks the heron project budget', ['b2']);
+    graph.setEmbedding(other.id, [1, 0]);
+    const gone = add('the heron project closed last week');
+    graph.setEmbedding(gone.id, [1, 0]);
+    graph.archive(gone.id);
+    const e = counting();
+    await buildFleetMemoryPrefetch(
+      { graph, embed: e.embed },
+      'what about the heron project',
+      { operator: false, botId: 'b1' },
+      logger
+    );
+    expect(e.calls).toEqual([]);
+  });
+
+  test('embedded once when a visible live neuron has an embedding', async () => {
+    const n = add('the canary codeword for the heron project is heliotrope');
+    graph.setEmbedding(n.id, [1, 0]);
+    const e = counting();
+    await buildFleetMemoryPrefetch(
+      { graph, embed: e.embed },
+      'canary codeword heron project',
+      { operator: true },
+      logger
+    );
+    expect(e.calls).toEqual(['canary codeword heron project']);
   });
 });

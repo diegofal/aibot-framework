@@ -216,13 +216,26 @@ export function narrateNoticed(input: {
   return `Noticed: ${input.what}. Salience ${round1(input.salience)}${why.length ? ` (${why.join(', ')})` : ''}.`;
 }
 
+/** A buffer item the watcher still holds, with why tier 0 kept it (the introspection question shows these). */
+export function narrateHolding(input: {
+  what: string;
+  salience: number;
+  reasons: string[];
+}): string {
+  const why = input.reasons.length ? ` (${input.reasons.join(', ')})` : '';
+  return `Holding: ${input.what}. Salience ${round1(input.salience)}${why}.`;
+}
+
 export function narrateSenseSummary(input: {
   events: number;
   windowMs: number;
   top?: string;
   topSalience?: number;
+  /** Events that repeated one seen within the last minute (no noticed row of their own). */
+  repeats?: number;
 }): string {
-  const head = `Sensed ${plural(input.events, 'event', 'events')} in the last ${formatDuration(input.windowMs)}`;
+  const repeats = input.repeats ? ` (${plural(input.repeats, 'repeat', 'repeats')})` : '';
+  const head = `Sensed ${plural(input.events, 'event', 'events')} in the last ${formatDuration(input.windowMs)}${repeats}`;
   if (!input.top) return `${head}.`;
   return `${head}, top: ${input.top} (salience ${round1(input.topSalience ?? 0)}).`;
 }
@@ -332,13 +345,23 @@ export function narrateIntegrateInsight(input: {
   text: string;
   confidence?: string;
   bots: string[];
+  /** The model's one line on why it broadcast nothing (quoted). */
+  whyNoBroadcast?: string;
+  /** It needed a broadcast or a reason and got neither. */
+  reasonMissing?: boolean;
 }): string {
   const parts = [
     ...(input.confidence ? [`confidence ${input.confidence}`] : []),
     ...(input.bots.length > 1 ? [`across ${andList(input.bots)}`] : []),
     ...(input.bots.length === 1 ? [`from ${input.bots[0]}`] : []),
+    ...(input.whyNoBroadcast ? [`no broadcast: ${quoteModelText(input.whyNoBroadcast)}`] : []),
+    ...(input.reasonMissing ? ['no broadcast and no reason given'] : []),
   ];
   return `I realised: ${quoteModelText(input.text, 300)}${parts.length ? ` (${parts.join('; ')})` : ''}.`;
+}
+
+export function narrateIntegrateNoBroadcast(input: { insight: string; why: string }): string {
+  return `Not broadcasting ${quoteModelText(input.insight, 160)}: ${quoteModelText(input.why)}.`;
 }
 
 export function narrateIntegrateContradiction(input: { text: string }): string {

@@ -4,6 +4,7 @@
  * Also the privacy rule: text from anyone but the operator is reduced to topic
  * words before the watcher stores or narrates it. Pure.
  */
+import { createHash } from 'node:crypto';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { Graph } from './graph';
 import { type SensedEvent, isHumanInbound } from './types';
@@ -82,6 +83,67 @@ export function scoreEvent(event: SensedEvent, ctx: SalienceContext): SalienceSc
     if (matches.length === 0) add(NOVELTY_BONUS, 'novel');
   }
   return { salience: Math.round(salience * 1000) / 1000, reasons, touched };
+}
+
+/** Within this long, the same event from the same bot is a repeat, not news. */
+export const REPEAT_WINDOW_MS = 60_000;
+
+/** Normalised text longer than this is keyed by its prefix plus a hash of the whole. */
+const KEY_TEXT_MAX = 200;
+
+/**
+ * Lowercased, whitespace-collapsed text; past `KEY_TEXT_MAX` chars, the
+ * prefix plus a sha1 (16 hex) of the whole text, so the key stays short and
+ * two texts that share a long prefix (production paths) are still two keys.
+ * `stripDigits` (error text only) also folds ids and numbers away: a port or
+ * a millisecond count is noise in an error, but in a result a changed count
+ * is the news.
+ */
+function normaliseText(text: string, stripDigits = false): string {
+  const lower = text.toLowerCase();
+  const folded = stripDigits ? lower.replace(/[0-9a-f]{8,}/g, '#').replace(/\d+/g, '#') : lower;
+  const normal = folded.replace(/\s+/g, ' ').trim();
+  if (normal.length <= KEY_TEXT_MAX) return normal;
+  const digest = createHash('sha1').update(normal).digest('hex').slice(0, 16);
+  return `${normal.slice(0, KEY_TEXT_MAX)}#${digest}`;
+}
+
+/**
+ * What makes two events "the same" for the repeat window: a failed tool by
+ * tool + error class (the error text with numbers folded away, or the failure
+ * kind and target), any other error by its type and text with numbers folded
+ * away, and every other event by its type and text with numbers kept: two
+ * results that differ only in a count are two results. Human messages are
+ * never keyed: two people may say the same topic words. Undefined = never a
+ * repeat.
+ */
+export function repeatKey(event: SensedEvent): string | undefined {
+  if (isHumanInbound(event)) return undefined;
+  const data = (event.data ?? {}) as Record<string, unknown>;
+  const failed =
+    event.type === 'tool:error' || (event.type === 'tool:end' && data.success === false);
+  if (failed && typeof data.toolName === 'string') {
+    const err = [data.error, data.result].find(
+      (v): v is string => typeof v === 'string' && !!v.trim()
+    );
+    const cls = err
+      ? normaliseText(err, true)
+      : `${String(data.failureKind ?? '')}|${String(data.target ?? '')}`;
+    return `${event.botId}|fail|${data.toolName}|${cls}`;
+  }
+  const text = eventText(event);
+  if (!text) return undefined;
+  return `${event.botId}|${event.type}|${normaliseText(text, event.type.endsWith(':error'))}`;
+}
+
+/** A repeat is not novel: the novelty bonus and its reason come off. */
+export function withoutNovelty(score: SalienceScore): SalienceScore {
+  if (!score.reasons.includes('novel')) return score;
+  return {
+    ...score,
+    salience: Math.max(0, Math.round((score.salience - NOVELTY_BONUS) * 1000) / 1000),
+    reasons: score.reasons.filter((r) => r !== 'novel'),
+  };
 }
 
 function hasSurprise(data: Record<string, unknown>): boolean {

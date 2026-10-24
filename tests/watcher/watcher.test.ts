@@ -843,6 +843,37 @@ describe('Watcher self-model (phase 4)', () => {
     await watcher.stop();
   });
 
+  test('introspect scores the cause against the last pass drivenBy even when 20 sense rows hide its row', async () => {
+    const { client } = noticeClient(
+      JSON.stringify({ phase: 'sense', tool: null, goal: null, cause: null })
+    );
+    const integrate = noticeClient('{"insights":[]}').client;
+    // What an earlier pass of the integrator persisted.
+    mkdirSync(join(root, 'data', 'watcher'), { recursive: true });
+    writeFileSync(
+      join(root, 'data', 'watcher', 'integrate.json'),
+      JSON.stringify({
+        attending: [],
+        pending: { items: [], neurons: [], salience: 0 },
+        drivenBy: ['operatorSilenceHours'],
+      })
+    );
+    const { watcher: w } = make({
+      llm: {
+        notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' },
+        integrate: { client: integrate, model: 'claude-opus-5-5', backend: 'claude-cli' },
+      },
+    });
+    await w.start();
+    await w.idle();
+    w.log.say('integrate', 'integrate:pass', 'Integrated 3 events.', { drivenBy: ['budgetLeft'] });
+    for (let i = 0; i < 20; i++) w.log.say('sense', 'sense:summary', `Sensed ${i} events.`);
+    const out = await w.introspect('manual');
+    expect(out.status === 'scored' && out.record.truth.plan).toContain('operator silence hours');
+    expect(out.status === 'scored' && out.record.truth.plan).not.toContain('budget');
+    await w.stop();
+  });
+
   test('introspect is unavailable without a notice client or while asleep', async () => {
     const { watcher } = make();
     expect(await watcher.introspect('manual')).toEqual({

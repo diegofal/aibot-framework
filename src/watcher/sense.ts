@@ -27,7 +27,7 @@ import type { WorkingBuffer } from './buffer';
 import type { Graph } from './graph';
 import type { WatcherLog } from './log';
 import { describeEvent, narrateNoticed, narrateSenseSummary } from './narration';
-import { privateView, scoreEvent } from './salience';
+import { REPEAT_WINDOW_MS, privateView, repeatKey, scoreEvent, withoutNovelty } from './salience';
 import {
   type BufferItem,
   type SensedEvent,
@@ -86,6 +86,9 @@ export class Sense {
   private windowStart: number | null = null;
   private windowCount = 0;
   private windowTop: { what: string; salience: number } | null = null;
+  private windowRepeats = 0;
+  /** When each repeat key's window opened (`repeatKey`), pruned past the window. */
+  private windowOpenedAt = new Map<string, number>();
   private queue: Array<
     { operator: false; e: SensedEvent } | { operator: true; e: OperatorMessageEvent }
   > = [];
@@ -149,7 +152,13 @@ export class Sense {
       event = privateView(raw, who.isOperator);
     }
 
-    const score = scoreEvent(event, { graph: this.deps.graph, nowMs });
+    // The same event from the same bot within the window is a repeat: not
+    // novel, no noticed row of its own, no activation, not buffered again; the
+    // summary counts it.
+    const key = repeatKey(event);
+    const repeat = key !== undefined && this.seenRecently(key, nowMs);
+    const scored = scoreEvent(event, { graph: this.deps.graph, nowMs });
+    const score = repeat ? withoutNovelty(scored) : scored;
     const noticedAt = new Date(nowMs).toISOString();
     this.lastTickAt = noticedAt;
     const what = describeEvent(event, {
@@ -159,10 +168,18 @@ export class Sense {
 
     if (this.windowStart === null) this.windowStart = nowMs;
     this.windowCount++;
-    if (score.salience > 0 && (!this.windowTop || score.salience > this.windowTop.salience)) {
+    if (repeat) this.windowRepeats++;
+    if (
+      !repeat &&
+      score.salience > 0 &&
+      (!this.windowTop || score.salience > this.windowTop.salience)
+    ) {
       this.windowTop = { what, salience: score.salience };
     }
 
+    // A repeat stops here, before activation: retries within the window would
+    // otherwise inflate the touched neurons' activations.
+    if (repeat) return null;
     for (const id of score.touched) this.deps.graph.activate(id);
     for (const id of this.ownersOf(score.touched)) this.deps.graph.activate(id);
 
@@ -226,6 +243,22 @@ export class Sense {
     return out;
   }
 
+  /**
+   * True when `key` was first seen less than `REPEAT_WINDOW_MS` ago. The
+   * window opens on the first sighting and does not slide: a tool failing
+   * every 30 s is novel again once per window, not never.
+   */
+  private seenRecently(key: string, nowMs: number): boolean {
+    const opened = this.windowOpenedAt.get(key);
+    if (opened !== undefined && nowMs - opened < REPEAT_WINDOW_MS) return true;
+    this.windowOpenedAt.set(key, nowMs);
+    if (this.windowOpenedAt.size > 500) {
+      for (const [k, at] of this.windowOpenedAt)
+        if (nowMs - at >= REPEAT_WINDOW_MS) this.windowOpenedAt.delete(k);
+    }
+    return false;
+  }
+
   /** Close the summary window when it has run its length and saw anything. */
   tick(): WatcherLogRow | null {
     if (this.windowStart === null || this.windowCount === 0) return null;
@@ -237,6 +270,7 @@ export class Sense {
       narrateSenseSummary({
         events: this.windowCount,
         windowMs: every,
+        ...(this.windowRepeats ? { repeats: this.windowRepeats } : {}),
         ...(this.windowTop
           ? { top: this.windowTop.what, topSalience: this.windowTop.salience }
           : {}),
@@ -245,6 +279,7 @@ export class Sense {
     this.windowStart = null;
     this.windowCount = 0;
     this.windowTop = null;
+    this.windowRepeats = 0;
     return row;
   }
 

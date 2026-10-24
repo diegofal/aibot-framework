@@ -31,7 +31,8 @@ import {
   parseIntrospectionAnswer,
   scoreIntrospection,
 } from './metrics/introspection';
-import type { Attention } from './self-model';
+import { narrateHolding } from './narration';
+import type { Attention, AttentionItem } from './self-model';
 import type { WatcherLogRow } from './types';
 
 const DAY_MS = 86_400_000;
@@ -58,7 +59,17 @@ export function introspectionFile(dir: string): string {
   return join(dir, 'introspection.jsonl');
 }
 
-export function buildWatcherIntrospectionPrompt(rows: WatcherLogRow[]): {
+/**
+ * The question over my recent log, plus the items I still hold written as
+ * rows by code (`narrateHolding`: what, salience and the reasons tier 0 kept
+ * it for), never their ids or the state object: without the reasons, "why am
+ * I attending to this" had no truthful answer (an item below the notice bar
+ * has no noticed row at all).
+ */
+export function buildWatcherIntrospectionPrompt(
+  rows: WatcherLogRow[],
+  held: AttentionItem[] = []
+): {
   system: string;
   user: string;
 } {
@@ -68,10 +79,17 @@ export function buildWatcherIntrospectionPrompt(rows: WatcherLogRow[]): {
         .replace(/\s+/g, ' ')
         .trim()}`
   );
+  const holding = held.map(
+    (i) =>
+      `- ${narrateHolding({ what: i.what, salience: i.salience, reasons: i.reasons ?? [] })
+        .replace(/\s+/g, ' ')
+        .trim()}`
+  );
   const user = [
     '## My recent log',
     ...(lines.length ? lines : ['(nothing yet)']),
     '',
+    ...(holding.length ? ['## What I am holding', ...holding, ''] : []),
     '## Question',
     WATCHER_INTROSPECTION_QUESTION,
   ].join('\n');
@@ -88,24 +106,44 @@ function baseTruth(att: Attention, running: boolean): IntrospectionTruth {
   };
 }
 
-function causeText(att: Attention): string | null {
-  const parts = [...att.focus.map((n) => n.text), ...att.items.map((i) => i.what)];
+/** `operatorSilenceHours` → `operator silence hours`. */
+function variableWords(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * What a cause is scored against: the attended neurons, what the held items
+ * say (`what`) and the "How I am" variables the last integrate pass said drove
+ * it. Never the bare salience labels ("novel", "error"): the prompt shows them,
+ * so echoing them would score a match without any self-knowledge.
+ */
+function causeText(att: Attention, drivenBy: string[] = []): string | null {
+  const parts = [
+    ...att.focus.map((n) => n.text),
+    ...att.items.map((i) => i.what),
+    ...drivenBy.map(variableWords),
+  ];
   return parts.length ? parts.join('; ') : null;
 }
 
 /**
  * Field-level score of a watcher self-report: phase against the current
  * phase, goal against the best of the attended neurons (or, without a focus,
- * the top buffer items), cause against what those neurons and items say.
+ * the top buffer items), cause against what those neurons and items say
+ * plus what drove the last integrate pass (`causeText`).
  */
 export function scoreWatcherIntrospection(
   answer: IntrospectionAnswer | null,
   att: Attention,
-  running: boolean
+  running: boolean,
+  opts: { drivenBy?: string[] } = {}
 ): IntrospectionScore & { truth: IntrospectionTruth } {
   const said = answer && answer.phase === 'sleep' ? { ...answer, phase: 'sleeping' } : answer;
   const base = baseTruth(att, running);
-  const plan = causeText(att);
+  const plan = causeText(att, opts.drivenBy);
   const candidates = att.focus.length
     ? att.focus.map((n) => ({ id: n.id, title: n.text }))
     : att.items.map((i) => ({ id: i.id, title: i.what }));
@@ -159,6 +197,12 @@ export interface IntrospectionDeps {
   attention: () => Attention;
   running: boolean;
   logRows: () => WatcherLogRow[];
+  /**
+   * The `drivenBy` of the newest integrate pass (`Integrator.drivenBy`), read
+   * at question time. Not scraped from `logRows`: passes are hourly and the
+   * window is 20 rows, so a pass row is almost never in it.
+   */
+  drivenBy?: () => string[];
   dir: string;
   now: () => number;
   trigger: IntrospectionTrigger;
@@ -169,13 +213,15 @@ export interface IntrospectionDeps {
 export async function runIntrospection(deps: IntrospectionDeps): Promise<IntrospectionOutcome> {
   let att: Attention;
   let rows: WatcherLogRow[];
+  let drivenBy: string[];
   try {
     att = deps.attention();
     rows = deps.logRows();
+    drivenBy = deps.drivenBy?.() ?? [];
   } catch (err) {
     return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
   }
-  const prompt = buildWatcherIntrospectionPrompt(rows);
+  const prompt = buildWatcherIntrospectionPrompt(rows, att.items);
   let res: Awaited<ReturnType<IntrospectionDeps['client']['chat']>>;
   try {
     res = await deps.client.chat(
@@ -193,7 +239,9 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
       ? { status: 'failed', error: res.error }
       : { status: 'refused', reason: res.reason };
   }
-  const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running);
+  const scored = scoreWatcherIntrospection(parseIntrospectionAnswer(res.text), att, deps.running, {
+    drivenBy,
+  });
   const record: WatcherIntrospectionRecord = {
     ts: new Date(deps.now()).toISOString(),
     subject: 'watcher',

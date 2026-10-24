@@ -239,6 +239,8 @@ describe('parseIntegrateOutput', () => {
       broadcasts: [],
       attending: [],
       drivenBy: [],
+      agendaCovered: [],
+      noBroadcast: [],
     });
   });
 });
@@ -259,12 +261,23 @@ describe('Integrator.due', () => {
     expect(s.integrator.due()).toBe(true);
   });
 
-  test('the heartbeat makes a pass due with anything pending', () => {
-    const s = setup({ cfg: { heartbeatMs: 3_600_000 } });
+  // Changed on 2026-10-24 (was "due with anything pending"): heartbeat passes
+  // on 1-3 events produced nothing live, so the heartbeat now waits for
+  // `integrate.minItems` salient items.
+  test('the heartbeat makes a pass due only with integrate.minItems salient items pending', () => {
+    const s = setup({ cfg: { heartbeatMs: 3_600_000, salienceBar: 100, minItems: 3 } });
     s.integrator.observeNotice({ status: 'noticed', created: [s.n.leadA], recognised: [] });
-    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(cycleDone('b1'), 0.2));
+    s.integrator.observe(item(cycleDone('b2'), 0.2));
     t += 3_600_000;
+    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(cycleDone('b1'), 0.2));
     expect(s.integrator.due()).toBe(true);
+  });
+
+  test('minItems defaults to 5 and agendaMax to 8', () => {
+    expect(WATCHER_DEFAULTS.integrate.minItems).toBe(5);
+    expect(WATCHER_DEFAULTS.integrate.agendaMax).toBe(8);
   });
 
   test('never two attempts closer than the minimum gap', async () => {
@@ -332,7 +345,10 @@ describe('Integrator.run', () => {
         });
       },
     };
-    const s = setup({ reply: full, deps: { broadcaster: slow } });
+    // agendaMax 0: the insight this pass writes would otherwise wait on the
+    // standing agenda, and the restart below would run a (legitimate) agenda
+    // pass on the canned reply. This test is about pending items only.
+    const s = setup({ reply: full, deps: { broadcaster: slow }, cfg: { agendaMax: 0 } });
     s.integrator.observe(item(cycleDone('b1', t - 60_000), 1.5));
     s.integrator.observeNotice({
       status: 'noticed',
@@ -437,6 +453,18 @@ describe('Integrator.run', () => {
     expect(s.prompts[0]).toContain('Two bots, one lead');
     const pass = s.rows.find((r) => r.op === 'integrate:pass');
     expect(pass?.drivenBy).toEqual(['operatorSilenceHours', 'bufferSalience']);
+  });
+
+  test('phase 4: the newest pass keeps its drivenBy in the state, across a restart', async () => {
+    const s = setup({
+      reply: answer(() => ({ insights: [], drivenBy: ['operatorSilenceHours', 'nope'] })),
+      deps: { interoception: () => ({ operatorSilenceHours: 30 }) },
+    });
+    expect(s.integrator.drivenBy()).toEqual([]);
+    await ran(s);
+    expect(s.integrator.drivenBy()).toEqual(['operatorSilenceHours']);
+    expect(s.integrator.state().drivenBy).toEqual(['operatorSilenceHours']);
+    expect(s.make().drivenBy()).toEqual(['operatorSilenceHours']);
   });
 
   test('phase 4: without an interoception record drivenBy is not written', async () => {

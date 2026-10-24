@@ -6,6 +6,9 @@ import {
   narrateBorn,
   narrateGoals,
   narrateHistory,
+  narrateHolding,
+  narrateIntegrateInsight,
+  narrateIntegrateNoBroadcast,
   narrateIntrospection,
   narrateLateLink,
   narrateLearned,
@@ -406,6 +409,42 @@ describe('narrateIntrospection (phase 4)', () => {
     );
     expect(narrateIntrospection({ trigger: 'sample', score: 0, parsed: false })).toBe(
       'I asked myself what I am doing; my answer could not be read (score 0).'
+    );
+  });
+});
+
+describe('narrateHolding / sense summary repeats', () => {
+  test('a held item with its reasons, and without any', () => {
+    expect(narrateHolding({ what: 'x failed', salience: 0.55, reasons: ['error', 'novel'] })).toBe(
+      'Holding: x failed. Salience 0.6 (error, novel).'
+    );
+    expect(narrateHolding({ what: 'x', salience: 1, reasons: [] })).toBe('Holding: x. Salience 1.');
+  });
+
+  test('the sense summary counts repeats', () => {
+    expect(narrateSenseSummary({ events: 4, windowMs: 60_000, repeats: 1 })).toBe(
+      'Sensed 4 events in the last 1 min (1 repeat).'
+    );
+  });
+});
+
+describe('integrate broadcast reasoning', () => {
+  test('an insight row carries why it broadcast nothing, or that no reason was given', () => {
+    expect(
+      narrateIntegrateInsight({
+        text: 'Two briefs',
+        bots: ['Jarvis', 'Scout'],
+        whyNoBroadcast: 'operator decides',
+      })
+    ).toBe('I realised: "Two briefs" (across Jarvis and Scout; no broadcast: "operator decides").');
+    expect(
+      narrateIntegrateInsight({ text: 'Two briefs', bots: ['Jarvis'], reasonMissing: true })
+    ).toBe('I realised: "Two briefs" (from Jarvis; no broadcast and no reason given).');
+  });
+
+  test('a no-broadcast row quotes the insight and the reason', () => {
+    expect(narrateIntegrateNoBroadcast({ insight: 'Two briefs', why: 'already chosen' })).toBe(
+      'Not broadcasting "Two briefs": "already chosen".'
     );
   });
 });

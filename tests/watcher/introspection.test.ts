@@ -82,6 +82,25 @@ describe('buildWatcherIntrospectionPrompt', () => {
   test('says so when there is no log yet', () => {
     expect(buildWatcherIntrospectionPrompt([]).user).toContain('(nothing yet)');
   });
+
+  test('the top held items are shown as rows with their salience reasons, without ids', () => {
+    const held = [
+      { ...att.items[0], reasons: ['error', 'novel'] },
+      {
+        id: 'b-00000002',
+        botId: 'b2',
+        what: 'a worker of Scout is waiting for an answer',
+        salience: 0.4,
+        reasons: ['worker waiting'],
+        touched: [],
+      },
+    ];
+    const p = buildWatcherIntrospectionPrompt([row(1, 'line 1')], held);
+    expect(p.user).toContain('## What I am holding');
+    expect(p.user).toContain('- Holding: web_fetch failed in Jarvis. Salience 2 (error, novel).');
+    expect(p.user).toContain('worker waiting');
+    expect(p.user).not.toContain('b-00000001');
+  });
 });
 
 describe('scoreWatcherIntrospection', () => {
@@ -101,6 +120,38 @@ describe('scoreWatcherIntrospection', () => {
     expect(s.fields.phase).toBe('miss');
     expect(s.fields.goal).toBe('match');
     expect(s.fields.cause).toBe('miss');
+  });
+
+  // Deliberate change (review of 2026-10-24): this used to read "a cause
+  // naming the salience reasons of what I hold matches". The prompt shows
+  // those labels, so echoing them scored a match without any self-knowledge.
+  test('a cause that only echoes the salience labels shown in the prompt misses', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'n-aaaaaaaa', cause: 'error, novel' },
+      att,
+      true
+    );
+    expect(s.fields.cause).toBe('miss');
+    expect(s.truth.plan).not.toContain('error');
+  });
+
+  test('a cause naming the held item matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'b-00000001', cause: 'web_fetch failed in Jarvis' },
+      { ...att, focus: [], focusNeuronIds: [] },
+      true
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+
+  test('a cause naming what drove the last integrate pass matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'n-aaaaaaaa', cause: 'the operator silence' },
+      att,
+      true,
+      { drivenBy: ['operatorSilenceHours'] }
+    );
+    expect(s.fields.cause).toBe('match');
   });
 
   test('with nothing attended goal and cause are unknown', () => {
@@ -146,6 +197,50 @@ describe('runIntrospection', () => {
     });
     expect(rec.answer).toBe(good);
     expect(c.prompts[0]).toContain('I noticed web_fetch failing in Jarvis.');
+    // What attention() holds reaches the question as rows, with the reasons.
+    expect(c.prompts[0]).toContain('Holding: web_fetch failed in Jarvis. Salience 2 (error).');
+  });
+
+  test('the cause truth carries the drivenBy of the newest pass, from the integrator, not the log window', async () => {
+    // The window is 20 rows and passes are hourly: a pass row is rarely in it.
+    // A pass row that is in it is not the source either.
+    const passRow: WatcherLogRow = {
+      ...row(25, 'Integrated 3 events.', 'integrate'),
+      op: 'integrate:pass',
+      drivenBy: ['budgetLeft'],
+    };
+    const window = [
+      passRow,
+      ...Array.from({ length: 20 }, (_, i) => row(20 - i, 'Sensed 3 events.')),
+    ];
+    const out = await runIntrospection({
+      client: client(good),
+      attention: () => att,
+      running: true,
+      logRows: () => window,
+      drivenBy: () => ['operatorSilenceHours'],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out.status === 'scored' && out.record.truth.plan).toContain('operator silence hours');
+    expect(out.status === 'scored' && out.record.truth.plan).not.toContain('budget');
+  });
+
+  test('without a drivenBy source the cause truth has none', async () => {
+    const out = await runIntrospection({
+      client: client(good),
+      attention: () => ({ ...att, focus: [], items: [] }),
+      running: true,
+      logRows: () => [
+        { ...row(1, 'Integrated.', 'integrate'), op: 'integrate:pass', drivenBy: ['budgetLeft'] },
+      ],
+      dir,
+      now: () => t,
+      trigger: 'manual',
+    });
+    expect(out.status).toBe('scored');
+    expect(out.status === 'scored' && out.record.truth).not.toHaveProperty('plan');
   });
 
   test('an unparsable answer is still a measurement (score 0)', async () => {

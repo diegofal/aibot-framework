@@ -449,3 +449,159 @@ describe('Sense: off the publisher call (hot path)', () => {
     expect(buffer.size()).toBe(1);
   });
 });
+
+describe('Sense novelty dedupe', () => {
+  const fetchFailed = (botId = 'b1') => ({
+    type: 'tool:error',
+    botId,
+    timestamp: t,
+    data: { toolName: 'web_fetch', error: 'HTTP 403 Forbidden: thelancet.com blocks bots' },
+  });
+
+  test('4 identical tool:error events in one second: one noticed row, the summary counts 4', () => {
+    const { stream, sense, rows, buffer } = setup();
+    for (let i = 0; i < 4; i++) {
+      stream.emit('activity', fetchFailed());
+      t += 250;
+    }
+    const noticed = rows.filter((r) => r.op === 'noticed');
+    expect(noticed).toHaveLength(1);
+    expect(noticed[0].text).toContain('novel');
+    expect(buffer.size()).toBe(1);
+    t += 61_000;
+    expect(sense.tick()?.text).toBe(
+      'Sensed 4 events in the last 1 min (3 repeats), top: web_fetch failed in jarvis (salience 0.5).'
+    );
+  });
+
+  test('3 identical errors touching a goal within a minute activate it once', () => {
+    const { graph, stream } = setup();
+    const goal = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    for (let i = 0; i < 3; i++) {
+      stream.emit('activity', {
+        ...fetchFailed(),
+        data: { ...fetchFailed().data, goalId: 'g-1' },
+      });
+      t += 10_000;
+    }
+    expect(graph.get(goal.id)?.activations).toBe(1);
+  });
+
+  test('errors every 30 s for 3 min activate the goal once per window: 3 times', () => {
+    const { graph, stream } = setup();
+    const goal = graph.addNeuron({
+      kind: 'goal',
+      text: 'Research',
+      support: { bots: ['b1'] },
+      createdBy: 'bot:b1',
+      meta: { key: 'goal:b1:g-1' },
+    });
+    for (let i = 0; i < 6; i++) {
+      stream.emit('activity', {
+        ...fetchFailed(),
+        data: { ...fetchFailed().data, goalId: 'g-1' },
+      });
+      t += 30_000;
+    }
+    // The window does not slide on each sighting: novel at 0 s, 60 s and 120 s.
+    expect(graph.get(goal.id)?.activations).toBe(3);
+  });
+
+  test('a repeat differing only in numbers and spacing is still a repeat', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', {
+      ...fetchFailed(),
+      data: { toolName: 'web_fetch', error: 'timeout after 3001 ms' },
+    });
+    stream.emit('activity', {
+      ...fetchFailed(),
+      data: { toolName: 'web_fetch', error: 'timeout  after 2999 ms' },
+    });
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
+  });
+
+  test('two agent:result summaries differing only in a number within 60 s are both buffered', () => {
+    const { stream, buffer } = setup();
+    const result = (summary: string) => ({
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary },
+    });
+    stream.emit('activity', result('Found 3 open roles in Lisbon'));
+    t += 10_000;
+    stream.emit('activity', result('Found 12 open roles in Lisbon'));
+    expect(buffer.size()).toBe(2);
+    expect(buffer.items().map((i) => i.reasons)).toEqual([['novel'], ['novel']]);
+  });
+
+  test('two productions whose paths share a 200+ char prefix are both buffered', () => {
+    const { stream, buffer } = setup();
+    const dir = `productions/${'deep-research-folder/'.repeat(12)}`;
+    const saved = (file: string) => ({
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary: `Saved ${dir}${file}` },
+    });
+    stream.emit('activity', saved('brief-jarvis.md'));
+    t += 10_000;
+    stream.emit('activity', saved('brief-scout.md'));
+    expect(buffer.size()).toBe(2);
+  });
+
+  test('two identical agent:result summaries within 60 s are a repeat', () => {
+    const { stream, buffer } = setup();
+    const result = {
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary: 'Found 3 open roles in Lisbon' },
+    };
+    stream.emit('activity', result);
+    t += 10_000;
+    stream.emit('activity', result);
+    expect(buffer.size()).toBe(1);
+  });
+
+  test('after 60 s the same event is novel again', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', fetchFailed());
+    t += 61_000;
+    stream.emit('activity', fetchFailed());
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(2);
+  });
+
+  test('the same event from another bot is not a repeat', () => {
+    const { stream, rows } = setup();
+    stream.emit('activity', fetchFailed('b1'));
+    stream.emit('activity', fetchFailed('b2'));
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(2);
+  });
+
+  test('a failed tool:end of the same tool and error is a repeat of the tool:error', () => {
+    const { stream, rows, buffer } = setup();
+    stream.emit('activity', fetchFailed());
+    stream.emit('activity', {
+      type: 'tool:end',
+      botId: 'b1',
+      timestamp: t,
+      data: {
+        toolName: 'web_fetch',
+        success: false,
+        failureKind: 'blocked',
+        target: 'thelancet.com/x',
+        result: 'HTTP 403 Forbidden: thelancet.com blocks bots',
+        error: 'HTTP 403 Forbidden: thelancet.com blocks bots',
+      },
+    });
+    expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
+    expect(buffer.size()).toBe(1);
+  });
+});

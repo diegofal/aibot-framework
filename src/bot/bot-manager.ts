@@ -1763,6 +1763,15 @@ export class BotManager {
   }
 
   /**
+   * "## What the fleet knows" for an operator turn (the dashboard thread);
+   * null without a running watcher. The caller decides the turn is the
+   * operator's. Never throws.
+   */
+  async prefetchFleetMemory(query: string, botId: string): Promise<string | null> {
+    return this.conversationPipeline.prefetchFleetMemory(query, botId, this.getBotLogger(botId));
+  }
+
+  /**
    * Channel-agnostic conversation entry point.
    * Accepts an InboundMessage + Channel instead of grammy Context.
    */
