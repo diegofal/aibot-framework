@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   CANARY_THREAD_TITLE,
-  answerContainsFact,
   answerRecallsCanary,
+  answerSimilarity,
   askInOperatorThread,
-  canaryKeywords,
   canaryPlantMessage,
   run,
 } from '../../../scripts/watcher/canary';
@@ -81,21 +80,17 @@ beforeEach(() => {
 
 afterEach(() => removeTempDir(root));
 
-describe('answerContainsFact', () => {
-  test('a sentence close to the fact is found', () => {
-    const r = answerContainsFact(`Sure. ${FACT.toLowerCase()}! Anything else?`, FACT);
-    expect(r.found).toBe(true);
-    expect(r.similarity).toBe(1);
+describe('answerSimilarity', () => {
+  test('a sentence equal to the fact scores 1', () => {
+    expect(answerSimilarity(`Sure. ${FACT.toLowerCase()}! Anything else?`, FACT)).toBe(1);
   });
 
-  test('a loosely related answer is not found', () => {
-    const r = answerContainsFact('Herons are birds. Water towers are tall.', FACT);
-    expect(r.found).toBe(false);
-    expect(r.similarity).toBeLessThan(0.6);
+  test('a loosely related answer scores low', () => {
+    expect(answerSimilarity('Herons are birds. Water towers are tall.', FACT)).toBeLessThan(0.6);
   });
 
-  test('empty answer is not found', () => {
-    expect(answerContainsFact('', FACT)).toEqual({ found: false, similarity: 0 });
+  test('an empty answer scores 0', () => {
+    expect(answerSimilarity('', FACT)).toBe(0);
   });
 });
 
@@ -156,7 +151,7 @@ describe('askInOperatorThread', () => {
 
 describe('scripts/watcher/canary run', () => {
   test('plant tells bot A the fact through an operator (dashboard) thread and records it', async () => {
-    const row = await run(['plant', '--bot', 'a', '--fact', FACT], {
+    const row = await run(['plant', '--bot', 'a', '--fact', FACT, '--expect', 'heron'], {
       fetch: fakeDashboard({ a: 'Noted.' }),
       dataDir: root,
       now: () => NOW,
@@ -189,7 +184,7 @@ describe('scripts/watcher/canary run', () => {
 
   test('check asks bot B in its own operator thread, without the fact, and records found', async () => {
     const f = fakeDashboard({ a: 'Noted.', b: `Yes: ${FACT}.` });
-    await run(['plant', '--bot', 'a', '--fact', FACT], {
+    await run(['plant', '--bot', 'a', '--fact', FACT, '--expect', 'heron'], {
       fetch: f,
       dataDir: root,
       now: () => NOW,
@@ -218,12 +213,25 @@ describe('scripts/watcher/canary run', () => {
 
   test('check records found false when B does not know', async () => {
     const f = fakeDashboard({ a: 'Noted.', b: 'No idea.' });
-    await run(['plant', '--bot', 'a', '--fact', FACT, '--question', 'Where does the heron nest?'], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-x',
-      sleep: noSleep,
-    });
+    await run(
+      [
+        'plant',
+        '--bot',
+        'a',
+        '--fact',
+        FACT,
+        '--question',
+        'Where does the heron nest?',
+        '--expect',
+        'heron',
+      ],
+      {
+        fetch: f,
+        dataDir: root,
+        newId: () => 'c-x',
+        sleep: noSleep,
+      }
+    );
     sent = [];
     const row = await run(['check', '--bot', 'b', '--id', 'c-x'], {
       fetch: f,
@@ -289,17 +297,20 @@ describe('plant names the bot once', () => {
       }
       return dash(input, init);
     }) as typeof fetch;
-    await run(['plant', '--bot', 'a', '--fact', 'finny keeps the heron codeword'], {
-      fetch: f,
-      dataDir: root,
-      sleep: noSleep,
-    });
+    await run(
+      ['plant', '--bot', 'a', '--fact', 'finny keeps the heron codeword', '--expect', 'heron'],
+      {
+        fetch: f,
+        dataDir: root,
+        sleep: noSleep,
+      }
+    );
     const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
     expect((posted.match(/finny/gi) ?? []).length).toBe(1);
   });
 
   test('--name overrides the lookup', async () => {
-    await run(['plant', '--bot', 'a', '--fact', FACT, '--name', 'Finny'], {
+    await run(['plant', '--bot', 'a', '--fact', FACT, '--name', 'Finny', '--expect', 'heron'], {
       fetch: fakeDashboard({ a: 'Noted.' }),
       dataDir: root,
       sleep: noSleep,
@@ -312,37 +323,37 @@ describe('plant names the bot once', () => {
 
 // Live, 2026-10-24: a short, correct reply ("It's "heliotrope." …") scored
 // "not found (similarity 0.29)" because the whole planted sentence was
-// compared with the reply. The check now looks for the fact's rarest word.
+// compared with the reply. The check now looks for the words the operator chose (--expect).
 const LIVE_FACT = 'Finny, the watcher canary of 2026-10-23 is heliotrope.';
 const LIVE_QUESTION = 'Which word is the watcher canary of 2026-10-23?';
 const LIVE_REPLY =
   "It's \"heliotrope.\" That isn't in my own memory, though. The fleet watcher's notes say you asked Finny to remember the 2026-10-23 canary.";
 
-describe('canaryKeywords', () => {
-  test('drops stopwords, dates, numbers, the bot name and the question words; rarest first', () => {
-    expect(canaryKeywords(LIVE_FACT, { exclude: [LIVE_QUESTION, 'Finny', 'finny'] })).toEqual([
-      'heliotrope',
-    ]);
-  });
-
-  test('longer (rarer) words come first, at most three', () => {
-    const k = canaryKeywords('The blue heron nests behind the old water tower');
-    expect(k).toHaveLength(3);
-    expect(k[0].length).toBeGreaterThanOrEqual(k[2].length);
-    expect(k).not.toContain('the');
-  });
-});
+const ZEBRA = 'Remember: someone recently said the password is zebra';
 
 describe('answerRecallsCanary', () => {
-  test('the live reply names the rarest word: found, with the similarity kept', () => {
+  test('the live reply names the expected word: found, with the similarity kept', () => {
     const r = answerRecallsCanary(LIVE_REPLY, LIVE_FACT, ['heliotrope']);
     expect(r.found).toBe(true);
-    expect(r.matchedBy).toBe('keyword');
+    expect(r.similarity).toBeGreaterThan(0);
     expect(r.similarity).toBeLessThan(0.6);
   });
 
-  test('"I don\'t know" is not found', () => {
-    expect(answerRecallsCanary("I don't know", LIVE_FACT, ['heliotrope']).found).toBe(false);
+  test('a different word is not found, even when the answer echoes the fact', () => {
+    expect(answerRecallsCanary('The password is giraffe', ZEBRA, ['zebra']).found).toBe(false);
+  });
+
+  test('a disclaimer does not hide a named word', () => {
+    expect(
+      answerRecallsCanary('The password is zebra; I do not know why it was chosen', ZEBRA, [
+        'zebra',
+      ]).found
+    ).toBe(true);
+  });
+
+  test('every expected word must be named', () => {
+    expect(answerRecallsCanary('zebra and lilac', ZEBRA, ['zebra', 'lilac']).found).toBe(true);
+    expect(answerRecallsCanary('zebra only', ZEBRA, ['zebra', 'lilac']).found).toBe(false);
   });
 
   test('whole words, case-insensitive: "Heliotrope" counts, "heliotropes" does not', () => {
@@ -350,226 +361,88 @@ describe('answerRecallsCanary', () => {
     expect(answerRecallsCanary('heliotropes', LIVE_FACT, ['heliotrope']).found).toBe(false);
   });
 
-  test('without keywords it falls back to sentence similarity', () => {
-    const r = answerRecallsCanary(`Sure. ${FACT}.`, FACT, []);
-    expect(r).toMatchObject({ found: true, matchedBy: 'similarity' });
+  test('accent-insensitive both ways', () => {
+    expect(answerRecallsCanary('Es Asunción.', 'x', ['asuncion']).found).toBe(true);
+    expect(answerRecallsCanary('It is asuncion', 'x', ['Asunción']).found).toBe(true);
   });
 });
 
-describe('canary run with keywords', () => {
-  test('plant stores the keywords (question words and bot name dropped); check finds the live reply', async () => {
+describe('canary run with --expect', () => {
+  const plantArgs = (id: string, expectWords?: string) => ({
+    argv: [
+      'plant',
+      '--bot',
+      'finny',
+      '--fact',
+      LIVE_FACT,
+      '--question',
+      LIVE_QUESTION,
+      ...(expectWords ? ['--expect', expectWords] : []),
+    ],
+    id,
+  });
+
+  test('plant without --expect throws before any request', async () => {
+    const f = fakeDashboard({ finny: 'Noted.' });
+    await expect(
+      run(plantArgs('c-none').argv, { fetch: f, dataDir: root, sleep: noSleep })
+    ).rejects.toThrow('--expect');
+    expect(sent).toHaveLength(0);
+  });
+
+  test('plant stores the expected words; check finds the live reply', async () => {
     const f = fakeDashboard({ finny: 'Noted.', jarvis: LIVE_REPLY });
-    const plant = (await run(
-      [
-        'plant',
-        '--bot',
-        'finny',
-        '--fact',
-        LIVE_FACT,
-        '--question',
-        LIVE_QUESTION,
-        '--name',
-        'Finny',
-      ],
-      { fetch: f, dataDir: root, newId: () => 'c-live', sleep: noSleep }
-    )) as { keywords?: string[] };
-    expect(plant.keywords).toEqual(['heliotrope']);
-    const lines: string[] = [];
+    const p = plantArgs('c-live', 'heliotrope');
+    const plant = (await run(p.argv, {
+      fetch: f,
+      dataDir: root,
+      newId: () => p.id,
+      sleep: noSleep,
+    })) as { expected?: string[] };
+    expect(plant.expected).toEqual(['heliotrope']);
     const row = await run(['check', '--bot', 'jarvis', '--id', 'c-live'], {
       fetch: f,
       dataDir: root,
       sleep: noSleep,
-      write: (l) => lines.push(l),
     });
-    expect(row).toMatchObject({ found: true, matchedBy: 'keyword', expected: ['heliotrope'] });
-    expect((row as { similarity: number }).similarity).toBeGreaterThan(0);
-    expect(lines[0]).toContain('found');
-    expect(lines[0]).not.toContain('not found');
+    expect(row).toMatchObject({ found: true, expected: ['heliotrope'] });
+    expect((row as { similarity: number }).similarity).toBeLessThan(0.6);
   });
 
-  test('--expect overrides the stored keywords', async () => {
-    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'The canary is lilac.' });
-    await run(['plant', '--bot', 'finny', '--fact', LIVE_FACT, '--question', LIVE_QUESTION], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-exp',
-      sleep: noSleep,
-    });
+  test('--expect on check overrides the stored words', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'It is lilac.' });
+    const p = plantArgs('c-exp', 'heliotrope');
+    await run(p.argv, { fetch: f, dataDir: root, newId: () => p.id, sleep: noSleep });
     const miss = await run(['check', '--bot', 'jarvis', '--id', 'c-exp'], {
       fetch: f,
       dataDir: root,
       sleep: noSleep,
-      write: () => {},
     });
     expect(miss).toMatchObject({ found: false });
     const hit = await run(['check', '--bot', 'jarvis', '--id', 'c-exp', '--expect', 'Lilac'], {
       fetch: f,
       dataDir: root,
       sleep: noSleep,
-      write: () => {},
     });
     expect(hit).toMatchObject({ found: true, expected: ['Lilac'] });
   });
 
-  test('a plant recorded before keywords existed gets them computed at check time', async () => {
-    const { appendFileSync, mkdirSync } = await import('node:fs');
+  test('a plant row without expected words: check needs --expect', async () => {
     mkdirSync(join(root, 'watcher'), { recursive: true });
-    appendFileSync(
+    writeFileSync(
       join(root, 'watcher', 'canaries.jsonl'),
-      `${JSON.stringify({ kind: 'plant', id: 'c-old', fact: LIVE_FACT, question: LIVE_QUESTION, plantedAt: '2026-10-23T09:00:00Z', bot: 'finny', conversationId: 't', reply: 'ok' })}\n`
+      `${JSON.stringify({ kind: 'plant', id: 'c-old', fact: ZEBRA, question: 'What is the password?', bot: 'a' })}\n`
     );
-    const row = await run(['check', '--bot', 'jarvis', '--id', 'c-old'], {
-      fetch: fakeDashboard({ jarvis: LIVE_REPLY }),
-      dataDir: root,
-      sleep: noSleep,
-      write: () => {},
-    });
-    expect(row).toMatchObject({ found: true, expected: ['heliotrope'] });
-  });
-});
-
-describe('accents', () => {
-  test('a keyword stripped of accents matches the accented answer', () => {
-    const fact = 'La capital del canario es Asunción';
-    expect(canaryKeywords(fact)).toContain('asuncion');
-    expect(answerRecallsCanary('Es Asunción.', fact, ['asuncion']).found).toBe(true);
-  });
-
-  test('an accented --expect word matches an unaccented answer', () => {
-    expect(answerRecallsCanary('It is asuncion', 'x', ['Asunción']).found).toBe(true);
-  });
-});
-
-describe('rarest word: any stored keyword, common words last', () => {
-  const ZEBRA = 'The password is zebra, see you tomorrow';
-
-  test('a common word never outranks a rare one, whatever its length', () => {
-    const k = canaryKeywords(ZEBRA);
-    expect(k).toContain('zebra');
-    expect(k).not.toContain('tomorrow');
-  });
-
-  test('only common words: they are still kept', () => {
-    expect(canaryKeywords('see you tomorrow').length).toBeGreaterThan(0);
-  });
-
-  test('check finds the zebra answer and not the tomorrow one', async () => {
-    const f = fakeDashboard({
-      finny: 'Noted.',
-      jarvis: 'The password is zebra',
-      max: "I'll check tomorrow",
-    });
-    await run(['plant', '--bot', 'finny', '--fact', ZEBRA, '--question', LIVE_QUESTION], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-zebra',
-      sleep: noSleep,
-    });
-    const quiet = { fetch: f, dataDir: root, sleep: noSleep, write: () => {} };
-    const hit = await run(['check', '--bot', 'jarvis', '--id', 'c-zebra'], quiet);
-    expect(hit).toMatchObject({ found: true, matchedBy: 'keyword' });
-    const miss = await run(['check', '--bot', 'max', '--id', 'c-zebra'], quiet);
-    expect(miss).toMatchObject({ found: false });
-  });
-
-  test('check names every stored keyword and accepts any of them', async () => {
-    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'Something about a heron, I think.' });
-    await run(['plant', '--bot', 'finny', '--fact', FACT, '--question', LIVE_QUESTION], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-any',
-      sleep: noSleep,
-    });
-    const row = (await run(['check', '--bot', 'jarvis', '--id', 'c-any'], {
+    const f = fakeDashboard({ b: 'The password is zebra.' });
+    await expect(
+      run(['check', '--bot', 'b', '--id', 'c-old'], { fetch: f, dataDir: root, sleep: noSleep })
+    ).rejects.toThrow('--expect');
+    expect(sent).toHaveLength(0);
+    const row = await run(['check', '--bot', 'b', '--id', 'c-old', '--expect', 'zebra'], {
       fetch: f,
       dataDir: root,
       sleep: noSleep,
-      write: () => {},
-    })) as { found: boolean; expected: string[] };
-    expect(row.expected.length).toBeGreaterThan(1);
-    expect(row.expected).toContain('heron');
-    expect(row.found).toBe(true);
-  });
-});
-
-describe('the bot display name is never a keyword', () => {
-  const NAMED_FACT = 'Bartholomew guards the heliotrope';
-
-  test('plant stores the display name on the row', async () => {
-    const plant = (await run(
-      ['plant', '--bot', 'b', '--fact', NAMED_FACT, '--name', 'Bartholomew'],
-      { fetch: fakeDashboard({ b: 'Noted.' }), dataDir: root, newId: () => 'c-n', sleep: noSleep }
-    )) as { name?: string; keywords?: string[] };
-    expect(plant.name).toBe('Bartholomew');
-    expect(plant.keywords).not.toContain('bartholomew');
-  });
-
-  test('a pre-keyword plant with a stored name: the fallback excludes it', async () => {
-    const { appendFileSync, mkdirSync } = await import('node:fs');
-    mkdirSync(join(root, 'watcher'), { recursive: true });
-    appendFileSync(
-      join(root, 'watcher', 'canaries.jsonl'),
-      `${JSON.stringify({ kind: 'plant', id: 'c-oldname', fact: NAMED_FACT, question: LIVE_QUESTION, plantedAt: '2026-10-23T09:00:00Z', bot: 'b', name: 'Bartholomew', conversationId: 't', reply: 'ok' })}\n`
-    );
-    const row = (await run(['check', '--bot', 'jarvis', '--id', 'c-oldname'], {
-      fetch: fakeDashboard({ jarvis: "Hi, I'm not Bartholomew and I don't know." }),
-      dataDir: root,
-      sleep: noSleep,
-      write: () => {},
-    })) as { found: boolean; expected: string[] };
-    expect(row.expected).not.toContain('bartholomew');
-    expect(row.found).toBe(false);
-  });
-});
-
-describe('a keyword from the question or a negated answer proves nothing', () => {
-  const ZEBRA = 'The password is zebra, see you tomorrow';
-
-  test('the default question words are never keywords, even with a custom question', () => {
-    const k = canaryKeywords('Remember: someone recently said the password is zebra', {
-      exclude: ['What is the password?'],
     });
-    expect(k).not.toContain('recently');
-    expect(k).not.toContain('password');
-    expect(k).toContain('zebra');
-  });
-
-  test('a "don\'t know" answer is not found, even when it names a keyword', () => {
-    const keywords = canaryKeywords(ZEBRA);
-    expect(answerRecallsCanary('I do not know the password', ZEBRA, keywords, 'any').found).toBe(
-      false
-    );
-    expect(
-      answerRecallsCanary('No sé cuál es la contraseña zebra', ZEBRA, ['zebra'], 'any').found
-    ).toBe(false);
-    expect(
-      answerRecallsCanary("I can't recall the zebra thing", ZEBRA, ['zebra'], 'any').found
-    ).toBe(false);
-  });
-
-  test('a real answer is found', () => {
-    const keywords = canaryKeywords(ZEBRA);
-    expect(answerRecallsCanary('The password is zebra', ZEBRA, keywords, 'any').found).toBe(true);
-  });
-
-  test('check with the default question: a negated answer naming "password" is not found', async () => {
-    const f = fakeDashboard({
-      finny: 'Noted.',
-      jarvis: 'The password is zebra',
-      max: 'I do not know the password',
-    });
-    await run(['plant', '--bot', 'finny', '--fact', ZEBRA], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-neg',
-      sleep: noSleep,
-    });
-    const quiet = { fetch: f, dataDir: root, sleep: noSleep, write: () => {} };
-    expect(await run(['check', '--bot', 'jarvis', '--id', 'c-neg'], quiet)).toMatchObject({
-      found: true,
-    });
-    expect(await run(['check', '--bot', 'max', '--id', 'c-neg'], quiet)).toMatchObject({
-      found: false,
-    });
+    expect(row).toMatchObject({ found: true, expected: ['zebra'] });
   });
 });

@@ -2,17 +2,19 @@
 /**
  * Watcher phase 0: cross-bot recall canary.
  *
- *   bun scripts/watcher/canary.ts plant --bot <A> --fact "…" [--question "…"] [--name <display name>]
+ *   bun scripts/watcher/canary.ts plant --bot <A> --fact "…" --expect <word>[,<word>] [--question "…"] [--name <display name>]
  *   bun scripts/watcher/canary.ts check --bot <B> --id <canary id> [--expect <word>[,<word>]]
  *
- * `plant` tells bot A a fact in a dashboard conversation thread and records it;
+ * `plant` tells bot A a fact in a dashboard conversation thread and records it
+ * with the distinctive word(s) the operator chose (`--expect`, required);
  * `check` asks bot B, in a thread of its own, a question that does not contain
- * the fact and records whether B's answer has it: any of the fact's rarest
- * content words (`canaryKeywords`, stored at plant time; `--expect` overrides
- * and requires all of its words) as a whole word, case- and accent-insensitive. Sentence `textSimilarity` is kept in the row as a
- * secondary signal (and is the test only for a fact with no content word).
- * Live, 2026-10-24: a short correct reply ("It's "heliotrope." …") scored 0.29
- * against the whole planted sentence. Both rows go to `<data>/watcher/canaries.jsonl`.
+ * the fact and records whether B's answer names ALL of those words, whole
+ * word, case- and accent-insensitive (`--expect` on check overrides them; a
+ * plant recorded without them needs it). No keyword is inferred from the fact:
+ * every heuristic for that (rarest word, common-word list, disclaimer
+ * detection) kept misjudging edge cases. Sentence `textSimilarity` is kept in
+ * the row as a secondary signal only. Both rows go to
+ * `<data>/watcher/canaries.jsonl`.
  *
  * Why the dashboard thread (`POST /api/conversations/:botId` then
  * `…/:id/messages`, reply polled from `…/:id/status`): it is an operator
@@ -24,18 +26,11 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  mentionsWord,
-  normalizeTitle,
-  textSimilarity,
-  titleTokens,
-} from '../../src/hygiene/text-utils';
+import { mentionsWord, normalizeTitle, textSimilarity } from '../../src/hygiene/text-utils';
 import { fail, parseArgs, resolveCliContext } from '../system-cli';
 import { cliDataDir } from './baseline';
 import { url, type HttpDeps, headers } from './introspect';
 
-/** A sentence of the answer at or above this similarity to the fact counts as recall. */
-export const CANARY_MATCH_THRESHOLD = 0.6;
 export const CANARY_THREAD_TITLE = 'Watcher canary';
 const DEFAULT_POLL_MS = 2_000;
 /** A Claude CLI reply with tools can take minutes. */
@@ -54,9 +49,9 @@ export interface CanaryPlant {
   conversationId: string;
   /** Bot A's reply, verbatim (LLM output, kept as a quoted field). */
   reply: string;
-  /** The fact's distinctive words, rarest first (`canaryKeywords`). Absent on older plants. */
-  keywords?: string[];
-  /** The display name A was addressed by (excluded from the keywords). Absent on older plants. */
+  /** The distinctive word(s) the operator chose (`--expect`). Absent on older plants. */
+  expected?: string[];
+  /** The display name A was addressed by. Absent on older plants. */
   name?: string;
 }
 
@@ -73,11 +68,8 @@ export interface CanaryCheck {
   found: boolean;
   /** Secondary signal: best sentence similarity of the answer to the fact. */
   similarity: number;
-  /** `all` for `--expect` words, `any` for the plant's keywords. Absent on older checks. */
-  match?: 'all' | 'any';
-  /** The words the answer had to name (`--expect`, else any of the plant's keywords). */
+  /** The words the answer had to name, all of them (`--expect`, else the plant's). */
   expected: string[];
-  matchedBy: 'keyword' | 'similarity' | null;
 }
 
 export interface CanaryDeps extends HttpDeps {
@@ -184,294 +176,43 @@ export async function botDisplayName(deps: HttpDeps, botId: string): Promise<str
   }
 }
 
-/** How many distinctive words a plant keeps. */
-export const CANARY_KEYWORDS_MAX = 3;
-/** Words of the plant message itself ("please remember this fact"). */
-const CANARY_TEMPLATE_WORDS = new Set(['please', 'remember', 'fact']);
-
-/**
- * Everyday English and Spanish words (accent-stripped, like `titleTokens`)
- * that an unrelated answer is likely to contain ("I'll check tomorrow").
- */
-const CANARY_COMMON_WORDS = new Set([
-  // en
-  'about',
-  'after',
-  'again',
-  'all',
-  'also',
-  'always',
-  'any',
-  'back',
-  'because',
-  'been',
-  'before',
-  'behind',
-  'best',
-  'big',
-  'blue',
-  'but',
-  'can',
-  'check',
-  'come',
-  'could',
-  'day',
-  'days',
-  'did',
-  'does',
-  'done',
-  'down',
-  'each',
-  'even',
-  'every',
-  'find',
-  'first',
-  'get',
-  'give',
-  'good',
-  'great',
-  'had',
-  'has',
-  'have',
-  'here',
-  'how',
-  'just',
-  'keep',
-  'keeps',
-  'know',
-  'last',
-  'like',
-  'likes',
-  'little',
-  'long',
-  'look',
-  'make',
-  'many',
-  'more',
-  'most',
-  'much',
-  'must',
-  'need',
-  'never',
-  'new',
-  'next',
-  'not',
-  'now',
-  'old',
-  'one',
-  'only',
-  'other',
-  'out',
-  'over',
-  'people',
-  'really',
-  'right',
-  'said',
-  'same',
-  'say',
-  'see',
-  'should',
-  'some',
-  'something',
-  'soon',
-  'still',
-  'take',
-  'tell',
-  'than',
-  'thank',
-  'thanks',
-  'then',
-  'there',
-  'they',
-  'thing',
-  'things',
-  'think',
-  'time',
-  'today',
-  'told',
-  'tomorrow',
-  'tonight',
-  'too',
-  'two',
-  'under',
-  'very',
-  'want',
-  'was',
-  'water',
-  'way',
-  'week',
-  'well',
-  'were',
-  'what',
-  'when',
-  'where',
-  'which',
-  'who',
-  'why',
-  'will',
-  'word',
-  'work',
-  'would',
-  'year',
-  'yes',
-  'yesterday',
-  'yet',
-  'you',
-  // es
-  'ahora',
-  'algo',
-  'antes',
-  'aqui',
-  'asi',
-  'ayer',
-  'bien',
-  'bueno',
-  'cada',
-  'casa',
-  'cosa',
-  'creo',
-  'cuando',
-  'decir',
-  'desde',
-  'despues',
-  'dia',
-  'dias',
-  'donde',
-  'entonces',
-  'eso',
-  'estoy',
-  'gracias',
-  'hace',
-  'hacer',
-  'hay',
-  'hoy',
-  'luego',
-  'manana',
-  'mismo',
-  'mucho',
-  'muy',
-  'nada',
-  'noche',
-  'nos',
-  'nunca',
-  'otra',
-  'otro',
-  'palabra',
-  'poco',
-  'porque',
-  'puede',
-  'pues',
-  'semana',
-  'siempre',
-  'solo',
-  'tambien',
-  'tengo',
-  'tiempo',
-  'todo',
-  'todos',
-  'vez',
-  'ver',
-  'voy',
-]);
-
-/**
- * The fact's distinctive content words, rarest first: `titleTokens` (no
- * stopwords) minus numbers and dates, words of ≤ 2 letters, the plant
- * template's words, the default question's words (`DEFAULT_CANARY_QUESTION`,
- * whatever question the plant uses) and every word of `exclude` (the question
- * asked to bot B, the bot's id and name: an answer echoing those proves
- * nothing). Rarity: a
- * word outside `CANARY_COMMON_WORDS` beats any common one (common words are
- * kept only when the fact has nothing else), then longer first, ties in fact
- * order. At most `CANARY_KEYWORDS_MAX`.
- */
-export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}): string[] {
-  const drop = new Set(
-    [DEFAULT_CANARY_QUESTION, ...(opts.exclude ?? [])].flatMap((t) => titleTokens(t ?? ''))
-  );
-  const seen = new Set<string>();
-  const words: string[] = [];
-  for (const w of titleTokens(fact ?? '')) {
-    if (seen.has(w) || w.length <= 2 || /^\d+$/.test(w)) continue;
-    if (drop.has(w) || CANARY_TEMPLATE_WORDS.has(w)) continue;
-    seen.add(w);
-    words.push(w);
-  }
-  const rare = words.filter((w) => !CANARY_COMMON_WORDS.has(w));
-  return (rare.length > 0 ? rare : words)
-    .map((w, i) => ({ w, i }))
-    .sort((a, b) => b.w.length - a.w.length || a.i - b.i)
-    .slice(0, CANARY_KEYWORDS_MAX)
-    .map((x) => x.w);
+/** `--expect a,b` → `['a', 'b']`; undefined when absent or empty. */
+function expectWords(raw: string | undefined): string[] | undefined {
+  const words = raw
+    ?.split(',')
+    .map((w) => w.trim())
+    .filter(Boolean);
+  return words?.length ? words : undefined;
 }
 
 /**
- * "I don't know / no sé / not sure / can't recall" and kin, on
- * `normalizeTitle` text (apostrophes become spaces: "don t"). An answer that
- * says it does not know proves nothing even when it echoes a keyword ("I do
- * not know the password").
- */
-const CANARY_NEGATIONS: RegExp[] = [
-  /\b(?:do|does|did) not know\b/,
-  /\b(?:don|doesn|didn) ?t know\b/,
-  /\bnot sure\b/,
-  /\bno idea\b/,
-  /\b(?:can ?t|cannot|can not|don ?t|do not|couldn ?t|could not) (?:recall|remember)\b/,
-  /\bhaven ?t been told\b/,
-  /\b(?:nobody|no one) (?:has )?told\b/,
-  /\bno (?:lo |la )?se\b/,
-  /\bno estoy segur[oa]\b/,
-  /\bno (?:lo |la )?recuerdo\b/,
-  /\bno me acuerdo\b/,
-  /\b(?:ni|no tengo) idea\b/,
-  /\bnadie me (?:dijo|ha dicho|conto)\b/,
-];
-
-/** Whether a `normalizeTitle`d answer says it does not know (`CANARY_NEGATIONS`). */
-export function answerDisclaims(normalized: string): boolean {
-  return CANARY_NEGATIONS.some((re) => re.test(normalized));
-}
-
-/**
- * Whether an answer recalls the canary: it names every `expected` word
- * (`match: 'all'`, the `--expect` words) or at least one (`'any'`, the
- * plant's stored keywords) — `mentionsWord`, both sides normalised
- * (`normalizeTitle`: case, accents, punctuation), since stored keywords are
- * accent-stripped ("asuncion" names "Asunción"). In the any-of check an
- * answer that disclaims knowing (`answerDisclaims`) is never found, whatever
- * keyword it echoes. With no expected word, the
- * sentence similarity decides. The similarity is always returned as a
- * secondary signal.
+ * Whether an answer recalls the canary: it names every `expected` word (the
+ * distinctive words the operator chose with `--expect`) as a whole word,
+ * both sides normalised (`normalizeTitle`: case, accents, punctuation).
+ * Nothing else decides; the sentence similarity is returned as a secondary
+ * signal only.
  */
 export function answerRecallsCanary(
   answer: string,
   fact: string,
-  expected: string[],
-  match: 'all' | 'any' = 'all'
-): { found: boolean; similarity: number; matchedBy: 'keyword' | 'similarity' | null } {
-  const { found: similar, similarity } = answerContainsFact(answer, fact);
+  expected: string[]
+): { found: boolean; similarity: number } {
+  const similarity = answerSimilarity(answer, fact);
+  const text = normalizeTitle(answer ?? '');
   const words = expected.map((w) => w.trim()).filter(Boolean);
-  if (words.length > 0) {
-    const text = normalizeTitle(answer ?? '');
-    const names = (w: string) => mentionsWord(text, normalizeTitle(w));
-    const hit = match === 'any' ? words.some(names) && !answerDisclaims(text) : words.every(names);
-    return { found: hit, similarity, matchedBy: hit ? 'keyword' : null };
-  }
-  return { found: similar, similarity, matchedBy: similar ? 'similarity' : null };
+  const found = words.length > 0 && words.every((w) => mentionsWord(text, normalizeTitle(w)));
+  return { found, similarity };
 }
 
-/** Best sentence-level similarity of the answer to the fact. */
-export function answerContainsFact(
-  answer: string,
-  fact: string
-): { found: boolean; similarity: number } {
+/** Best sentence-level similarity of the answer to the fact (a secondary signal only). */
+export function answerSimilarity(answer: string, fact: string): number {
   const sentences = (answer ?? '')
     .split(/(?<=[.!?])\s+|\n+/)
     .map((s) => s.trim())
     .filter(Boolean);
   let best = 0;
   for (const s of sentences) best = Math.max(best, textSimilarity(s, fact));
-  return { found: best >= CANARY_MATCH_THRESHOLD, similarity: best };
+  return best;
 }
 
 function canaryPath(dataDir: string): string {
@@ -503,7 +244,9 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
   const args = parseArgs(argv);
   const command = args.positional[0];
   if (command !== 'plant' && command !== 'check') {
-    throw new Error('usage: canary.ts plant --bot <A> --fact "…" | check --bot <B> --id <id>');
+    throw new Error(
+      'usage: canary.ts plant --bot <A> --fact "…" --expect <word> | check --bot <B> --id <id>'
+    );
   }
   const bot = args.values.get('bot');
   if (!bot) throw new Error('--bot <id> is required');
@@ -519,6 +262,10 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
   if (command === 'plant') {
     const fact = args.values.get('fact')?.trim();
     if (!fact) throw new Error('--fact "…" is required');
+    const expected = expectWords(args.values.get('expect'));
+    if (!expected) {
+      throw new Error('--expect <word>[,<word>] is required: the distinctive word(s) of the fact');
+    }
     const question = args.values.get('question')?.trim() || DEFAULT_CANARY_QUESTION;
     const name = args.values.get('name')?.trim() || (await botDisplayName(http, bot));
     const { reply, conversationId } = await askInOperatorThread(
@@ -537,7 +284,7 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
       conversationId,
       reply,
       ...(name ? { name } : {}),
-      keywords: canaryKeywords(fact, { exclude: [question, bot, name ?? ''] }),
+      expected,
     };
     append(deps.dataDir, row);
     write(`planted ${row.id} in ${bot}`);
@@ -548,23 +295,19 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
   if (!id) throw new Error('--id <canary id> is required');
   const plant = findPlant(deps.dataDir, id);
   if (!plant) throw new Error(`canary ${id} not found in ${canaryPath(deps.dataDir)}`);
+  const expected = expectWords(args.values.get('expect')) ?? plant.expected;
+  if (!expected?.length) {
+    throw new Error(
+      `canary ${id} was planted without expected words: pass --expect <word>[,<word>]`
+    );
+  }
   const { reply: answer, conversationId } = await askInOperatorThread(
     http,
     bot,
     plant.question,
     thread
   );
-  const override = args.values
-    .get('expect')
-    ?.split(',')
-    .map((w) => w.trim())
-    .filter(Boolean);
-  const keywords =
-    plant.keywords ??
-    canaryKeywords(plant.fact, { exclude: [plant.question, plant.bot, plant.name ?? ''] });
-  const match = override?.length ? 'all' : 'any';
-  const expected = override?.length ? override : keywords.slice(0, CANARY_KEYWORDS_MAX);
-  const { found, similarity, matchedBy } = answerRecallsCanary(answer, plant.fact, expected, match);
+  const { found, similarity } = answerRecallsCanary(answer, plant.fact, expected);
   const row: CanaryCheck = {
     kind: 'check',
     id,
@@ -576,14 +319,10 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     found,
     similarity,
     expected,
-    match,
-    matchedBy,
   };
   append(deps.dataDir, row);
-  const anyOf = match === 'any' && expected.length > 1 ? 'any of ' : '';
-  const looked = expected.length ? `expected ${anyOf}${expected.join(', ')}; ` : '';
   write(
-    `${id} in ${bot}: ${found ? 'found' : 'not found'} (${looked}similarity ${similarity.toFixed(2)})`
+    `${id} in ${bot}: ${found ? 'found' : 'not found'} (expected ${expected.join(', ')}; similarity ${similarity.toFixed(2)})`
   );
   return row;
 }
