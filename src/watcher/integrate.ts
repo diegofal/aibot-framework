@@ -558,7 +558,10 @@ export class Integrator {
         continue;
       }
       const at = Date.parse(q.deferredAt);
-      if (!Number.isFinite(at) || nowMs - at > DEFERRED_QUESTION_MAX_AGE_MS) continue;
+      if (!Number.isFinite(at) || nowMs - at > DEFERRED_QUESTION_MAX_AGE_MS) {
+        this.questionDropped(q, 'held over 7 days');
+        continue;
+      }
       let result: BroadcastResult;
       try {
         result = await bc.send({
@@ -599,12 +602,27 @@ export class Integrator {
     return results;
   }
 
-  /** O3: keep a question back (newest replaces the same insight and bot; capped). */
+  /** O3: keep a question back (newest replaces the same insight and bot; capped, with a row per drop). */
   private deferQuestion(q: DeferredQuestion): void {
     const rest = (this.st.deferredQuestions ?? []).filter(
       (x) => !(x.insightId === q.insightId && x.botId === q.botId)
     );
-    this.st.deferredQuestions = [...rest, q].slice(-DEFERRED_QUESTIONS_MAX);
+    const all = [...rest, q];
+    const over = all.length - DEFERRED_QUESTIONS_MAX;
+    for (const dropped of over > 0 ? all.slice(0, over) : []) {
+      this.questionDropped(dropped, `more than ${DEFERRED_QUESTIONS_MAX} held`);
+    }
+    this.st.deferredQuestions = all.slice(-DEFERRED_QUESTIONS_MAX);
+  }
+
+  /** O3: one row for a held question that will never be sent. */
+  private questionDropped(q: DeferredQuestion, why: string): void {
+    this.deps.log.say(
+      'integrate',
+      'integrate:question-dropped',
+      `I dropped a question I had held for the operator about ${this.deps.botName?.(q.botId) ?? q.botId} (${why}): "${clip(q.text, 120)}".`,
+      { neuronIds: [q.insightId], whyNoBroadcast: why, source: 'watcher:integrate' }
+    );
   }
 
   /**

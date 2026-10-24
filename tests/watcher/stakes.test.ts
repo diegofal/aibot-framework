@@ -180,6 +180,18 @@ describe('KarmaTrend', () => {
     expect(again.peak(t0 + 48 * HOUR)).toBeNull();
   });
 
+  test('when the operator last wrote survives a restart and only moves forward', () => {
+    const file = join(dir, 'stakes.json');
+    const trend = new KarmaTrend(file);
+    expect(trend.operatorAt()).toBeNull();
+    trend.setOperatorAt(1_000);
+    trend.setOperatorAt(500);
+    trend.record(2_000, 60);
+    const again = new KarmaTrend(file);
+    expect(again.operatorAt()).toBe(1_000);
+    expect(again.peak(2_000)).toBe(60);
+  });
+
   test('a corrupt file is a cold start', () => {
     const file = join(dir, 'stakes.json');
     writeFileSync(file, '{nope');

@@ -18,7 +18,8 @@
  * The watcher logs one `stakes:<rule>` row when a rule starts firing
  * (`newlyFired`) and puts the fired rules of a tier on that tier's pass row
  * (`drivenBy`, `stakesFor`), so introspection can name them as causes.
- * `KarmaTrend` keeps the karma samples (`<dir>/stakes.json`). Never throws.
+ * `KarmaTrend` keeps the karma samples and when the operator last wrote
+ * (`<dir>/stakes.json`, so a restart does not forget it). Never throws.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -193,11 +194,18 @@ export function newlyFired(before: ReadonlySet<StakeRule>, s: Pick<Stakes, 'fire
 /** Fleet mean karma samples over the last 24 h, persisted so a restart keeps the trend. */
 export class KarmaTrend {
   private samples: Array<{ at: number; avg: number }> = [];
+  private lastOperatorAt: number | null = null;
 
   constructor(private readonly file: string) {
     try {
       if (!existsSync(file)) return;
-      const raw = JSON.parse(readFileSync(file, 'utf-8')) as { karma?: unknown };
+      const raw = JSON.parse(readFileSync(file, 'utf-8')) as {
+        karma?: unknown;
+        lastOperatorAt?: unknown;
+      };
+      if (typeof raw.lastOperatorAt === 'number' && Number.isFinite(raw.lastOperatorAt)) {
+        this.lastOperatorAt = raw.lastOperatorAt;
+      }
       if (!Array.isArray(raw.karma)) return;
       this.samples = raw.karma.filter(
         (s): s is { at: number; avg: number } =>
@@ -217,10 +225,35 @@ export class KarmaTrend {
     if (last && nowMs - last.at < KARMA_SAMPLE_EVERY_MS) return;
     this.samples = this.samples.filter((s) => nowMs - s.at <= KARMA_WINDOW_MS);
     this.samples.push({ at: nowMs, avg });
+    this.save();
+  }
+
+  /** When the operator last wrote, as persisted (survives a restart); null before they ever did. */
+  operatorAt(): number | null {
+    return this.lastOperatorAt;
+  }
+
+  /** Keep when the operator last wrote (only a later time moves it). */
+  setOperatorAt(ms: number | null): void {
+    if (typeof ms !== 'number' || !Number.isFinite(ms)) return;
+    if (this.lastOperatorAt !== null && ms <= this.lastOperatorAt) return;
+    this.lastOperatorAt = ms;
+    this.save();
+  }
+
+  private save(): void {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
       const tmp = `${this.file}.tmp-${process.pid}`;
-      writeFileSync(tmp, JSON.stringify({ version: 1, karma: this.samples }), 'utf-8');
+      writeFileSync(
+        tmp,
+        JSON.stringify({
+          version: 1,
+          karma: this.samples,
+          ...(this.lastOperatorAt !== null ? { lastOperatorAt: this.lastOperatorAt } : {}),
+        }),
+        'utf-8'
+      );
       renameSync(tmp, this.file);
     } catch {
       // a lost trend is a cold start

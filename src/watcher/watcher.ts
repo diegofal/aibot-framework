@@ -284,6 +284,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       onItem: (item) => {
         if (item.fromOperator) {
           this.lastOperatorAt = lastOperatorMs([item], this.lastOperatorAt);
+          this.karmaTrend.setOperatorAt(this.lastOperatorAt);
           // O3: the operator is here; a question held for them can go out.
           void Promise.resolve().then(() => this.releaseQuestions());
         }
@@ -357,6 +358,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       });
     }
     this.karmaTrend = new KarmaTrend(join(this.dir, 'stakes.json'));
+    this.lastOperatorAt = this.karmaTrend.operatorAt();
     this.sampler = new IntrospectionSampler({
       dir: this.dir,
       now: this.now,
@@ -855,8 +857,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.buffer.restore(bufferFile(this.dir));
       this.lastOperatorAt = lastOperatorMs(
         [...this.buffer.items(), ...(this.integrator?.state().pending.items ?? [])],
-        this.lastOperatorAt
+        this.lastOperatorAt ?? this.karmaTrend.operatorAt()
       );
+      this.karmaTrend.setOperatorAt(this.lastOperatorAt);
       this.presence.attach(this.deps.activityStream as never);
       const record = readBirthRecord(this.dir);
       const deps = this.birthDeps();

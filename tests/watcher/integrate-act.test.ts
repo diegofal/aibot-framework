@@ -7,7 +7,7 @@
  * acted and did not.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMClient } from '../../src/core/llm-client';
@@ -15,9 +15,12 @@ import { BROADCAST_INFLIGHT_MAX_MS, Broadcaster } from '../../src/watcher/broadc
 import { DailyBudget } from '../../src/watcher/budget';
 import { Graph } from '../../src/watcher/graph';
 import {
+  DEFERRED_QUESTIONS_MAX,
+  DEFERRED_QUESTION_MAX_AGE_MS,
   INTEGRATE_MIN_GAP_MS,
   Integrator,
   insightNeedsBroadcast,
+  integrateStateFile,
   parseIntegrateOutput,
 } from '../../src/watcher/integrate';
 import { instrumented } from '../../src/watcher/llm';
@@ -776,6 +779,58 @@ describe('Integrator: stakes shape the pass (O3)', () => {
     deferNext.value = true;
     expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['deferred']);
     expect(s.integrator.deferredQuestions()).toHaveLength(1);
+  });
+
+  // Review 2026-10-24: a held question dropped by age or by the cap left no trace.
+  test('a held question older than 7 days is dropped unsent, with a row', async () => {
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    t += DEFERRED_QUESTION_MAX_AGE_MS + 1;
+    expect(await s.integrator.releaseQuestions()).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+    const row = s.rows.find((r) => r.op === 'integrate:question-dropped');
+    expect(row?.text).toContain('Who owns the brief?');
+    expect(row?.whyNoBroadcast).toBe('held over 7 days');
+  });
+
+  test('a held question pushed out by the cap is dropped with a row', async () => {
+    const old = Array.from({ length: DEFERRED_QUESTIONS_MAX }, (_, i) => ({
+      insightId: `n-old0000${i}`,
+      botId: 'b2',
+      text: `Old question ${i}?`,
+      reason: 'x',
+      deferredAt: new Date(t - 60_000).toISOString(),
+    }));
+    writeFileSync(
+      integrateStateFile(dir),
+      JSON.stringify({
+        attending: [],
+        pending: { items: [], neurons: [], salience: 0 },
+        deferredQuestions: old,
+      })
+    );
+    const sent: string[] = [];
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = withQuestions(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      sent
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    expect(s.integrator.deferredQuestions()).toHaveLength(DEFERRED_QUESTIONS_MAX);
+    expect(s.integrator.deferredQuestions().map((q) => q.text)).not.toContain('Old question 0?');
+    const row = s.rows.find((r) => r.op === 'integrate:question-dropped');
+    expect(row?.text).toContain('Old question 0?');
+    expect(row?.whyNoBroadcast).toBe(`more than ${DEFERRED_QUESTIONS_MAX} held`);
   });
 
   test('without deferral a question goes out in the pass', async () => {

@@ -807,6 +807,30 @@ describe('Watcher self-model (phase 4)', () => {
     await watcher.stop();
   });
 
+  // Review 2026-10-24: lastOperatorAt lived in memory only, so after a restart
+  // (with the operator item already noticed) the operator looked never seen.
+  test('when the operator last wrote survives a restart (stakes.json)', async () => {
+    const first = make();
+    await first.watcher.start();
+    await first.watcher.idle();
+    first.hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'telegram',
+      timestamp: t,
+      text: 'please look at the boiler',
+    });
+    await new Promise((r) => setImmediate(r));
+    first.watcher.buffer.drain(first.watcher.buffer.items().map((x) => x.id));
+    await first.watcher.stop();
+
+    const second = make();
+    await second.watcher.start();
+    await second.watcher.idle();
+    t += 2 * 3_600_000;
+    expect(second.watcher.interoception().operatorSilenceHours).toBe(2);
+    await second.watcher.stop();
+  });
+
   test('attention carries the phase and what the last pass attends to', async () => {
     const { watcher, activityStream } = make();
     await watcher.start();
