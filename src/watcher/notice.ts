@@ -186,23 +186,34 @@ function detailOf(item: BufferItem): string | undefined {
   return parts.length ? clip(parts.join(' · '), DETAIL_MAX) : undefined;
 }
 
-/** Buffer items as the prompt sees them. */
+/** Whitespace (newlines included) collapsed: one item is one prompt line. */
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * Buffer items as the prompt sees them. `what` and `detail` are flattened to
+ * one line each: pass records clip per line (`PASS_RECORD_LINE_MAX`), and a
+ * multi-line operator message used to survive there almost whole (review
+ * 2026-10-24).
+ */
 export function noticeItems(
   items: BufferItem[],
   botName: (botId: string) => string
 ): NoticePromptItem[] {
   return items.map((item) => {
     const fromOperator = item.fromOperator === true;
-    const detail = detailOf(item);
+    const raw = detailOf(item);
+    const detail = raw ? oneLine(raw) : undefined;
     return {
       id: item.id,
       botId: item.event.botId,
       bot: botName(item.event.botId),
       at: item.noticedAt,
-      what: describeEvent(item.event, {
-        botName,
-        ...(fromOperator ? { sender: 'the operator' } : {}),
-      }),
+      what: oneLine(
+        describeEvent(item.event, {
+          botName,
+          ...(fromOperator ? { sender: 'the operator' } : {}),
+        })
+      ),
       ...(detail ? { detail } : {}),
       salience: item.salience,
       reasons: item.reasons,

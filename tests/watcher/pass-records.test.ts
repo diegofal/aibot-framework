@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { LLMClient } from '../../src/core/llm-client';
 import { DailyBudget } from '../../src/watcher/budget';
 import { instrumented } from '../../src/watcher/llm';
+import { noticeItems } from '../../src/watcher/notice';
 import {
   PASS_RECORD_LINE_MAX,
   PassRecords,
@@ -13,6 +14,8 @@ import {
   passesDir,
   redactPassPrompt,
 } from '../../src/watcher/pass-records';
+import { buildIntegratePrompt, buildNoticePrompt } from '../../src/watcher/prompts';
+import type { BufferItem } from '../../src/watcher/types';
 
 let dir: string;
 let t: number;
@@ -47,6 +50,65 @@ describe('redactPassPrompt', () => {
     expect(lines[0]).toBe('events:');
     expect(lines[1].length).toBeLessThanOrEqual(PASS_RECORD_LINE_MAX + 1);
     expect(lines[1].endsWith('…')).toBe(true);
+  });
+});
+
+// Review 2026-10-24 (privacy): redaction is per line, and a multi-line
+// operator message was six lines, so it survived almost whole.
+describe('a multi-line operator message in a pass record', () => {
+  const message = Array.from(
+    { length: 6 },
+    (_, k) => `line${k + 1} ${'private words '.repeat(11).trim()}`
+  ).join('\n');
+  const opItem: BufferItem = {
+    id: 'b-00000001',
+    event: {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      chatId: 'operator',
+      userId: 'operator',
+      timestamp: t,
+      text: message,
+    },
+    salience: 0.9,
+    reasons: ['operator'],
+    noticedAt: '2026-10-24T10:00:00.000Z',
+    touched: [],
+    fromOperator: true,
+  };
+  const persisted = (user: string) =>
+    user
+      .split('\n')
+      .filter((l) => l.includes('private words'))
+      .join('\n');
+
+  test('notice prompt: at most PASS_RECORD_LINE_MAX chars of it persist', () => {
+    expect(message.length).toBeGreaterThanOrEqual(900);
+    const prompt = buildNoticePrompt(
+      noticeItems([opItem], (id) => id),
+      []
+    );
+    const out = redactPassPrompt([
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ]);
+    const kept = persisted(out.user);
+    expect(kept.length).toBeLessThanOrEqual(PASS_RECORD_LINE_MAX + 1);
+    expect(kept).not.toContain('line3');
+  });
+
+  test('integrate prompt: the same', () => {
+    const prompt = buildIntegratePrompt({
+      events: noticeItems([opItem], (id) => id),
+      fresh: [],
+      neighbourhood: [],
+      goals: [],
+      insights: [],
+      predictions: [],
+      bots: [{ id: 'b1', name: 'b1' }],
+    });
+    const out = redactPassPrompt([{ role: 'user', content: prompt.user }]);
+    expect(persisted(out.user).length).toBeLessThanOrEqual(PASS_RECORD_LINE_MAX + 1);
   });
 });
 
