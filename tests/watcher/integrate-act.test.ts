@@ -781,6 +781,44 @@ describe('Integrator: stakes shape the pass (O3)', () => {
     expect(s.integrator.deferredQuestions()).toHaveLength(1);
   });
 
+  // A released question that hit the bot's daily broadcast cap was taken off
+  // the persisted queue unsent: it must wait for the next release instead.
+  test('a released question the daily cap refuses stays held for the next release', async () => {
+    const sent: string[] = [];
+    const cap = { value: 0 };
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      get maxPerBotPerDay() {
+        return cap.value;
+      },
+      delivery: {
+        question: async (bot, text) => {
+          sent.push(`${bot}:${text}`);
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = setup(
+      askAnswer(() => ref.s as ReturnType<typeof setup>),
+      {},
+      { broadcaster }
+    );
+    ref.s = s;
+    s.integrator.observe(item());
+    await s.integrator.run({ deferQuestions: true });
+    expect(s.integrator.deferredQuestions()).toHaveLength(1);
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['capped']);
+    expect(sent).toEqual([]);
+    expect(s.integrator.deferredQuestions().map((q) => q.text)).toEqual(['Who owns the brief?']);
+    expect(s.rows.find((r) => r.op === 'integrate:question-dropped')).toBeUndefined();
+    cap.value = 3;
+    expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['delivered']);
+    expect(sent).toEqual(['b1:Who owns the brief?']);
+    expect(s.integrator.deferredQuestions()).toEqual([]);
+  });
+
   // Review 2026-10-24: the queue was persisted only after the whole loop, so a
   // stop (or a crash) mid-release resent what had already gone out.
   test('each released question leaves the persisted queue as soon as it is sent', async () => {

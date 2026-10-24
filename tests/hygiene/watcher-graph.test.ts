@@ -90,7 +90,7 @@ describe('watcher-graph routine', () => {
     expect(summary.message).toContain('1 bookkeeping');
   });
 
-  test('near-duplicates of one bot merge into the oldest; another bot is never merged in', () => {
+  test('near-duplicates of one bot merge into the newest; another bot is never merged in', () => {
     const oldest = birthFact('The client invoices on the first Monday of each month', 'b1', {
       activations: 2,
     } as Partial<Neuron>);
@@ -101,14 +101,56 @@ describe('watcher-graph routine', () => {
     const findings = watcherGraph.preview(ctx());
     const merges = ofKind(findings, 'duplicate-facts');
     expect(merges).toHaveLength(1);
-    expect(merges[0].data).toEqual({ keepId: oldest.id, dropIds: [dup.id] });
+    // The later line is the likelier correction: it is the keeper.
+    expect(merges[0].data).toEqual({ keepId: dup.id, dropIds: [oldest.id] });
 
     const res = watcherGraph.apply(ctx(), findings);
     expect(res.applied.some((a) => a.action === 'merge')).toBe(true);
-    expect(g.get(oldest.id)?.activations).toBe(5);
-    expect(g.get(dup.id)?.archivedAt).toBeDefined();
+    expect(g.get(dup.id)?.activations).toBe(5);
+    expect(g.get(dup.id)?.archivedAt).toBeUndefined();
+    expect(g.get(oldest.id)?.archivedAt).toBeDefined();
     expect(g.get(otherBot.id)?.archivedAt).toBeUndefined();
     expect(res.backups).toEqual([]);
+  });
+
+  test('a fact and its negation are never merged, however similar', () => {
+    const pays = birthFact('The client will pay the invoice on the first Monday of each month');
+    const wontPay = birthFact(
+      'The client will not pay the invoice on the first Monday of each month'
+    );
+    expect(g.findSimilarText(pays.text, 0.9).map((n) => n.id)).toContain(wontPay.id);
+    const findings = watcherGraph.preview(ctx());
+    expect(ofKind(findings, 'duplicate-facts')).toEqual([]);
+    watcherGraph.apply(ctx(), findings);
+    expect(g.get(pays.id)?.archivedAt).toBeUndefined();
+    expect(g.get(wontPay.id)?.archivedAt).toBeUndefined();
+  });
+
+  test("Spanish negations and n't forms count as negations too", () => {
+    const paga = birthFact(
+      'El cliente paga la factura de la oficina el primer lunes de cada mes por transferencia'
+    );
+    const nunca = birthFact(
+      'El cliente nunca paga la factura de la oficina el primer lunes de cada mes por transferencia'
+    );
+    const tail =
+      ' want the weekly summary of the whole fleet sent by email on monday mornings before nine with every open question and pending approval listed at the very top of it';
+    const does = birthFact(`The operator does${tail}`);
+    const doesnt = birthFact(`The operator doesn't${tail}`);
+    expect(g.findSimilarText(paga.text, 0.9).map((n) => n.id)).toContain(nunca.id);
+    expect(g.findSimilarText(does.text, 0.9).map((n) => n.id)).toContain(doesnt.id);
+    expect(ofKind(watcherGraph.preview(ctx()), 'duplicate-facts')).toEqual([]);
+  });
+
+  test('two facts that differ only by a date or a number are never merged', () => {
+    const oct = birthFact(
+      'The client pays the office rent invoice for the downtown studio on 2026-10-01 by bank transfer every single quarter'
+    );
+    const nov = birthFact(
+      'The client pays the office rent invoice for the downtown studio on 2026-11-01 by bank transfer every single quarter'
+    );
+    expect(g.findSimilarText(oct.text, 0.9).map((n) => n.id)).toContain(nov.id);
+    expect(ofKind(watcherGraph.preview(ctx()), 'duplicate-facts')).toEqual([]);
   });
 
   test('apply archives (never deletes) and archived neurons leave fleet_memory_search', async () => {

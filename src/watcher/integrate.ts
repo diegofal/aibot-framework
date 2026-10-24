@@ -487,6 +487,10 @@ export class Integrator {
    * whose broadcast failed or was deferred after that pass settled. With a
    * backlog larger than `agendaMax`, covering one item slides an older one in:
    * that is not news (review 2026-10-24, ~1,388 related links live).
+   *
+   * Deliberate: only items that would be SHOWN (the top `agendaMax`, which is
+   * what `scan.agenda` holds) can make the agenda "changed". A pass cannot act
+   * on an item it is not shown, so news below the cut must not wake one.
    */
   private agendaChanged(scan: ScannedAgenda, nowMs: number): boolean {
     const { agenda, sent } = scan;
@@ -537,11 +541,13 @@ export class Integrator {
   }
 
   /**
-   * O3: send every deferred question now (the operator wrote). One the shared
-   * throttle defers again stays deferred; any other answer (delivered, failed,
-   * duplicate, capped, invalid) takes it off the list; older than
-   * `DEFERRED_QUESTION_MAX_AGE_MS` is dropped unsent. One row when anything
-   * was sent. Never throws.
+   * O3: send every deferred question now (the operator wrote). Only a
+   * `delivered` or `duplicate` (already out) answer takes it off the list as
+   * sent; `invalid` (it can never go out) and older than
+   * `DEFERRED_QUESTION_MAX_AGE_MS` drop it unsent, with a row. Anything else
+   * (`deferred` by the throttle, `capped` by the bot's daily cap, `failed`, a
+   * throw) keeps it held for the next release. One row when anything was
+   * sent. Never throws.
    */
   async releaseQuestions(opts: PassOptions = {}): Promise<BroadcastResult[]> {
     const bc = this.deps.broadcaster;
@@ -582,7 +588,12 @@ export class Integrator {
         continue;
       }
       results.push(result);
-      if (result.status === 'deferred') continue;
+      if (result.status === 'invalid') {
+        this.questionDropped(q, 'rejected by the broadcaster');
+        take(q);
+        continue;
+      }
+      if (result.status !== 'delivered' && result.status !== 'duplicate') continue;
       released.push(q);
       take(q);
     }

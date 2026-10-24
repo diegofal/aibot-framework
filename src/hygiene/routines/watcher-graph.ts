@@ -11,8 +11,11 @@
  *    `isBookkeepingLine` (the predicate birth now applies) → archived.
  *  - `duplicate-facts`: live `fact` neurons of the same bot whose texts are
  *    ≥ `DUPLICATE_THRESHOLD` similar (`textSimilarity`) → merged into the
- *    oldest (`Graph.mergeInto`: activations summed, support unioned, edges
- *    re-pointed, the rest archived with `meta.mergedInto`).
+ *    newest (a later line is the likelier correction; `Graph.mergeInto`:
+ *    activations summed, support unioned, edges re-pointed, the rest archived
+ *    with `meta.mergedInto`). Two texts that differ in a negation or in a
+ *    number/date (`contradicts`) are never duplicates, however similar: "will
+ *    pay" and "will not pay" are a fact and its correction.
  *  - `graph-summary`: the counts (info, never fixable).
  *
  * The graph is owned by the running watcher, so the routine only ever goes
@@ -56,6 +59,46 @@ function botOf(n: Neuron): string | null {
   return n.support.bots.length === 1 ? n.support.bots[0] : null;
 }
 
+/** Negation words (en, es). `n't` forms are matched by suffix. */
+const NEGATIONS = new Set([
+  'not',
+  'no',
+  'never',
+  'without',
+  'none',
+  'nor',
+  'cannot',
+  'nunca',
+  'jamás',
+  'jamas',
+  'sin',
+  'ningún',
+  'ningun',
+  'ninguna',
+  'ninguno',
+  'tampoco',
+]);
+const WORD_RE = /[\p{L}\p{N}'’]+/gu;
+const NUMBER_RE = /\d+(?:[.,:/-]\d+)*/g;
+
+const sortedKey = (xs: string[]) => [...xs].sort().join('|');
+
+function negationsOf(text: string): string {
+  const words = (text.toLowerCase().match(WORD_RE) ?? []).filter(
+    (w) => NEGATIONS.has(w) || /n['’]t$/.test(w)
+  );
+  return sortedKey(words);
+}
+
+/**
+ * Two texts that differ in a negation word or in any number/date token: one
+ * says something the other does not, however many words they share. Pure.
+ */
+export function contradicts(a: string, b: string): boolean {
+  if (negationsOf(a) !== negationsOf(b)) return true;
+  return sortedKey(a.match(NUMBER_RE) ?? []) !== sortedKey(b.match(NUMBER_RE) ?? []);
+}
+
 const byAge = (a: Neuron, b: Neuron) =>
   Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id);
 
@@ -74,7 +117,7 @@ export const watcherGraph: HygieneRoutine = {
   id: WATCHER_GRAPH_ROUTINE_ID,
   name: 'Watcher graph',
   description:
-    "Archives the watcher's bookkeeping and date-header facts from birth and merges near-duplicate facts of the same bot into the oldest. Goes through the running watcher; never deletes.",
+    "Archives the watcher's bookkeeping and date-header facts from birth and merges near-duplicate facts of the same bot into the newest (never a negation or a different number). Goes through the running watcher; never deletes.",
   scope: 'fleet',
   canApply: true,
 
@@ -139,7 +182,8 @@ export const watcherGraph: HygieneRoutine = {
             !assigned.has(m.id) &&
             !retiring.has(m.id) &&
             botOf(m) === bot &&
-            byAge(n, m) < 0
+            byAge(n, m) < 0 &&
+            !contradicts(n.text, m.text)
         )
         .sort(byAge);
       if (twins.length === 0) continue;
@@ -147,21 +191,26 @@ export const watcherGraph: HygieneRoutine = {
       for (const m of twins) assigned.add(m.id);
       groups++;
       duplicates += twins.length;
+      // Every twin carries n's negations and numbers, so the group agrees; the
+      // newest line is the likelier correction and keeps the merged neuron.
+      const group = [n, ...twins];
+      const keeper = group[group.length - 1];
+      const drops = group.slice(0, -1);
       findings.push({
         id: `duplicate:${n.id}`,
         kind: 'duplicate-facts',
         severity: 'info',
         file: FILE,
         line: null,
-        message: `${plural(twins.length, 'near-duplicate')} of ${bot}'s fact "${clip(
-          n.text
+        message: `${plural(drops.length, 'near-duplicate')} of ${bot}'s fact "${clip(
+          keeper.text
         )}" (similarity ≥ ${DUPLICATE_THRESHOLD})`,
         fixable: true,
         fix: {
           action: 'merge',
-          details: 'Merge into the oldest: activations summed, support unioned, the rest archived.',
+          details: 'Merge into the newest: activations summed, support unioned, the rest archived.',
         },
-        data: { keepId: n.id, dropIds: twins.map((m) => m.id) },
+        data: { keepId: keeper.id, dropIds: drops.map((m) => m.id) },
       });
     }
 
