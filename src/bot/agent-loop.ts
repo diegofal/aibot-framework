@@ -16,6 +16,7 @@ import type { ChatMessage } from '../ollama';
 import { type DocumentSize, LIVING_DOC_DEFAULTS, listDocuments } from '../productions/living-docs';
 import { loopIntervalMs } from '../stats/goal-activity';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import { isTenantBot } from '../tenant/tenant-scoping';
 import { editGoal, parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
 import { idleToWhy } from '../why/builders/idle';
@@ -764,8 +765,10 @@ export class AgentLoop {
         getBot: (id) => this.ctx.bots.get(id),
         getAnyBot: fleetTelegramBorrower(this.ctx.bots, () => this.ctx.config),
         isTenantBot: (id) =>
-          !!this.ctx.config.multiTenant?.enabled &&
-          !!this.ctx.config.bots.find((b) => b.id === id)?.tenantId,
+          isTenantBot(
+            this.ctx.config.bots.find((b) => b.id === id),
+            this.ctx.config
+          ),
         logger: botLogger,
       }),
       onLLMCall: createCuriosityCallRecorder({

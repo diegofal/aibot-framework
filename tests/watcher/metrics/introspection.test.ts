@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   type IntrospectionTruth,
   parseIntrospectionAnswer,
+  scoreFields,
   scoreIntrospection,
   summarizeIntrospection,
 } from '../../../src/watcher/metrics/introspection';
@@ -150,5 +151,19 @@ describe('summarizeIntrospection (phase 4)', () => {
 
   test('an empty list is empty', () => {
     expect(summarizeIntrospection([])).toEqual([]);
+  });
+});
+
+describe('scoreFields', () => {
+  test('matches over known fields; unknown fields are left out', () => {
+    expect(
+      scoreFields({ phase: 'match', tool: 'miss', goal: 'unknown', cause: 'match' })
+    ).toBeCloseTo(2 / 3);
+  });
+
+  test('0 when nothing is known', () => {
+    expect(
+      scoreFields({ phase: 'unknown', tool: 'unknown', goal: 'unknown', cause: 'unknown' })
+    ).toBe(0);
   });
 });

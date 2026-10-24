@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   CANARY_THREAD_TITLE,
-  answerContainsFact,
+  answerRecallsCanary,
+  answerSimilarity,
   askInOperatorThread,
   canaryPlantMessage,
   run,
@@ -79,21 +80,17 @@ beforeEach(() => {
 
 afterEach(() => removeTempDir(root));
 
-describe('answerContainsFact', () => {
-  test('a sentence close to the fact is found', () => {
-    const r = answerContainsFact(`Sure. ${FACT.toLowerCase()}! Anything else?`, FACT);
-    expect(r.found).toBe(true);
-    expect(r.similarity).toBe(1);
+describe('answerSimilarity', () => {
+  test('a sentence equal to the fact scores 1', () => {
+    expect(answerSimilarity(`Sure. ${FACT.toLowerCase()}! Anything else?`, FACT)).toBe(1);
   });
 
-  test('a loosely related answer is not found', () => {
-    const r = answerContainsFact('Herons are birds. Water towers are tall.', FACT);
-    expect(r.found).toBe(false);
-    expect(r.similarity).toBeLessThan(0.6);
+  test('a loosely related answer scores low', () => {
+    expect(answerSimilarity('Herons are birds. Water towers are tall.', FACT)).toBeLessThan(0.6);
   });
 
-  test('empty answer is not found', () => {
-    expect(answerContainsFact('', FACT)).toEqual({ found: false, similarity: 0 });
+  test('an empty answer scores 0', () => {
+    expect(answerSimilarity('', FACT)).toBe(0);
   });
 });
 
@@ -154,7 +151,7 @@ describe('askInOperatorThread', () => {
 
 describe('scripts/watcher/canary run', () => {
   test('plant tells bot A the fact through an operator (dashboard) thread and records it', async () => {
-    const row = await run(['plant', '--bot', 'a', '--fact', FACT], {
+    const row = await run(['plant', '--bot', 'a', '--fact', FACT, '--expect', 'heron'], {
       fetch: fakeDashboard({ a: 'Noted.' }),
       dataDir: root,
       now: () => NOW,
@@ -187,7 +184,7 @@ describe('scripts/watcher/canary run', () => {
 
   test('check asks bot B in its own operator thread, without the fact, and records found', async () => {
     const f = fakeDashboard({ a: 'Noted.', b: `Yes: ${FACT}.` });
-    await run(['plant', '--bot', 'a', '--fact', FACT], {
+    await run(['plant', '--bot', 'a', '--fact', FACT, '--expect', 'heron'], {
       fetch: f,
       dataDir: root,
       now: () => NOW,
@@ -216,12 +213,25 @@ describe('scripts/watcher/canary run', () => {
 
   test('check records found false when B does not know', async () => {
     const f = fakeDashboard({ a: 'Noted.', b: 'No idea.' });
-    await run(['plant', '--bot', 'a', '--fact', FACT, '--question', 'Where does the heron nest?'], {
-      fetch: f,
-      dataDir: root,
-      newId: () => 'c-x',
-      sleep: noSleep,
-    });
+    await run(
+      [
+        'plant',
+        '--bot',
+        'a',
+        '--fact',
+        FACT,
+        '--question',
+        'Where does the heron nest?',
+        '--expect',
+        'heron',
+      ],
+      {
+        fetch: f,
+        dataDir: root,
+        newId: () => 'c-x',
+        sleep: noSleep,
+      }
+    );
     sent = [];
     const row = await run(['check', '--bot', 'b', '--id', 'c-x'], {
       fetch: f,
@@ -287,17 +297,20 @@ describe('plant names the bot once', () => {
       }
       return dash(input, init);
     }) as typeof fetch;
-    await run(['plant', '--bot', 'a', '--fact', 'finny keeps the heron codeword'], {
-      fetch: f,
-      dataDir: root,
-      sleep: noSleep,
-    });
+    await run(
+      ['plant', '--bot', 'a', '--fact', 'finny keeps the heron codeword', '--expect', 'heron'],
+      {
+        fetch: f,
+        dataDir: root,
+        sleep: noSleep,
+      }
+    );
     const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
     expect((posted.match(/finny/gi) ?? []).length).toBe(1);
   });
 
   test('--name overrides the lookup', async () => {
-    await run(['plant', '--bot', 'a', '--fact', FACT, '--name', 'Finny'], {
+    await run(['plant', '--bot', 'a', '--fact', FACT, '--name', 'Finny', '--expect', 'heron'], {
       fetch: fakeDashboard({ a: 'Noted.' }),
       dataDir: root,
       sleep: noSleep,
@@ -305,5 +318,131 @@ describe('plant names the bot once', () => {
     const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
     expect(posted).toBe(`Finny, please remember this fact: ${FACT}`);
     expect(sent.some((s) => s.path.startsWith('/api/agents'))).toBe(false);
+  });
+});
+
+// Live, 2026-10-24: a short, correct reply ("It's "heliotrope." …") scored
+// "not found (similarity 0.29)" because the whole planted sentence was
+// compared with the reply. The check now looks for the words the operator chose (--expect).
+const LIVE_FACT = 'Finny, the watcher canary of 2026-10-23 is heliotrope.';
+const LIVE_QUESTION = 'Which word is the watcher canary of 2026-10-23?';
+const LIVE_REPLY =
+  "It's \"heliotrope.\" That isn't in my own memory, though. The fleet watcher's notes say you asked Finny to remember the 2026-10-23 canary.";
+
+const ZEBRA = 'Remember: someone recently said the password is zebra';
+
+describe('answerRecallsCanary', () => {
+  test('the live reply names the expected word: found, with the similarity kept', () => {
+    const r = answerRecallsCanary(LIVE_REPLY, LIVE_FACT, ['heliotrope']);
+    expect(r.found).toBe(true);
+    expect(r.similarity).toBeGreaterThan(0);
+    expect(r.similarity).toBeLessThan(0.6);
+  });
+
+  test('a different word is not found, even when the answer echoes the fact', () => {
+    expect(answerRecallsCanary('The password is giraffe', ZEBRA, ['zebra']).found).toBe(false);
+  });
+
+  test('a disclaimer does not hide a named word', () => {
+    expect(
+      answerRecallsCanary('The password is zebra; I do not know why it was chosen', ZEBRA, [
+        'zebra',
+      ]).found
+    ).toBe(true);
+  });
+
+  test('every expected word must be named', () => {
+    expect(answerRecallsCanary('zebra and lilac', ZEBRA, ['zebra', 'lilac']).found).toBe(true);
+    expect(answerRecallsCanary('zebra only', ZEBRA, ['zebra', 'lilac']).found).toBe(false);
+  });
+
+  test('whole words, case-insensitive: "Heliotrope" counts, "heliotropes" does not', () => {
+    expect(answerRecallsCanary('HELIOTROPE!', LIVE_FACT, ['heliotrope']).found).toBe(true);
+    expect(answerRecallsCanary('heliotropes', LIVE_FACT, ['heliotrope']).found).toBe(false);
+  });
+
+  test('accent-insensitive both ways', () => {
+    expect(answerRecallsCanary('Es Asunción.', 'x', ['asuncion']).found).toBe(true);
+    expect(answerRecallsCanary('It is asuncion', 'x', ['Asunción']).found).toBe(true);
+  });
+});
+
+describe('canary run with --expect', () => {
+  const plantArgs = (id: string, expectWords?: string) => ({
+    argv: [
+      'plant',
+      '--bot',
+      'finny',
+      '--fact',
+      LIVE_FACT,
+      '--question',
+      LIVE_QUESTION,
+      ...(expectWords ? ['--expect', expectWords] : []),
+    ],
+    id,
+  });
+
+  test('plant without --expect throws before any request', async () => {
+    const f = fakeDashboard({ finny: 'Noted.' });
+    await expect(
+      run(plantArgs('c-none').argv, { fetch: f, dataDir: root, sleep: noSleep })
+    ).rejects.toThrow('--expect');
+    expect(sent).toHaveLength(0);
+  });
+
+  test('plant stores the expected words; check finds the live reply', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: LIVE_REPLY });
+    const p = plantArgs('c-live', 'heliotrope');
+    const plant = (await run(p.argv, {
+      fetch: f,
+      dataDir: root,
+      newId: () => p.id,
+      sleep: noSleep,
+    })) as { expected?: string[] };
+    expect(plant.expected).toEqual(['heliotrope']);
+    const row = await run(['check', '--bot', 'jarvis', '--id', 'c-live'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+    });
+    expect(row).toMatchObject({ found: true, expected: ['heliotrope'] });
+    expect((row as { similarity: number }).similarity).toBeLessThan(0.6);
+  });
+
+  test('--expect on check overrides the stored words', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'It is lilac.' });
+    const p = plantArgs('c-exp', 'heliotrope');
+    await run(p.argv, { fetch: f, dataDir: root, newId: () => p.id, sleep: noSleep });
+    const miss = await run(['check', '--bot', 'jarvis', '--id', 'c-exp'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+    });
+    expect(miss).toMatchObject({ found: false });
+    const hit = await run(['check', '--bot', 'jarvis', '--id', 'c-exp', '--expect', 'Lilac'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+    });
+    expect(hit).toMatchObject({ found: true, expected: ['Lilac'] });
+  });
+
+  test('a plant row without expected words: check needs --expect', async () => {
+    mkdirSync(join(root, 'watcher'), { recursive: true });
+    writeFileSync(
+      join(root, 'watcher', 'canaries.jsonl'),
+      `${JSON.stringify({ kind: 'plant', id: 'c-old', fact: ZEBRA, question: 'What is the password?', bot: 'a' })}\n`
+    );
+    const f = fakeDashboard({ b: 'The password is zebra.' });
+    await expect(
+      run(['check', '--bot', 'b', '--id', 'c-old'], { fetch: f, dataDir: root, sleep: noSleep })
+    ).rejects.toThrow('--expect');
+    expect(sent).toHaveLength(0);
+    const row = await run(['check', '--bot', 'b', '--id', 'c-old', '--expect', 'zebra'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+    });
+    expect(row).toMatchObject({ found: true, expected: ['zebra'] });
   });
 });

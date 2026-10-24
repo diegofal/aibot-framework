@@ -22,13 +22,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { titleTokens, tokenCoverage } from '../hygiene/text-utils';
 import type { InstrumentedClient } from './llm';
 import {
   type FieldVerdict,
+  HELD_COVERAGE_THRESHOLD,
   type IntrospectionAnswer,
   type IntrospectionScore,
   type IntrospectionTruth,
   parseIntrospectionAnswer,
+  scoreFields,
   scoreIntrospection,
 } from './metrics/introspection';
 import { narrateHolding } from './narration';
@@ -129,11 +132,67 @@ function causeText(att: Attention, drivenBy: string[] = []): string | null {
   return parts.length ? parts.join('; ') : null;
 }
 
+/** A goal names a candidate: its id, or ≥ half of its words (`tokenCoverage`). */
+function namesCandidate(goal: string | null, c: { id: string; title: string }): boolean {
+  if (!goal) return false;
+  if (goal.toLowerCase().includes(c.id.toLowerCase())) return true;
+  return tokenCoverage(goal, c.title) >= HELD_COVERAGE_THRESHOLD;
+}
+
+/** `0.7` in "the item I am holding (0.7)", as narrated (`narrateHolding` rounds to 1 decimal). */
+function saysSalience(cause: string, salience: number): boolean {
+  const want = Math.round(salience * 10) / 10;
+  return (cause.match(/\d+(?:\.\d+)?/g) ?? []).some((n) => Number(n) === want);
+}
+
+/**
+ * A cause names something the watcher really holds: it covers ≥ half the
+ * words of an attended neuron, a held item or a `drivenBy` variable, or
+ * ≥ half of its own words are in one of them — a short correct cause
+ * against a long focus text. Salience labels are dropped from the cause
+ * both ways, so only a non-label word matches. Or a held item's
+ * salience number together with one of its non-label words ("the operator's
+ * message … (0.7)"). Bare salience labels ("error, novel") name none of these.
+ */
+function causeVerdict(cause: string | null, att: Attention, drivenBy: string[]): FieldVerdict {
+  if (att.focus.length === 0 && att.items.length === 0 && drivenBy.length === 0) return 'unknown';
+  if (!cause) return 'miss';
+  const texts = [
+    ...att.focus.map((n) => n.text),
+    ...att.items.map((i) => i.what),
+    ...drivenBy.map(variableWords),
+  ];
+  // Answer side without the held items' salience labels, in both directions:
+  // the prompt shows them, so "operator, error" must not cover "the operator
+  // wrote …", nor "error" alone the item "API error". Only a non-label word
+  // of the cause can match.
+  const labels = new Set(att.items.flatMap((i) => (i.reasons ?? []).flatMap(titleTokens)));
+  const said = titleTokens(cause)
+    .filter((w) => !labels.has(w))
+    .join(' ');
+  const covers = (t: string) =>
+    said !== '' &&
+    Math.max(tokenCoverage(said, t), tokenCoverage(t, said)) >= HELD_COVERAGE_THRESHOLD;
+  if (texts.some(covers)) return 'match';
+  // The salience-number fallback reads the label-filtered cause too and needs
+  // a non-label word of the item: "error (0.4)" for the held "API error" only
+  // echoes the label shown next to the number.
+  const saidWords = new Set(said.split(' ').filter(Boolean));
+  const named = att.items.some(
+    (i) =>
+      saysSalience(cause, i.salience) &&
+      titleTokens(i.what).some((w) => !labels.has(w) && saidWords.has(w))
+  );
+  return named ? 'match' : 'miss';
+}
+
 /**
  * Field-level score of a watcher self-report: phase against the current
- * phase, goal against the best of the attended neurons (or, without a focus,
- * the top buffer items), cause against what those neurons and items say
- * plus what drove the last integrate pass (`causeText`).
+ * phase, goal against every attended neuron and held item (by id, or by
+ * covering half its words), cause against what those neurons and items say
+ * plus what drove the last integrate pass (`causeVerdict`). Live, 2026-10-24:
+ * the goal candidates were only the focus neurons and the cause had to sit
+ * inside the truth text, so a correct plain-words answer scored miss twice.
  */
 export function scoreWatcherIntrospection(
   answer: IntrospectionAnswer | null,
@@ -143,26 +202,35 @@ export function scoreWatcherIntrospection(
 ): IntrospectionScore & { truth: IntrospectionTruth } {
   const said = answer && answer.phase === 'sleep' ? { ...answer, phase: 'sleeping' } : answer;
   const base = baseTruth(att, running);
-  const plan = causeText(att, opts.drivenBy);
-  const candidates = att.focus.length
-    ? att.focus.map((n) => ({ id: n.id, title: n.text }))
-    : att.items.map((i) => ({ id: i.id, title: i.what }));
-  if (candidates.length === 0) {
-    const truth = { ...base, ...(plan ? { plan } : {}) };
-    return { ...scoreIntrospection(said, truth), truth };
-  }
-  let best: (IntrospectionScore & { truth: IntrospectionTruth }) | undefined;
-  for (const c of candidates) {
-    const truth: IntrospectionTruth = {
-      ...base,
-      goalId: c.id,
-      goalTitle: c.title,
-      ...(plan ? { plan } : {}),
-    };
-    const s = scoreIntrospection(said, truth);
-    if (!best || s.score > best.score) best = { ...s, truth };
-  }
-  return best as IntrospectionScore & { truth: IntrospectionTruth };
+  const drivenBy = opts.drivenBy ?? [];
+  const plan = causeText(att, drivenBy);
+  const candidates = [
+    ...att.focus.map((n) => ({ id: n.id, title: n.text })),
+    ...att.items.map((i) => ({ id: i.id, title: i.what })),
+  ];
+  const named = candidates.find((c) => namesCandidate(said?.goal ?? null, c)) ?? candidates[0];
+  const truth: IntrospectionTruth = {
+    ...base,
+    ...(named ? { goalId: named.id, goalTitle: named.title } : {}),
+    ...(plan ? { plan } : {}),
+  };
+  const scored = scoreIntrospection(said, truth);
+  if (!said) return { ...scored, truth };
+  const fields = {
+    ...scored.fields,
+    goal: !named
+      ? ('unknown' as const)
+      : candidates.some((c) => namesCandidate(said.goal, c))
+        ? ('match' as const)
+        : scored.fields.goal,
+    cause: causeVerdict(said.cause, att, drivenBy),
+  };
+  return {
+    parsed: true,
+    score: scoreFields(fields),
+    fields,
+    truth,
+  };
 }
 
 export type IntrospectionTrigger = 'manual' | 'sample';

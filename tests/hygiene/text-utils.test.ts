@@ -8,6 +8,7 @@ import {
   normalizeTitle,
   textSimilarity,
   titleTokens,
+  tokenCoverage,
 } from '../../src/hygiene/text-utils';
 
 describe('normalizeTitle', () => {
@@ -102,5 +103,22 @@ describe('mentionsWord', () => {
     expect(mentionsWord('ping C++ now', 'C++')).toBe(true);
     expect(mentionsWord('anything', '')).toBe(false);
     expect(mentionsWord('anything', '   ')).toBe(false);
+  });
+});
+
+describe('tokenCoverage', () => {
+  test('share of the target words found in the answer, measured on the target', () => {
+    expect(
+      tokenCoverage(
+        'a long chatty answer: web_fetch failed in Jarvis again',
+        'web_fetch failed in Jarvis'
+      )
+    ).toBe(1);
+    expect(tokenCoverage('Jarvis', 'web_fetch failed in Jarvis')).toBeCloseTo(1 / 4);
+  });
+
+  test('0 for an empty answer or a target with no content words', () => {
+    expect(tokenCoverage(null, 'web_fetch failed')).toBe(0);
+    expect(tokenCoverage('anything', 'the of')).toBe(0);
   });
 });

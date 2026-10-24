@@ -73,7 +73,7 @@ describe('ToolRegistry.setFleetMemory: tenant bots', () => {
   const tenantCtx = () =>
     ({
       config: {
-        bots: [{ id: 'b1' }, { id: 't1', tenantId: 'acme' }],
+        bots: [{ id: 'b1' }, { id: 't1', tenantId: 'acme' }, { id: 'adm', tenantId: '__admin__' }],
         watcher: { enabled: true },
         multiTenant: { enabled: true },
       },
@@ -91,6 +91,16 @@ describe('ToolRegistry.setFleetMemory: tenant bots', () => {
       'fleet_memory_search'
     );
     expect(names(reg.getDefinitionsForBot('b1'))).toContain('fleet_memory_search');
+  });
+
+  // Live, 2026-10-24: bots of the admin tenant were read as tenant bots.
+  test('a bot of the admin tenant (__admin__) gets fleet_memory_search and an answer', async () => {
+    const ctx = tenantCtx();
+    const reg = new ToolRegistry(ctx);
+    reg.setFleetMemory(source);
+    expect(names(reg.getDefinitionsForBot('adm'))).toContain('fleet_memory_search');
+    const res = await ctx.tools[0].execute({ query: 'x', _botId: 'adm' }, noopLogger);
+    expect(res.failureKind).not.toBe('policy');
   });
 
   test('the registered tool refuses a tenant bot even when called directly', async () => {

@@ -128,7 +128,7 @@ baseline-*.json  canaries.jsonl                            # phase 0 scripts</co
           <h2>Scripts</h2>
           <ul>
             <li><code>bun scripts/watcher/baseline.ts</code> &mdash; the phase 0 baseline report.</li>
-            <li><code>bun scripts/watcher/canary.ts</code> &mdash; plant a fact through one bot (addressed once by its display name, <code>--name</code> or <code>GET /api/agents/:id</code>), check recall through another.</li>
+            <li><code>bun scripts/watcher/canary.ts</code> &mdash; plant a fact through one bot (addressed once by its display name, <code>--name</code> or <code>GET /api/agents/:id</code>), check recall through another: <code>plant</code> requires <code>--expect &lt;word&gt;</code> and <code>check</code> passes only when the answer names every expected word.</li>
             <li><code>bun scripts/watcher/introspect.ts --bot &lt;id&gt;</code> or <code>--subject watcher</code> &mdash; ask and score; appends <code>introspection.jsonl</code> (the watcher route appends server-side).</li>
           </ul>
         </div>

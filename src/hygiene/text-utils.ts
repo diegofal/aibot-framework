@@ -179,3 +179,17 @@ export function mentionsWord(text: string, word: string): boolean {
     text ?? ''
   );
 }
+
+/**
+ * Share of `target`'s content words (`titleTokens`) that appear in `answer`.
+ * 0 when the target has none. Measured on the target, so a long, chatty
+ * answer that names the item still covers it.
+ */
+export function tokenCoverage(answer: string | null | undefined, target: string): number {
+  const want = new Set(titleTokens(target));
+  if (want.size === 0) return 0;
+  const said = new Set(titleTokens(answer ?? ''));
+  let hit = 0;
+  for (const w of want) if (said.has(w)) hit++;
+  return hit / want.size;
+}

@@ -1,4 +1,4 @@
-import { textSimilarity, titleTokens } from '../hygiene/text-utils';
+import { textSimilarity, tokenCoverage } from '../hygiene/text-utils';
 import type { Logger } from '../logger';
 /**
  * `fleet_memory_search`: a bot asks what the whole fleet knows (the watcher's
@@ -22,9 +22,10 @@ import type { Logger } from '../logger';
  *   (`support.bots` has `_botId`) or a general fleet entity (`kind: entity`,
  *   the bots themselves, minus tenant bots). What only another bot or the
  *   watcher knows stays out.
- * A tenant bot (multi-tenant, `bots[].tenantId`) never gets an answer: the
- * graph is the instance's (`isTenantBot`; `ToolRegistry` also keeps the
- * tool out of its definitions).
+ * A customer tenant's bot (`isTenantBot`: multi-tenant on, `bots[].tenantId`
+ * set and not `__admin__`) never gets an answer: the graph is the
+ * instance's, and the admin tenant's bots are the instance's own
+ * (`ToolRegistry` also keeps the tool out of a tenant bot's definitions).
  */
 import { cosineSimilarity } from '../memory/search';
 import { type Neuron, isOperatorSourced } from '../watcher/types';
@@ -44,12 +45,6 @@ export interface FleetMemorySource {
     getEmbedding(id: string): number[] | undefined;
   };
   embed?: (text: string) => Promise<number[]>;
-}
-
-function coverage(query: string[], text: string): number {
-  if (query.length === 0) return 0;
-  const words = new Set(titleTokens(text));
-  return query.filter((w) => words.has(w)).length / query.length;
 }
 
 export interface FleetMemoryToolOptions {
@@ -136,10 +131,9 @@ export async function rankFleetMemory(
       opts.logger?.warn?.({ err }, 'fleet memory: embedding failed, ranking by text');
     }
   }
-  const qWords = titleTokens(query);
   const scored: Array<{ n: Neuron; score: number }> = [];
   for (const n of candidates) {
-    const text = Math.max(textSimilarity(query, n.text), coverage(qWords, n.text));
+    const text = Math.max(textSimilarity(query, n.text), tokenCoverage(n.text, query));
     let score = text >= MIN_TEXT_SCORE ? text : 0;
     const vec = queryVec ? source.graph.getEmbedding(n.id) : undefined;
     if (queryVec && vec && vec.length === queryVec.length) {

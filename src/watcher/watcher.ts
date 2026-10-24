@@ -27,6 +27,7 @@ import type { OllamaClient } from '../ollama';
 import { backupSoulFile } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import { isTenantBot } from '../tenant/tenant-scoping';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
   type BirthDeps,
@@ -326,13 +327,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   /**
-   * A tenant bot in multi-tenant mode (`bots[].tenantId`, the same rule as
-   * `fleet_memory_search`'s `isTenantBot`): never a broadcast target nor in
-   * the integrate prompt's bot list.
+   * A bot of a customer tenant (`isTenantBot` in `src/tenant/tenant-scoping.ts`,
+   * the same rule as `fleet_memory_search`; the admin tenant's bots are not):
+   * never a broadcast target nor in the integrate prompt's bot list.
    */
   private isTenantBot(botId: string): boolean {
     const config = this.deps.config();
-    return !!config.multiTenant?.enabled && !!config.bots?.find((b) => b.id === botId)?.tenantId;
+    return isTenantBot(
+      config.bots?.find((b) => b.id === botId),
+      config
+    );
   }
 
   /** A tier's client wrapped with budget, breaker and query log (phase 3 asks for `integrate`). */

@@ -45,7 +45,14 @@ function logger(): any {
   return l;
 }
 
-function makePipeline(opts: { watcherEnabled?: boolean; source?: () => unknown } = {}) {
+function makePipeline(
+  opts: {
+    watcherEnabled?: boolean;
+    source?: () => unknown;
+    bots?: Array<Record<string, unknown>>;
+    multiTenant?: boolean;
+  } = {}
+) {
   const built: SystemPromptOptions[] = [];
   const botLogger = logger();
   const ctx: any = {
@@ -71,7 +78,8 @@ function makePipeline(opts: { watcherEnabled?: boolean; source?: () => unknown }
         },
       },
       ollama: { models: { primary: 'llama3.1' } },
-      bots: [],
+      bots: opts.bots ?? [],
+      ...(opts.multiTenant ? { multiTenant: { enabled: true } } : {}),
     },
     sessionManager: {
       isExpired: () => false,
@@ -149,6 +157,33 @@ describe('fleet memory prefetch in conversations', () => {
     expect(built[0].fleetMemoryContext).toContain('## What the fleet knows');
     expect(built[0].fleetMemoryContext).toContain('heliotrope');
     expect(built[0].fleetMemoryContext).toContain('known by Finny');
+  });
+
+  // Live, 2026-10-24: ai-perfectionist and jarvis-factory carry the admin
+  // tenant's id and never got the prefetch.
+  test('a bot of the admin tenant (__admin__) gets the prefetch in multi-tenant mode', async () => {
+    const { pipeline, built } = makePipeline({
+      bots: [{ id: bot.id, tenantId: '__admin__' }],
+      multiTenant: true,
+    });
+    await pipeline.handleChannelMessage(question() as any, channel() as any, bot, 'k', {
+      actor: 'operator',
+    });
+    expect(built[0].fleetMemoryContext).toContain('heliotrope');
+  });
+
+  test('a bot of a customer tenant gets no prefetch; multi-tenant off it does', async () => {
+    const tenant = makePipeline({ bots: [{ id: bot.id, tenantId: 't1' }], multiTenant: true });
+    await tenant.pipeline.handleChannelMessage(question() as any, channel() as any, bot, 'k', {
+      actor: 'operator',
+    });
+    expect(tenant.built[0].fleetMemoryContext ?? null).toBeNull();
+
+    const single = makePipeline({ bots: [{ id: bot.id, tenantId: 't1' }] });
+    await single.pipeline.handleChannelMessage(question() as any, channel() as any, bot, 'k', {
+      actor: 'operator',
+    });
+    expect(single.built[0].fleetMemoryContext).toContain('heliotrope');
   });
 
   test('a public turn gets nothing, and the graph is not even read', async () => {
