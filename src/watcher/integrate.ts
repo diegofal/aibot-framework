@@ -695,15 +695,23 @@ export class Integrator {
       );
     }
     // A reason left by an earlier pass on an insight this pass broadcasts is
-    // stale: the broadcast replaced it. Cleared before the sends, so a capped,
-    // deferred or failed send leaves the insight on the agenda for a retry; a
-    // delivered one retires it.
+    // stale: the broadcast replaced it. Cleared before the sends, together with
+    // the agenda retirement that reason earned, so a capped, deferred or failed
+    // send leaves the insight on the agenda for a retry; a delivered one
+    // retires it again.
+    const unretired: string[] = [];
     for (const id of broadcastNow) {
-      if (graph.get(id)?.meta?.whyNoBroadcast) graph.dropMeta(id, ['whyNoBroadcast']);
+      if (!graph.get(id)?.meta?.whyNoBroadcast) continue;
+      graph.dropMeta(id, ['whyNoBroadcast']);
+      if (this.st.agendaCovered?.includes(id)) unretired.push(id);
+    }
+    if (unretired.length) {
+      this.st.agendaCovered = (this.st.agendaCovered ?? []).filter((id) => !unretired.includes(id));
+      this.persist();
     }
     const deliveredFor = new Set<string>();
     const retireActed = () => {
-      const acted = coveredInsights.filter(
+      const acted = uniq([...coveredInsights, ...unretired]).filter(
         (id) => deliveredFor.has(id) || !!graph.get(id)?.meta?.whyNoBroadcast
       );
       if (this.retireAgenda(acted)) this.persist();
