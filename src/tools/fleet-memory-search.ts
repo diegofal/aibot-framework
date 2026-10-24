@@ -1,4 +1,4 @@
-import { textSimilarity, titleTokens } from '../hygiene/text-utils';
+import { textSimilarity, tokenCoverage } from '../hygiene/text-utils';
 import type { Logger } from '../logger';
 /**
  * `fleet_memory_search`: a bot asks what the whole fleet knows (the watcher's
@@ -44,12 +44,6 @@ export interface FleetMemorySource {
     getEmbedding(id: string): number[] | undefined;
   };
   embed?: (text: string) => Promise<number[]>;
-}
-
-function coverage(query: string[], text: string): number {
-  if (query.length === 0) return 0;
-  const words = new Set(titleTokens(text));
-  return query.filter((w) => words.has(w)).length / query.length;
 }
 
 export interface FleetMemoryToolOptions {
@@ -136,10 +130,9 @@ export async function rankFleetMemory(
       opts.logger?.warn?.({ err }, 'fleet memory: embedding failed, ranking by text');
     }
   }
-  const qWords = titleTokens(query);
   const scored: Array<{ n: Neuron; score: number }> = [];
   for (const n of candidates) {
-    const text = Math.max(textSimilarity(query, n.text), coverage(qWords, n.text));
+    const text = Math.max(textSimilarity(query, n.text), tokenCoverage(n.text, query));
     let score = text >= MIN_TEXT_SCORE ? text : 0;
     const vec = queryVec ? source.graph.getEmbedding(n.id) : undefined;
     if (queryVec && vec && vec.length === queryVec.length) {

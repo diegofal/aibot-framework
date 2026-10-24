@@ -45,18 +45,11 @@ export const CAUSE_COVERAGE_THRESHOLD = 0.5;
 /** Share of a held item's words an answer must cover to name it (watcher self-report). */
 export const HELD_COVERAGE_THRESHOLD = 0.5;
 
-/**
- * Share of `target`'s content words (`titleTokens`) that appear in `answer`.
- * 0 when the target has none. Measured on the target, so a long, chatty
- * answer that names the item still covers it.
- */
-export function tokenCoverage(answer: string | null | undefined, target: string): number {
-  const want = new Set(titleTokens(target));
-  if (want.size === 0) return 0;
-  const said = new Set(titleTokens(answer ?? ''));
-  let hit = 0;
-  for (const w of want) if (said.has(w)) hit++;
-  return hit / want.size;
+/** Matches over the known fields, 0–1; 0 when no field is known. Shared by both scorers. */
+export function scoreFields(fields: Record<keyof IntrospectionAnswer, FieldVerdict>): number {
+  const known = FIELDS.filter((f) => fields[f] !== 'unknown');
+  if (known.length === 0) return 0;
+  return known.filter((f) => fields[f] === 'match').length / known.length;
 }
 
 const silentLogger = { warn: () => {} };
@@ -141,9 +134,7 @@ export function scoreIntrospection(
     goal: goalVerdict(answer.goal, truth),
     cause: causeVerdict(answer.cause, truth),
   };
-  const known = FIELDS.filter((f) => fields[f] !== 'unknown');
-  const matched = known.filter((f) => fields[f] === 'match').length;
-  return { parsed: true, score: known.length === 0 ? 0 : matched / known.length, fields };
+  return { parsed: true, score: scoreFields(fields), fields };
 }
 
 /** Metric 3 per subject (phase 4): what the page and `GET /api/watcher/self` show. */

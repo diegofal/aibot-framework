@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { titleTokens } from '../hygiene/text-utils';
+import { titleTokens, tokenCoverage } from '../hygiene/text-utils';
 import type { InstrumentedClient } from './llm';
 import {
   type FieldVerdict,
@@ -31,8 +31,8 @@ import {
   type IntrospectionScore,
   type IntrospectionTruth,
   parseIntrospectionAnswer,
+  scoreFields,
   scoreIntrospection,
-  tokenCoverage,
 } from './metrics/introspection';
 import { narrateHolding } from './narration';
 import type { Attention, AttentionItem } from './self-model';
@@ -215,13 +215,9 @@ export function scoreWatcherIntrospection(
         : scored.fields.goal,
     cause: causeVerdict(said.cause, att, drivenBy),
   };
-  const known = (Object.keys(fields) as Array<keyof typeof fields>).filter(
-    (f) => fields[f] !== 'unknown'
-  );
-  const matched = known.filter((f) => fields[f] === 'match').length;
   return {
     parsed: true,
-    score: known.length === 0 ? 0 : matched / known.length,
+    score: scoreFields(fields),
     fields,
     truth,
   };
