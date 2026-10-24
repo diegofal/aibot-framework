@@ -176,10 +176,19 @@ describe('repeatKey / withoutNovelty', () => {
   });
 
   test('other events key by type and text; no text, no key; bots differ', () => {
-    expect(repeatKey(ev('agent:result', { summary: 'Done 3' }))).toBe('b1|agent:result|done #');
+    expect(repeatKey(ev('agent:result', { summary: 'Done  3' }))).toBe('b1|agent:result|done 3');
+    expect(repeatKey(ev('agent:result', { summary: 'Done 3' }))).not.toBe(
+      repeatKey(ev('agent:result', { summary: 'Done 4' }))
+    );
     expect(repeatKey(ev('llm:start', {}))).toBeUndefined();
     expect(repeatKey(ev('agent:result', { summary: 'x' }, 'b2'))).not.toBe(
       repeatKey(ev('agent:result', { summary: 'x' }))
+    );
+  });
+
+  test('an error event without a tool still folds numbers away', () => {
+    expect(repeatKey(ev('llm:error', { error: 'HTTP 429, retry in 30 s' }))).toBe(
+      repeatKey(ev('llm:error', { error: 'HTTP 429, retry in 12 s' }))
     );
   });
 

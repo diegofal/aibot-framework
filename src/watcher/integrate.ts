@@ -643,12 +643,13 @@ export class Integrator {
     // Only a pass that applied an answer uses up the agenda slot: a refused,
     // failed, unparsable or cancelled one leaves the agenda due again.
     if (hasAgenda) this.st.lastAgendaAt = nowIso;
+    // An agenda insight is retired only once it acted: a delivered broadcast
+    // (after the sends below) or a `whyNoBroadcast`. Covered but capped,
+    // deferred, failed or never sent leaves it on the agenda for a retry.
+    // Other agenda items (pairs) are retired by being covered.
     const covered = out.agendaCovered.filter((id) => agendaIds.has(id));
-    if (covered.length) {
-      this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...covered]).slice(
-        -AGENDA_COVERED_MAX
-      );
-    }
+    const coveredInsights = covered.filter((id) => graph.get(id)?.kind === 'insight');
+    this.retireAgenda(covered.filter((id) => !coveredInsights.includes(id)));
     const readIds = new Set(readItems.map((i) => i.id));
     const readNeuronIds = new Set(readNeurons);
     this.st.pending = {
@@ -693,20 +694,31 @@ export class Integrator {
         'Watcher integrate: noBroadcast skipped for insights broadcast in the same pass'
       );
     }
+    const deliveredFor = new Set<string>();
+    const retireActed = () => {
+      const acted = coveredInsights.filter(
+        (id) => deliveredFor.has(id) || !!graph.get(id)?.meta?.whyNoBroadcast
+      );
+      if (this.retireAgenda(acted)) this.persist();
+    };
     for (const b of out.broadcasts) {
       const insight = sendable(b);
       if (!insight || !this.deps.broadcaster) continue;
-      if (isCancelled()) return { status: 'cancelled' };
-      broadcasts.push(
-        await this.deps.broadcaster.send({
-          botId: b.bot,
-          kind: b.kind,
-          text: clip(b.text, 500),
-          insightId: insight.id,
-          reason: insight.text,
-        })
-      );
+      if (isCancelled()) {
+        retireActed();
+        return { status: 'cancelled' };
+      }
+      const result = await this.deps.broadcaster.send({
+        botId: b.bot,
+        kind: b.kind,
+        text: clip(b.text, 500),
+        insightId: insight.id,
+        reason: insight.text,
+      });
+      broadcasts.push(result);
+      if (result.status === 'delivered') deliveredFor.add(insight.id);
     }
+    retireActed();
 
     if (isCancelled()) return { status: 'cancelled' };
 
@@ -735,6 +747,15 @@ export class Integrator {
       predictions: preds,
       broadcasts,
     };
+  }
+
+  /** Adds `ids` to the covered agenda ids; true when anything was added. */
+  private retireAgenda(ids: string[]): boolean {
+    if (!ids.length) return false;
+    this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...ids]).slice(
+      -AGENDA_COVERED_MAX
+    );
+    return true;
   }
 
   /** A self-model reader that throws only drops its section. */

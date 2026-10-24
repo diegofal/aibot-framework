@@ -87,21 +87,25 @@ export function scoreEvent(event: SensedEvent, ctx: SalienceContext): SalienceSc
 /** Within this long, the same event from the same bot is a repeat, not news. */
 export const REPEAT_WINDOW_MS = 60_000;
 
-function normaliseText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[0-9a-f]{8,}/g, '#')
-    .replace(/\d+/g, '#')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 200);
+/**
+ * Lowercased, whitespace-collapsed, capped text. `stripDigits` (error text
+ * only) also folds ids and numbers away: a port or a millisecond count is
+ * noise in an error, but in a result a changed count is the news.
+ */
+function normaliseText(text: string, stripDigits = false): string {
+  const lower = text.toLowerCase();
+  const folded = stripDigits ? lower.replace(/[0-9a-f]{8,}/g, '#').replace(/\d+/g, '#') : lower;
+  return folded.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 /**
  * What makes two events "the same" for the repeat window: a failed tool by
- * tool + error class (the error text, or the failure kind and target), any
- * other event by its type and normalised text. Human messages are never keyed:
- * two people may say the same topic words. Undefined = never a repeat.
+ * tool + error class (the error text with numbers folded away, or the failure
+ * kind and target), any other error by its type and text with numbers folded
+ * away, and every other event by its type and text with numbers kept: two
+ * results that differ only in a count are two results. Human messages are
+ * never keyed: two people may say the same topic words. Undefined = never a
+ * repeat.
  */
 export function repeatKey(event: SensedEvent): string | undefined {
   if (isHumanInbound(event)) return undefined;
@@ -113,12 +117,13 @@ export function repeatKey(event: SensedEvent): string | undefined {
       (v): v is string => typeof v === 'string' && !!v.trim()
     );
     const cls = err
-      ? normaliseText(err)
+      ? normaliseText(err, true)
       : `${String(data.failureKind ?? '')}|${String(data.target ?? '')}`;
     return `${event.botId}|fail|${data.toolName}|${cls}`;
   }
   const text = eventText(event);
-  return text ? `${event.botId}|${event.type}|${normaliseText(text)}` : undefined;
+  if (!text) return undefined;
+  return `${event.botId}|${event.type}|${normaliseText(text, event.type.endsWith(':error'))}`;
 }
 
 /** A repeat is not novel: the novelty bonus and its reason come off. */

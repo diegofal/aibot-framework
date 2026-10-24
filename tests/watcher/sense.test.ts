@@ -526,6 +526,35 @@ describe('Sense novelty dedupe', () => {
     expect(rows.filter((r) => r.op === 'noticed')).toHaveLength(1);
   });
 
+  test('two agent:result summaries differing only in a number within 60 s are both buffered', () => {
+    const { stream, buffer } = setup();
+    const result = (summary: string) => ({
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary },
+    });
+    stream.emit('activity', result('Found 3 open roles in Lisbon'));
+    t += 10_000;
+    stream.emit('activity', result('Found 12 open roles in Lisbon'));
+    expect(buffer.size()).toBe(2);
+    expect(buffer.items().map((i) => i.reasons)).toEqual([['novel'], ['novel']]);
+  });
+
+  test('two identical agent:result summaries within 60 s are a repeat', () => {
+    const { stream, buffer } = setup();
+    const result = {
+      type: 'agent:result',
+      botId: 'b1',
+      timestamp: t,
+      data: { summary: 'Found 3 open roles in Lisbon' },
+    };
+    stream.emit('activity', result);
+    t += 10_000;
+    stream.emit('activity', result);
+    expect(buffer.size()).toBe(1);
+  });
+
   test('after 60 s the same event is novel again', () => {
     const { stream, rows } = setup();
     stream.emit('activity', fetchFailed());

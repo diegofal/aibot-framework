@@ -685,3 +685,117 @@ describe('Integrator: a broadcast record left open by a dead process', () => {
     expect(myInsightsOf(s.prompts[0] as string)).toContain('wake to Jarvis (in flight)');
   });
 });
+
+describe('Integrator: agendaCovered retires an insight only once it acted (review 2026-10-24)', () => {
+  function covering(
+    broadcast: Record<string, unknown> | undefined,
+    deps: Record<string, unknown> = {},
+    extra: (id: string) => Record<string, unknown> = () => ({})
+  ) {
+    const ref: { existing?: Neuron; first: boolean } = { first: true };
+    const s = setup(
+      () => {
+        const id = ref.existing?.id as string;
+        const o = ref.first
+          ? {
+              ...(broadcast ? { broadcasts: [{ ...broadcast, insightId: id }] } : {}),
+              agendaCovered: [id],
+              ...extra(id),
+            }
+          : {};
+        ref.first = false;
+        return o;
+      },
+      {},
+      deps
+    );
+    ref.existing = s.graph.addNeuron({
+      kind: 'insight',
+      text: 'Jarvis and Scout both write the Monday brief',
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      confidence: 'high',
+    });
+    return { s, id: ref.existing.id };
+  }
+
+  async function twoPasses(s: ReturnType<typeof setup>) {
+    const out = await pass(s);
+    t += INTEGRATE_MIN_GAP_MS;
+    await pass(s);
+    return out;
+  }
+
+  test('delivered: the insight leaves the agenda', async () => {
+    const { s, id } = covering({ bot: 'b1', kind: 'wake', text: '' });
+    const out = await twoPasses(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual([
+      'delivered',
+    ]);
+    expect(s.integrator.state().agendaCovered).toEqual([id]);
+    expect(agendaOf(s.prompts[1] as string)).not.toContain(id);
+  });
+
+  test('deferred: the insight stays on the agenda for a retry', async () => {
+    const log = new WatcherLog(join(dir, 'log2'), { now: () => t });
+    const broadcaster = new Broadcaster({
+      dir: join(dir, 'b2'),
+      now: () => t,
+      log,
+      delivery: { question: async () => ({ ok: false, detail: 'cooldown', deferred: true }) },
+    });
+    const { s, id } = covering(
+      { bot: 'b1', kind: 'question', text: 'Which brief?' },
+      { broadcaster }
+    );
+    const out = await twoPasses(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual([
+      'deferred',
+    ]);
+    expect(s.integrator.state().agendaCovered ?? []).not.toContain(id);
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${id}]`);
+  });
+
+  test('failed: the insight stays on the agenda for a retry', async () => {
+    // Goals are not wired in setup's broadcaster: the delivery fails.
+    const { s, id } = covering({ bot: 'b1', kind: 'goal', text: 'Merge the briefs' });
+    const out = await twoPasses(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual(['failed']);
+    expect(s.integrator.state().agendaCovered ?? []).not.toContain(id);
+    expect(agendaOf(s.prompts[1] as string)).toContain(`[${id}]`);
+  });
+
+  test('capped: the insight stays on the agenda for a retry', async () => {
+    const { s, id } = covering({ bot: 'b1', kind: 'wake', text: '' });
+    for (let i = 0; i < 3; i++) {
+      await s.broadcaster.send({ botId: 'b1', kind: 'wake', text: '', insightId: `n-other00${i}` });
+    }
+    const out = await pass(s);
+    expect(out.status === 'integrated' && out.broadcasts.map((b) => b.status)).toEqual(['capped']);
+    expect(s.integrator.state().agendaCovered ?? []).not.toContain(id);
+  });
+
+  test('a whyNoBroadcast retires it without a broadcast', async () => {
+    const withWhy = covering(undefined, {}, (id) => ({
+      noBroadcast: [{ insightId: id, why: 'The operator already chose' }],
+    }));
+    await twoPasses(withWhy.s);
+    expect(withWhy.s.integrator.state().agendaCovered).toEqual([withWhy.id]);
+    expect(agendaOf(withWhy.s.prompts[1] as string)).not.toContain(withWhy.id);
+  });
+
+  test('covered with neither a broadcast nor a whyNoBroadcast stays on the agenda', async () => {
+    const bare = covering(undefined);
+    await twoPasses(bare.s);
+    expect(bare.s.integrator.state().agendaCovered ?? []).not.toContain(bare.id);
+    expect(agendaOf(bare.s.prompts[1] as string)).toContain(`[${bare.id}]`);
+  });
+
+  test('an edge on the agenda is still retired by agendaCovered alone', async () => {
+    const ref: { s?: ReturnType<typeof setup> } = {};
+    const s = setup(() => ({ agendaCovered: [ref.s?.edge.id] }));
+    ref.s = s;
+    await pass(s);
+    expect(s.integrator.state().agendaCovered).toEqual([s.edge.id]);
+  });
+});
