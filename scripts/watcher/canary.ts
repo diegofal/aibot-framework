@@ -2,7 +2,7 @@
 /**
  * Watcher phase 0: cross-bot recall canary.
  *
- *   bun scripts/watcher/canary.ts plant --bot <A> --fact "…" [--question "…"]
+ *   bun scripts/watcher/canary.ts plant --bot <A> --fact "…" [--question "…"] [--name <display name>]
  *   bun scripts/watcher/canary.ts check --bot <B> --id <canary id>
  *
  * `plant` tells bot A a fact in a dashboard conversation thread and records it;
@@ -137,6 +137,33 @@ export async function askInOperatorThread(
   throw new Error(`${botId}: no reply within ${Math.round(timeoutMs / 1000)} s`);
 }
 
+/**
+ * What `plant` tells bot A: the fact, addressed to the bot by its display name
+ * once. A fact that already names the bot is not addressed again (the live
+ * plant of 2026-10-23 read "Finny … finny").
+ */
+export function canaryPlantMessage(fact: string, name?: string): string {
+  const who = name?.trim();
+  const named = !!who && fact.toLowerCase().includes(who.toLowerCase());
+  return who && !named
+    ? `${who}, please remember this fact: ${fact}`
+    : `Please remember this fact: ${fact}`;
+}
+
+/** The bot's display name (`GET /api/agents/:id` → `name`); undefined when it cannot be read. */
+export async function botDisplayName(deps: HttpDeps, botId: string): Promise<string | undefined> {
+  try {
+    const res = await deps.fetch(url(deps, `/api/agents/${encodeURIComponent(botId)}`), {
+      headers: headers(deps),
+    });
+    if (!res.ok) return undefined;
+    const body = (await res.json().catch(() => null)) as { name?: unknown } | null;
+    return typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Best sentence-level similarity of the answer to the fact. */
 export function answerContainsFact(
   answer: string,
@@ -197,10 +224,11 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     const fact = args.values.get('fact')?.trim();
     if (!fact) throw new Error('--fact "…" is required');
     const question = args.values.get('question')?.trim() || DEFAULT_CANARY_QUESTION;
+    const name = args.values.get('name')?.trim() || (await botDisplayName(http, bot));
     const { reply, conversationId } = await askInOperatorThread(
       http,
       bot,
-      `Please remember this fact: ${fact}`,
+      canaryPlantMessage(fact, name),
       thread
     );
     const row: CanaryPlant = {

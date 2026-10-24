@@ -5,6 +5,7 @@ import {
   CANARY_THREAD_TITLE,
   answerContainsFact,
   askInOperatorThread,
+  canaryPlantMessage,
   run,
 } from '../../../scripts/watcher/canary';
 import { createTempDir, removeTempDir } from '../../helpers/temp-dir';
@@ -169,7 +170,15 @@ describe('scripts/watcher/canary run', () => {
       conversationId: 't-a',
       reply: 'Noted.',
     });
-    expect(sent.every((s) => s.path.startsWith('/api/conversations/'))).toBe(true);
+    // Every write goes to a dashboard thread; the only other request is the
+    // read-only display-name lookup (GET /api/agents/a).
+    expect(
+      sent.every(
+        (s) =>
+          s.path.startsWith('/api/conversations/') ||
+          (s.method === 'GET' && s.path === '/api/agents/a')
+      )
+    ).toBe(true);
     expect(sent.some((s) => s.path.startsWith('/api/v1/chat'))).toBe(false);
     const posted = sent.find((s) => s.path.endsWith('/messages'));
     expect(String(posted?.body.message)).toContain(FACT);
@@ -238,5 +247,58 @@ describe('scripts/watcher/canary run', () => {
     );
     await expect(run(['bogus'], { fetch: f, dataDir: root })).rejects.toThrow('plant');
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe('canaryPlantMessage', () => {
+  const count = (s: string, name: string) => (s.match(new RegExp(name, 'gi')) ?? []).length;
+
+  test('addresses the bot by its display name once', () => {
+    const msg = canaryPlantMessage(FACT, 'Finny');
+    expect(msg).toBe(`Finny, please remember this fact: ${FACT}`);
+    expect(count(msg, 'finny')).toBe(1);
+  });
+
+  test('a fact that already names the bot is not addressed again', () => {
+    const fact = 'finny keeps the heron codeword under the water tower';
+    const msg = canaryPlantMessage(fact, 'Finny');
+    expect(count(msg, 'finny')).toBe(1);
+    expect(msg).toContain(fact);
+  });
+
+  test('without a name the message is the fact alone', () => {
+    expect(canaryPlantMessage(FACT)).toBe(`Please remember this fact: ${FACT}`);
+  });
+});
+
+describe('plant names the bot once', () => {
+  test('the display name comes from GET /api/agents/:id and is used once', async () => {
+    const dash = fakeDashboard({ a: 'Noted.' });
+    const f = (async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/api/agents/a') {
+        sent.push({ method: 'GET', path, body: {} });
+        return new Response(JSON.stringify({ id: 'a', name: 'Finny' }));
+      }
+      return dash(input, init);
+    }) as typeof fetch;
+    await run(['plant', '--bot', 'a', '--fact', 'finny keeps the heron codeword'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+    });
+    const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
+    expect((posted.match(/finny/gi) ?? []).length).toBe(1);
+  });
+
+  test('--name overrides the lookup', async () => {
+    await run(['plant', '--bot', 'a', '--fact', FACT, '--name', 'Finny'], {
+      fetch: fakeDashboard({ a: 'Noted.' }),
+      dataDir: root,
+      sleep: noSleep,
+    });
+    const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
+    expect(posted).toBe(`Finny, please remember this fact: ${FACT}`);
+    expect(sent.some((s) => s.path.startsWith('/api/agents'))).toBe(false);
   });
 });
