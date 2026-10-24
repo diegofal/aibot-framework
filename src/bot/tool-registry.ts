@@ -28,6 +28,7 @@ import type { BotContext } from './types';
 
 import type { MemoryViewer } from '../memory/viewer';
 import type { RelayParty } from '../relay/types';
+import { isTenantBot } from '../tenant/tenant-scoping';
 import { AgentProposalStore } from '../tools/agent-proposal-store';
 import { createArchiveFileTool } from '../tools/archive-file';
 import { type AskHumanDeps, createAskHumanTool } from '../tools/ask-human';
@@ -873,11 +874,11 @@ export class ToolRegistry {
   /**
    * Get the full excluded set for a bot: disabledTools + disabledSkills + dynamic scope exclusions.
    */
-  /** A tenant bot in multi-tenant mode (`bots[].tenantId`). */
+  /** A bot of a customer tenant (`isTenantBot`; the admin tenant's bots are not). */
   private isTenantBot(botId: string): boolean {
-    return (
-      !!this.ctx.config.multiTenant?.enabled &&
-      !!this.ctx.config.bots.find((b) => b.id === botId)?.tenantId
+    return isTenantBot(
+      this.ctx.config.bots.find((b) => b.id === botId),
+      this.ctx.config
     );
   }
 

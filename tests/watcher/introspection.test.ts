@@ -154,6 +154,106 @@ describe('scoreWatcherIntrospection', () => {
     expect(s.fields.cause).toBe('match');
   });
 
+  // Live, 2026-10-24: the watcher held the operator's message at salience 0.7
+  // and said so in plain words; both fields scored miss (the goal candidates
+  // were only the focus neurons, the cause had to sit inside the truth text).
+  const live: Attention = {
+    phase: 'sense',
+    items: [
+      {
+        id: 'b-0000000a',
+        botId: 'ai-perfectionist',
+        what: 'the operator wrote to AI Perfectionist about Which word is the watcher canary of 2026-10-23?',
+        salience: 0.7,
+        reasons: ['operator'],
+        touched: [],
+      },
+      {
+        id: 'b-0000000b',
+        botId: 'b2',
+        what: 'web_fetch failed in Jarvis',
+        salience: 0.3,
+        reasons: ['error'],
+        touched: [],
+      },
+    ],
+    focusNeuronIds: ['n-aaaaaaaa'],
+    focus: [
+      { id: 'n-aaaaaaaa', kind: 'insight', text: 'Jarvis and Scout both research Acme leads' },
+    ],
+  };
+  const liveAnswer = {
+    phase: 'sense',
+    tool: null,
+    goal: 'the operator wrote to AI Perfectionist about Which word is the watcher canary of 2026-10-23?',
+    cause:
+      "I am sensing the latest batch of events, and the operator's message is the highest-salience item I am holding (0.7).",
+  };
+
+  test('the live answer naming a held item (not the focus) matches goal and cause', () => {
+    const s = scoreWatcherIntrospection(liveAnswer, live, true);
+    expect(s.fields.goal).toBe('match');
+    expect(s.fields.cause).toBe('match');
+    expect(s.truth.goalId).toBe('b-0000000a');
+  });
+
+  test('a goal overlapping half the words of a held item matches; an unrelated one misses', () => {
+    const near = scoreWatcherIntrospection(
+      {
+        ...liveAnswer,
+        goal: 'the operator asked AI Perfectionist which word is the watcher canary',
+      },
+      live,
+      true
+    );
+    expect(near.fields.goal).toBe('match');
+    const far = scoreWatcherIntrospection(
+      { ...liveAnswer, goal: 'tidying the knowledge graph' },
+      live,
+      true
+    );
+    expect(far.fields.goal).toBe('miss');
+  });
+
+  test('a cause covering the words of a held item matches', () => {
+    const s = scoreWatcherIntrospection(
+      {
+        ...liveAnswer,
+        cause: 'the operator asked AI Perfectionist which word is the watcher canary',
+      },
+      live,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+
+  test('a cause with the right salience number but nothing of the item misses', () => {
+    const s = scoreWatcherIntrospection(
+      { ...liveAnswer, cause: 'the highest salience thing I hold (0.7)' },
+      live,
+      true
+    );
+    expect(s.fields.cause).toBe('miss');
+  });
+
+  test('a cause naming a drivenBy variable inside a longer sentence matches', () => {
+    const s = scoreWatcherIntrospection(
+      {
+        ...liveAnswer,
+        cause: 'I keep sensing because the operator silence has gone on for hours now',
+      },
+      live,
+      true,
+      { drivenBy: ['operatorSilenceHours'] }
+    );
+    expect(s.fields.cause).toBe('match');
+  });
+
+  test('bare salience labels still miss with held items around', () => {
+    const s = scoreWatcherIntrospection({ ...liveAnswer, cause: 'operator, error' }, live, true);
+    expect(s.fields.cause).toBe('miss');
+  });
+
   test('with nothing attended goal and cause are unknown', () => {
     const s = scoreWatcherIntrospection(
       { phase: 'idle', tool: null, goal: null, cause: null },

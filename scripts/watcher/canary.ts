@@ -3,12 +3,16 @@
  * Watcher phase 0: cross-bot recall canary.
  *
  *   bun scripts/watcher/canary.ts plant --bot <A> --fact "…" [--question "…"] [--name <display name>]
- *   bun scripts/watcher/canary.ts check --bot <B> --id <canary id>
+ *   bun scripts/watcher/canary.ts check --bot <B> --id <canary id> [--expect <word>[,<word>]]
  *
  * `plant` tells bot A a fact in a dashboard conversation thread and records it;
  * `check` asks bot B, in a thread of its own, a question that does not contain
- * the fact and records whether B's answer has it (a sentence at
- * `textSimilarity ≥ 0.6`). Both rows go to `<data>/watcher/canaries.jsonl`.
+ * the fact and records whether B's answer has it: the fact's rarest content
+ * word (`canaryKeywords`, stored at plant time; `--expect` overrides) as a whole
+ * word, case-insensitive. Sentence `textSimilarity` is kept in the row as a
+ * secondary signal (and is the test only for a fact with no content word).
+ * Live, 2026-10-24: a short correct reply ("It's "heliotrope." …") scored 0.29
+ * against the whole planted sentence. Both rows go to `<data>/watcher/canaries.jsonl`.
  *
  * Why the dashboard thread (`POST /api/conversations/:botId` then
  * `…/:id/messages`, reply polled from `…/:id/status`): it is an operator
@@ -20,7 +24,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mentionsWord, textSimilarity } from '../../src/hygiene/text-utils';
+import { mentionsWord, textSimilarity, titleTokens } from '../../src/hygiene/text-utils';
 import { fail, parseArgs, resolveCliContext } from '../system-cli';
 import { cliDataDir } from './baseline';
 import { url, type HttpDeps, headers } from './introspect';
@@ -45,6 +49,8 @@ export interface CanaryPlant {
   conversationId: string;
   /** Bot A's reply, verbatim (LLM output, kept as a quoted field). */
   reply: string;
+  /** The fact's distinctive words, rarest first (`canaryKeywords`). Absent on older plants. */
+  keywords?: string[];
 }
 
 export interface CanaryCheck {
@@ -58,7 +64,11 @@ export interface CanaryCheck {
   /** Bot B's answer, verbatim (LLM output, kept as a quoted field). */
   answer: string;
   found: boolean;
+  /** Secondary signal: best sentence similarity of the answer to the fact. */
   similarity: number;
+  /** The words the answer had to name (`--expect`, else the plant's rarest keyword). */
+  expected: string[];
+  matchedBy: 'keyword' | 'similarity' | null;
 }
 
 export interface CanaryDeps extends HttpDeps {
@@ -165,6 +175,55 @@ export async function botDisplayName(deps: HttpDeps, botId: string): Promise<str
   }
 }
 
+/** How many distinctive words a plant keeps. */
+export const CANARY_KEYWORDS_MAX = 3;
+/** Words of the plant message itself ("please remember this fact"). */
+const CANARY_TEMPLATE_WORDS = new Set(['please', 'remember', 'fact']);
+
+/**
+ * The fact's distinctive content words, rarest first: `titleTokens` (no
+ * stopwords) minus numbers and dates, words of ≤ 2 letters, the plant
+ * template's words and every word of `exclude` (the question asked to bot B,
+ * the bot's id and name: an answer echoing those proves nothing). Rarity is
+ * approximated by length (longer first, ties in fact order). At most
+ * `CANARY_KEYWORDS_MAX`.
+ */
+export function canaryKeywords(fact: string, opts: { exclude?: string[] } = {}): string[] {
+  const drop = new Set((opts.exclude ?? []).flatMap((t) => titleTokens(t ?? '')));
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const w of titleTokens(fact ?? '')) {
+    if (seen.has(w) || w.length <= 2 || /^\d+$/.test(w)) continue;
+    if (drop.has(w) || CANARY_TEMPLATE_WORDS.has(w)) continue;
+    seen.add(w);
+    words.push(w);
+  }
+  return words
+    .map((w, i) => ({ w, i }))
+    .sort((a, b) => b.w.length - a.w.length || a.i - b.i)
+    .slice(0, CANARY_KEYWORDS_MAX)
+    .map((x) => x.w);
+}
+
+/**
+ * Whether an answer recalls the canary: it names every `expected` word
+ * (`mentionsWord`). With no expected word, the sentence similarity decides.
+ * The similarity is always returned as a secondary signal.
+ */
+export function answerRecallsCanary(
+  answer: string,
+  fact: string,
+  expected: string[]
+): { found: boolean; similarity: number; matchedBy: 'keyword' | 'similarity' | null } {
+  const { found: similar, similarity } = answerContainsFact(answer, fact);
+  const words = expected.map((w) => w.trim()).filter(Boolean);
+  if (words.length > 0) {
+    const hit = words.every((w) => mentionsWord(answer ?? '', w));
+    return { found: hit, similarity, matchedBy: hit ? 'keyword' : null };
+  }
+  return { found: similar, similarity, matchedBy: similar ? 'similarity' : null };
+}
+
 /** Best sentence-level similarity of the answer to the fact. */
 export function answerContainsFact(
   answer: string,
@@ -241,6 +300,7 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
       bot,
       conversationId,
       reply,
+      keywords: canaryKeywords(fact, { exclude: [question, bot, name ?? ''] }),
     };
     append(deps.dataDir, row);
     write(`planted ${row.id} in ${bot}`);
@@ -257,7 +317,15 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     plant.question,
     thread
   );
-  const { found, similarity } = answerContainsFact(answer, plant.fact);
+  const override = args.values
+    .get('expect')
+    ?.split(',')
+    .map((w) => w.trim())
+    .filter(Boolean);
+  const keywords =
+    plant.keywords ?? canaryKeywords(plant.fact, { exclude: [plant.question, plant.bot] });
+  const expected = override?.length ? override : keywords.slice(0, 1);
+  const { found, similarity, matchedBy } = answerRecallsCanary(answer, plant.fact, expected);
   const row: CanaryCheck = {
     kind: 'check',
     id,
@@ -268,9 +336,14 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     answer,
     found,
     similarity,
+    expected,
+    matchedBy,
   };
   append(deps.dataDir, row);
-  write(`${id} in ${bot}: ${found ? 'found' : 'not found'} (similarity ${similarity.toFixed(2)})`);
+  const looked = expected.length ? `expected ${expected.join(', ')}; ` : '';
+  write(
+    `${id} in ${bot}: ${found ? 'found' : 'not found'} (${looked}similarity ${similarity.toFixed(2)})`
+  );
   return row;
 }
 

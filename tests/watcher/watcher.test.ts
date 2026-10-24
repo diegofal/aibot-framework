@@ -597,6 +597,38 @@ describe('Watcher integration (phase 3)', () => {
     await s.watcher.stop();
   });
 
+  // Live, 2026-10-24: bots of the admin tenant (`tenantId: '__admin__'`) were
+  // read as tenant bots and could never receive a broadcast.
+  test('a bot of the admin tenant is in the bot list and a valid broadcast target', async () => {
+    const adminAnswer = (w: Watcher) =>
+      JSON.stringify({
+        insights: [{ text: 'Jarvis keeps failing on the same fetch', support: [goalId(w)] }],
+        broadcasts: [{ bot: 'adm', kind: 'wake', text: '', insightIndex: 0 }],
+        attending: [],
+      });
+    const s = withIntegrate(adminAnswer);
+    const cfg = s.config as unknown as {
+      bots: Array<Record<string, unknown>>;
+      multiTenant?: { enabled: boolean };
+    };
+    cfg.bots.push({
+      id: 'adm',
+      name: 'adm',
+      soulDir: soul('adm', 'Admin'),
+      enabled: true,
+      tenantId: '__admin__',
+    });
+    cfg.multiTenant = { enabled: true };
+    await s.watcher.start();
+    await s.watcher.idle();
+    s.activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await s.watcher.integrateNow();
+    expect(s.prompts[0]).toContain('- adm: ');
+    expect(s.woke).toEqual(['adm']);
+    expect(s.watcher.broadcaster.list().map((b) => b.botId)).toEqual(['adm']);
+    await s.watcher.stop();
+  });
+
   test('broadcasts: delivered ones are pending for the planner', async () => {
     const s = withIntegrate(answer);
     await s.watcher.start();

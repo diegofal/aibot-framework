@@ -10,6 +10,7 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import type { RelayParty } from '../relay/types';
 import { unflushedMessageCount } from '../session';
+import { isTenantBot } from '../tenant/tenant-scoping';
 import { buildFleetMemoryPrefetch } from '../tools/fleet-memory-search';
 import { type ToolActor, callerIdentity } from '../tools/operator-gate';
 import { generateSpeech } from '../tts';
@@ -240,7 +241,12 @@ export class ConversationPipeline {
     try {
       const config = this.ctx.config;
       if (!config.watcher?.enabled) return null;
-      if (config.multiTenant?.enabled && config.bots?.find((b) => b.id === botId)?.tenantId) {
+      if (
+        isTenantBot(
+          config.bots?.find((b) => b.id === botId),
+          config
+        )
+      ) {
         return null;
       }
       const source = this.ctx.fleetMemory?.();

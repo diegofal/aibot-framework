@@ -40,3 +40,17 @@ export function isBotAccessible(bot: BotConfig, tenantId: string | undefined): b
 export function isAdminOrSingleTenant(tenantId: string | undefined): boolean {
   return !tenantId || tenantId === '__admin__';
 }
+
+/**
+ * A bot that belongs to a customer tenant: multi-tenant is on, the bot has a
+ * `tenantId`, and that tenant is not the admin one (`__admin__`, see
+ * `isAdminOrSingleTenant`). The one rule for every "tenant bots are kept out"
+ * decision (fleet memory prefetch and tool, watcher broadcasts and integrate
+ * bot list). Live, 2026-10-24: "any tenantId" shut the admin tenant's bots out.
+ */
+export function isTenantBot(
+  bot: { tenantId?: string } | undefined,
+  config: { multiTenant?: { enabled?: boolean } }
+): boolean {
+  return !!config.multiTenant?.enabled && !!bot?.tenantId && !isAdminOrSingleTenant(bot.tenantId);
+}

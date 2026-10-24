@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import {
   CANARY_THREAD_TITLE,
   answerContainsFact,
+  answerRecallsCanary,
   askInOperatorThread,
+  canaryKeywords,
   canaryPlantMessage,
   run,
 } from '../../../scripts/watcher/canary';
@@ -305,5 +307,123 @@ describe('plant names the bot once', () => {
     const posted = String(sent.find((s) => s.path.endsWith('/messages'))?.body.message);
     expect(posted).toBe(`Finny, please remember this fact: ${FACT}`);
     expect(sent.some((s) => s.path.startsWith('/api/agents'))).toBe(false);
+  });
+});
+
+// Live, 2026-10-24: a short, correct reply ("It's "heliotrope." …") scored
+// "not found (similarity 0.29)" because the whole planted sentence was
+// compared with the reply. The check now looks for the fact's rarest word.
+const LIVE_FACT = 'Finny, the watcher canary of 2026-10-23 is heliotrope.';
+const LIVE_QUESTION = 'Which word is the watcher canary of 2026-10-23?';
+const LIVE_REPLY =
+  "It's \"heliotrope.\" That isn't in my own memory, though. The fleet watcher's notes say you asked Finny to remember the 2026-10-23 canary.";
+
+describe('canaryKeywords', () => {
+  test('drops stopwords, dates, numbers, the bot name and the question words; rarest first', () => {
+    expect(canaryKeywords(LIVE_FACT, { exclude: [LIVE_QUESTION, 'Finny', 'finny'] })).toEqual([
+      'heliotrope',
+    ]);
+  });
+
+  test('longer (rarer) words come first, at most three', () => {
+    const k = canaryKeywords('The blue heron nests behind the old water tower');
+    expect(k).toHaveLength(3);
+    expect(k[0].length).toBeGreaterThanOrEqual(k[2].length);
+    expect(k).not.toContain('the');
+  });
+});
+
+describe('answerRecallsCanary', () => {
+  test('the live reply names the rarest word: found, with the similarity kept', () => {
+    const r = answerRecallsCanary(LIVE_REPLY, LIVE_FACT, ['heliotrope']);
+    expect(r.found).toBe(true);
+    expect(r.matchedBy).toBe('keyword');
+    expect(r.similarity).toBeLessThan(0.6);
+  });
+
+  test('"I don\'t know" is not found', () => {
+    expect(answerRecallsCanary("I don't know", LIVE_FACT, ['heliotrope']).found).toBe(false);
+  });
+
+  test('whole words, case-insensitive: "Heliotrope" counts, "heliotropes" does not', () => {
+    expect(answerRecallsCanary('HELIOTROPE!', LIVE_FACT, ['heliotrope']).found).toBe(true);
+    expect(answerRecallsCanary('heliotropes', LIVE_FACT, ['heliotrope']).found).toBe(false);
+  });
+
+  test('without keywords it falls back to sentence similarity', () => {
+    const r = answerRecallsCanary(`Sure. ${FACT}.`, FACT, []);
+    expect(r).toMatchObject({ found: true, matchedBy: 'similarity' });
+  });
+});
+
+describe('canary run with keywords', () => {
+  test('plant stores the keywords (question words and bot name dropped); check finds the live reply', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: LIVE_REPLY });
+    const plant = (await run(
+      [
+        'plant',
+        '--bot',
+        'finny',
+        '--fact',
+        LIVE_FACT,
+        '--question',
+        LIVE_QUESTION,
+        '--name',
+        'Finny',
+      ],
+      { fetch: f, dataDir: root, newId: () => 'c-live', sleep: noSleep }
+    )) as { keywords?: string[] };
+    expect(plant.keywords).toEqual(['heliotrope']);
+    const lines: string[] = [];
+    const row = await run(['check', '--bot', 'jarvis', '--id', 'c-live'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+      write: (l) => lines.push(l),
+    });
+    expect(row).toMatchObject({ found: true, matchedBy: 'keyword', expected: ['heliotrope'] });
+    expect((row as { similarity: number }).similarity).toBeGreaterThan(0);
+    expect(lines[0]).toContain('found');
+    expect(lines[0]).not.toContain('not found');
+  });
+
+  test('--expect overrides the stored keywords', async () => {
+    const f = fakeDashboard({ finny: 'Noted.', jarvis: 'The canary is lilac.' });
+    await run(['plant', '--bot', 'finny', '--fact', LIVE_FACT, '--question', LIVE_QUESTION], {
+      fetch: f,
+      dataDir: root,
+      newId: () => 'c-exp',
+      sleep: noSleep,
+    });
+    const miss = await run(['check', '--bot', 'jarvis', '--id', 'c-exp'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+      write: () => {},
+    });
+    expect(miss).toMatchObject({ found: false });
+    const hit = await run(['check', '--bot', 'jarvis', '--id', 'c-exp', '--expect', 'Lilac'], {
+      fetch: f,
+      dataDir: root,
+      sleep: noSleep,
+      write: () => {},
+    });
+    expect(hit).toMatchObject({ found: true, expected: ['Lilac'] });
+  });
+
+  test('a plant recorded before keywords existed gets them computed at check time', async () => {
+    const { appendFileSync, mkdirSync } = await import('node:fs');
+    mkdirSync(join(root, 'watcher'), { recursive: true });
+    appendFileSync(
+      join(root, 'watcher', 'canaries.jsonl'),
+      `${JSON.stringify({ kind: 'plant', id: 'c-old', fact: LIVE_FACT, question: LIVE_QUESTION, plantedAt: '2026-10-23T09:00:00Z', bot: 'finny', conversationId: 't', reply: 'ok' })}\n`
+    );
+    const row = await run(['check', '--bot', 'jarvis', '--id', 'c-old'], {
+      fetch: fakeDashboard({ jarvis: LIVE_REPLY }),
+      dataDir: root,
+      sleep: noSleep,
+      write: () => {},
+    });
+    expect(row).toMatchObject({ found: true, expected: ['heliotrope'] });
   });
 });
