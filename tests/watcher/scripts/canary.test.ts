@@ -491,3 +491,33 @@ describe('rarest word: any stored keyword, common words last', () => {
     expect(row.found).toBe(true);
   });
 });
+
+describe('the bot display name is never a keyword', () => {
+  const NAMED_FACT = 'Bartholomew guards the heliotrope';
+
+  test('plant stores the display name on the row', async () => {
+    const plant = (await run(
+      ['plant', '--bot', 'b', '--fact', NAMED_FACT, '--name', 'Bartholomew'],
+      { fetch: fakeDashboard({ b: 'Noted.' }), dataDir: root, newId: () => 'c-n', sleep: noSleep }
+    )) as { name?: string; keywords?: string[] };
+    expect(plant.name).toBe('Bartholomew');
+    expect(plant.keywords).not.toContain('bartholomew');
+  });
+
+  test('a pre-keyword plant with a stored name: the fallback excludes it', async () => {
+    const { appendFileSync, mkdirSync } = await import('node:fs');
+    mkdirSync(join(root, 'watcher'), { recursive: true });
+    appendFileSync(
+      join(root, 'watcher', 'canaries.jsonl'),
+      `${JSON.stringify({ kind: 'plant', id: 'c-oldname', fact: NAMED_FACT, question: LIVE_QUESTION, plantedAt: '2026-10-23T09:00:00Z', bot: 'b', name: 'Bartholomew', conversationId: 't', reply: 'ok' })}\n`
+    );
+    const row = (await run(['check', '--bot', 'jarvis', '--id', 'c-oldname'], {
+      fetch: fakeDashboard({ jarvis: "Hi, I'm not Bartholomew and I don't know." }),
+      dataDir: root,
+      sleep: noSleep,
+      write: () => {},
+    })) as { found: boolean; expected: string[] };
+    expect(row.expected).not.toContain('bartholomew');
+    expect(row.found).toBe(false);
+  });
+});

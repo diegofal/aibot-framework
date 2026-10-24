@@ -56,6 +56,8 @@ export interface CanaryPlant {
   reply: string;
   /** The fact's distinctive words, rarest first (`canaryKeywords`). Absent on older plants. */
   keywords?: string[];
+  /** The display name A was addressed by (excluded from the keywords). Absent on older plants. */
+  name?: string;
 }
 
 export interface CanaryCheck {
@@ -501,6 +503,7 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
       bot,
       conversationId,
       reply,
+      ...(name ? { name } : {}),
       keywords: canaryKeywords(fact, { exclude: [question, bot, name ?? ''] }),
     };
     append(deps.dataDir, row);
@@ -524,7 +527,8 @@ export async function run(argv: string[], deps: CanaryDeps): Promise<CanaryPlant
     .map((w) => w.trim())
     .filter(Boolean);
   const keywords =
-    plant.keywords ?? canaryKeywords(plant.fact, { exclude: [plant.question, plant.bot] });
+    plant.keywords ??
+    canaryKeywords(plant.fact, { exclude: [plant.question, plant.bot, plant.name ?? ''] });
   const match = override?.length ? 'all' : 'any';
   const expected = override?.length ? override : keywords.slice(0, CANARY_KEYWORDS_MAX);
   const { found, similarity, matchedBy } = answerRecallsCanary(answer, plant.fact, expected, match);
