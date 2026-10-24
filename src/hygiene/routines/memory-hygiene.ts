@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { assertWithinRoots, backupFile } from '../fs-safe';
-import { daysBetween, localDate } from '../text-utils';
+import { daysBetween, escapeRegExp, localDate } from '../text-utils';
 import type { HygieneApplyResult, HygieneContext, HygieneFinding, HygieneRoutine } from '../types';
 
 export type PiiKind = 'email' | 'phone' | 'chat-id' | 'money' | 'custody';
@@ -56,10 +56,6 @@ const TOOL_NAME_RE = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g;
 const STALE_MARK = '[stale as of';
 const PENDING_LOG_DAYS = 7;
 const DATE_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 function keywordMatcher(keywords: string[]): RegExp | null {
   if (keywords.length === 0) return null;

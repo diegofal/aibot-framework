@@ -11,6 +11,7 @@ import {
 import { dirname, join, resolve } from 'node:path';
 import type { BotConfig, Config } from '../config';
 import { persistBots, resolveAgentConfig } from '../config';
+import { escapeRegExp } from '../hygiene/text-utils';
 import type { Logger } from '../logger';
 import { type CoreMemoryManager, createCoreMemoryManager } from '../memory/core-memory';
 import { initializeMemoryDb } from '../memory/schema';
@@ -65,14 +66,10 @@ function includeOptional(flag: boolean | undefined): boolean {
   return flag !== false;
 }
 
-function escapeRegExpChars(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 const TRANSCRIPT_CHAT_TYPES = 'private|group|supergroup|channel';
 
 function transcriptFilePattern(botId: string): RegExp {
-  return new RegExp(`^bot-${escapeRegExpChars(botId)}-(${TRANSCRIPT_CHAT_TYPES})-.*\\.jsonl$`);
+  return new RegExp(`^bot-${escapeRegExp(botId)}-(${TRANSCRIPT_CHAT_TYPES})-.*\\.jsonl$`);
 }
 
 /**

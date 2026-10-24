@@ -27,6 +27,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseLLMJson } from '../bot/llm-json-parser';
+import { mentionsWord } from '../hygiene/text-utils';
 import type { BroadcastResult, Broadcaster } from './broadcast';
 import type { DailyBudget } from './budget';
 import type { Graph } from './graph';
@@ -1036,8 +1037,6 @@ function crossBot(a: Neuron, b: Neuron): boolean {
   return [...A].some((x) => !B.has(x)) || [...B].some((x) => !A.has(x));
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 /**
  * An insight that should come with a broadcast or a `whyNoBroadcast`:
  * confidence medium or high, supported by two or more bots, and naming one
@@ -1049,12 +1048,7 @@ export function insightNeedsBroadcast(
 ): boolean {
   if (n.confidence !== 'medium' && n.confidence !== 'high') return false;
   if (new Set(n.support.bots).size < 2) return false;
-  return bots.some((b) =>
-    [b.name, b.id].some(
-      (w) =>
-        !!w && new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(w)}($|[^\\p{L}\\p{N}])`, 'iu').test(n.text)
-    )
-  );
+  return bots.some((b) => [b.name, b.id].some((w) => mentionsWord(n.text, w)));
 }
 
 interface ApplyCtx {

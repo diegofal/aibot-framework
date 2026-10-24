@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   daysBetween,
+  escapeRegExp,
   extractDates,
   jaccard,
+  mentionsWord,
   normalizeTitle,
   textSimilarity,
   titleTokens,
@@ -71,5 +73,34 @@ describe('daysBetween', () => {
     expect(daysBetween(new Date('2026-08-01T00:00:00Z'), new Date('2026-08-21T12:00:00Z'))).toBe(
       20
     );
+  });
+});
+
+describe('escapeRegExp', () => {
+  test('escapes every regex metacharacter', () => {
+    const raw = 'a.b*c+d?e^f$g{h}i(j)k|l[m]n\\o';
+    expect(new RegExp(`^${escapeRegExp(raw)}$`).test(raw)).toBe(true);
+    expect(new RegExp(escapeRegExp('a.c')).test('abc')).toBe(false);
+  });
+});
+
+describe('mentionsWord', () => {
+  test('a whole word, case-insensitive', () => {
+    expect(mentionsWord('Ask max about it', 'Max')).toBe(true);
+    expect(mentionsWord('Max.', 'max')).toBe(true);
+    expect(mentionsWord('the maximum is 3', 'Max')).toBe(false);
+    expect(mentionsWord('Maxwell said so', 'Max')).toBe(false);
+  });
+
+  test('letters with accents and digits count as word characters', () => {
+    expect(mentionsWord('Hablé con Ána hoy', 'Ána')).toBe(true);
+    expect(mentionsWord('Anaí vino', 'Ana')).toBe(false);
+    expect(mentionsWord('bot2 is up', 'bot')).toBe(false);
+  });
+
+  test('names with regex characters and an empty word', () => {
+    expect(mentionsWord('ping C++ now', 'C++')).toBe(true);
+    expect(mentionsWord('anything', '')).toBe(false);
+    expect(mentionsWord('anything', '   ')).toBe(false);
   });
 });

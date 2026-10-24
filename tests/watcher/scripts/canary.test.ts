@@ -266,6 +266,11 @@ describe('canaryPlantMessage', () => {
     expect(msg).toContain(fact);
   });
 
+  test('a name inside a longer word does not count as naming the bot', () => {
+    const fact = 'the maximum heron count is 7';
+    expect(canaryPlantMessage(fact, 'Max')).toBe(`Max, please remember this fact: ${fact}`);
+  });
+
   test('without a name the message is the fact alone', () => {
     expect(canaryPlantMessage(FACT)).toBe(`Please remember this fact: ${FACT}`);
   });

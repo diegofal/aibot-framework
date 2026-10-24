@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { textSimilarity } from '../../src/hygiene/text-utils';
+import { mentionsWord, textSimilarity } from '../../src/hygiene/text-utils';
 import { fail, parseArgs, resolveCliContext } from '../system-cli';
 import { cliDataDir } from './baseline';
 import { url, type HttpDeps, headers } from './introspect';
@@ -140,11 +140,12 @@ export async function askInOperatorThread(
 /**
  * What `plant` tells bot A: the fact, addressed to the bot by its display name
  * once. A fact that already names the bot is not addressed again (the live
- * plant of 2026-10-23 read "Finny … finny").
+ * plant of 2026-10-23 read "Finny … finny"). Whole words only: "Max" is not
+ * named by "maximum".
  */
 export function canaryPlantMessage(fact: string, name?: string): string {
   const who = name?.trim();
-  const named = !!who && fact.toLowerCase().includes(who.toLowerCase());
+  const named = !!who && mentionsWord(fact, who);
   return who && !named
     ? `${who}, please remember this fact: ${fact}`
     : `Please remember this fact: ${fact}`;
