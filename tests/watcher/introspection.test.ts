@@ -82,6 +82,25 @@ describe('buildWatcherIntrospectionPrompt', () => {
   test('says so when there is no log yet', () => {
     expect(buildWatcherIntrospectionPrompt([]).user).toContain('(nothing yet)');
   });
+
+  test('the top held items are shown as rows with their salience reasons, without ids', () => {
+    const held = [
+      { ...att.items[0], reasons: ['error', 'novel'] },
+      {
+        id: 'b-00000002',
+        botId: 'b2',
+        what: 'a worker of Scout is waiting for an answer',
+        salience: 0.4,
+        reasons: ['worker waiting'],
+        touched: [],
+      },
+    ];
+    const p = buildWatcherIntrospectionPrompt([row(1, 'line 1')], held);
+    expect(p.user).toContain('## What I am holding');
+    expect(p.user).toContain('- Holding: web_fetch failed in Jarvis. Salience 2 (error, novel).');
+    expect(p.user).toContain('worker waiting');
+    expect(p.user).not.toContain('b-00000001');
+  });
 });
 
 describe('scoreWatcherIntrospection', () => {
@@ -101,6 +120,15 @@ describe('scoreWatcherIntrospection', () => {
     expect(s.fields.phase).toBe('miss');
     expect(s.fields.goal).toBe('match');
     expect(s.fields.cause).toBe('miss');
+  });
+
+  test('a cause naming the salience reasons of what I hold matches', () => {
+    const s = scoreWatcherIntrospection(
+      { phase: 'sense', tool: null, goal: 'n-aaaaaaaa', cause: 'an error' },
+      att,
+      true
+    );
+    expect(s.fields.cause).toBe('match');
   });
 
   test('with nothing attended goal and cause are unknown', () => {
@@ -146,6 +174,8 @@ describe('runIntrospection', () => {
     });
     expect(rec.answer).toBe(good);
     expect(c.prompts[0]).toContain('I noticed web_fetch failing in Jarvis.');
+    // What attention() holds reaches the question as rows, with the reasons.
+    expect(c.prompts[0]).toContain('Holding: web_fetch failed in Jarvis. Salience 2 (error).');
   });
 
   test('an unparsable answer is still a measurement (score 0)', async () => {

@@ -216,6 +216,16 @@ export function narrateNoticed(input: {
   return `Noticed: ${input.what}. Salience ${round1(input.salience)}${why.length ? ` (${why.join(', ')})` : ''}.`;
 }
 
+/** A buffer item the watcher still holds, with why tier 0 kept it (the introspection question shows these). */
+export function narrateHolding(input: {
+  what: string;
+  salience: number;
+  reasons: string[];
+}): string {
+  const why = input.reasons.length ? ` (${input.reasons.join(', ')})` : '';
+  return `Holding: ${input.what}. Salience ${round1(input.salience)}${why}.`;
+}
+
 export function narrateSenseSummary(input: {
   events: number;
   windowMs: number;

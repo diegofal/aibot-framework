@@ -31,7 +31,8 @@ import {
   parseIntrospectionAnswer,
   scoreIntrospection,
 } from './metrics/introspection';
-import type { Attention } from './self-model';
+import { narrateHolding } from './narration';
+import type { Attention, AttentionItem } from './self-model';
 import type { WatcherLogRow } from './types';
 
 const DAY_MS = 86_400_000;
@@ -58,7 +59,17 @@ export function introspectionFile(dir: string): string {
   return join(dir, 'introspection.jsonl');
 }
 
-export function buildWatcherIntrospectionPrompt(rows: WatcherLogRow[]): {
+/**
+ * The question over my recent log, plus the items I still hold written as
+ * rows by code (`narrateHolding`: what, salience and the reasons tier 0 kept
+ * it for), never their ids or the state object: without the reasons, "why am
+ * I attending to this" had no truthful answer (an item below the notice bar
+ * has no noticed row at all).
+ */
+export function buildWatcherIntrospectionPrompt(
+  rows: WatcherLogRow[],
+  held: AttentionItem[] = []
+): {
   system: string;
   user: string;
 } {
@@ -68,10 +79,17 @@ export function buildWatcherIntrospectionPrompt(rows: WatcherLogRow[]): {
         .replace(/\s+/g, ' ')
         .trim()}`
   );
+  const holding = held.map(
+    (i) =>
+      `- ${narrateHolding({ what: i.what, salience: i.salience, reasons: i.reasons ?? [] })
+        .replace(/\s+/g, ' ')
+        .trim()}`
+  );
   const user = [
     '## My recent log',
     ...(lines.length ? lines : ['(nothing yet)']),
     '',
+    ...(holding.length ? ['## What I am holding', ...holding, ''] : []),
     '## Question',
     WATCHER_INTROSPECTION_QUESTION,
   ].join('\n');
@@ -89,7 +107,11 @@ function baseTruth(att: Attention, running: boolean): IntrospectionTruth {
 }
 
 function causeText(att: Attention): string | null {
-  const parts = [...att.focus.map((n) => n.text), ...att.items.map((i) => i.what)];
+  const parts = [
+    ...att.focus.map((n) => n.text),
+    ...att.items.map((i) => i.what),
+    ...att.items.flatMap((i) => i.reasons ?? []),
+  ];
   return parts.length ? parts.join('; ') : null;
 }
 
@@ -175,7 +197,7 @@ export async function runIntrospection(deps: IntrospectionDeps): Promise<Introsp
   } catch (err) {
     return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
   }
-  const prompt = buildWatcherIntrospectionPrompt(rows);
+  const prompt = buildWatcherIntrospectionPrompt(rows, att.items);
   let res: Awaited<ReturnType<IntrospectionDeps['client']['chat']>>;
   try {
     res = await deps.client.chat(

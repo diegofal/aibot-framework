@@ -6,6 +6,7 @@ import {
   narrateBorn,
   narrateGoals,
   narrateHistory,
+  narrateHolding,
   narrateIntrospection,
   narrateLateLink,
   narrateLearned,
@@ -406,6 +407,21 @@ describe('narrateIntrospection (phase 4)', () => {
     );
     expect(narrateIntrospection({ trigger: 'sample', score: 0, parsed: false })).toBe(
       'I asked myself what I am doing; my answer could not be read (score 0).'
+    );
+  });
+});
+
+describe('narrateHolding / sense summary repeats', () => {
+  test('a held item with its reasons, and without any', () => {
+    expect(narrateHolding({ what: 'x failed', salience: 0.55, reasons: ['error', 'novel'] })).toBe(
+      'Holding: x failed. Salience 0.6 (error, novel).'
+    );
+    expect(narrateHolding({ what: 'x', salience: 1, reasons: [] })).toBe('Holding: x. Salience 1.');
+  });
+
+  test('the sense summary counts repeats', () => {
+    expect(narrateSenseSummary({ events: 4, windowMs: 60_000, repeats: 1 })).toBe(
+      'Sensed 4 events in the last 1 min (1 repeat).'
     );
   });
 });
