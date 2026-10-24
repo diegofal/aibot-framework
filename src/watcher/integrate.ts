@@ -570,12 +570,25 @@ export class Integrator {
     };
     const insightByIndex: Array<Neuron | undefined> = [];
     const createdInsights: Neuron[] = [];
+    const botIds = new Set(bots.map((b) => b.id));
+    // A broadcast `sendable` can send (known bot and kind, a broadcaster); only
+    // those take an insight's `whyNoBroadcast` away.
+    const targetOk = (b: IntegrateBroadcastOut) =>
+      botIds.has(b.bot) &&
+      (BROADCAST_KINDS as readonly string[]).includes(b.kind) &&
+      !!this.deps.broadcaster;
     const proposedIds = new Set(
-      out.broadcasts.map((b) => b.insightId).filter((id): id is string => !!id)
+      out.broadcasts.flatMap((b) =>
+        b.insightId && targetOk(b) && shown.get(b.insightId)?.kind === 'insight'
+          ? [b.insightId]
+          : []
+      )
     );
     for (const [index, i] of out.insights.entries()) {
       if (isCancelled()) return { status: 'cancelled' };
-      const proposed = out.broadcasts.some((b) => b.insightIndex === index && !b.insightId);
+      const proposed = out.broadcasts.some(
+        (b) => b.insightIndex === index && !b.insightId && targetOk(b)
+      );
       const r = await this.insight(i, ctx, isCancelled, { proposed, proposedIds, bots });
       if (isCancelled()) return { status: 'cancelled' };
       insightByIndex.push(r?.neuron);
@@ -622,19 +635,13 @@ export class Integrator {
     this.persist();
 
     const broadcasts: BroadcastResult[] = [];
-    const botIds = new Set(bots.map((b) => b.id));
     const shownInsight = (id: string | undefined) => {
       const n = id ? (shown.get(id) ?? insightByIndex.find((x) => x?.id === id)) : undefined;
       return n?.kind === 'insight' ? n : undefined;
     };
     const sendable = (b: IntegrateBroadcastOut) => {
       const insight = b.insightId ? shownInsight(b.insightId) : insightByIndex[b.insightIndex];
-      const ok =
-        !!insight &&
-        botIds.has(b.bot) &&
-        (BROADCAST_KINDS as readonly string[]).includes(b.kind) &&
-        !!this.deps.broadcaster;
-      return ok ? insight : undefined;
+      return insight && targetOk(b) ? insight : undefined;
     };
     // A "no broadcast" for an insight this pass also broadcasts contradicts
     // itself: the broadcast wins and the reason is not recorded.

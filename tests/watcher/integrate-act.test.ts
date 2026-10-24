@@ -524,6 +524,26 @@ describe('Integrator: a broadcast and a "no broadcast" for the same insight', ()
     expect(s.graph.get(ref.existing.id)?.meta?.whyNoBroadcast).toBeUndefined();
   });
 
+  test('a broadcast that is never sent (unknown bot, bad kind) does not drop the whyNoBroadcast', async () => {
+    const ref: { s?: ReturnType<typeof setup>; existing?: Neuron } = {};
+    const s = setup(() => ({
+      insights: [
+        { text: DUP, support: [ref.s?.a.id, ref.s?.b.id], whyNoBroadcast: 'Nobody needs it' },
+      ],
+      broadcasts: [
+        { bot: 'b9', kind: 'wake', text: '', insightId: ref.existing?.id },
+        { bot: 'b1', kind: 'shout', text: 'x', insightIndex: 0 },
+      ],
+    }));
+    ref.s = s;
+    ref.existing = existingInsight(s);
+    await pass(s);
+    expect(s.delivered).toEqual([]);
+    expect(s.graph.get(ref.existing.id)?.meta?.whyNoBroadcast).toBe('Nobody needs it');
+    const row = s.rows.find((r) => r.op === 'integrate:recognised');
+    expect(row?.whyNoBroadcast).toBe('Nobody needs it');
+  });
+
   test('noBroadcast for an insight broadcast in the same pass is skipped (broadcast wins), logged once', async () => {
     const ref: { one?: Neuron; two?: Neuron } = {};
     const s = setup(() => ({
