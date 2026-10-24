@@ -969,9 +969,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
 
   /**
    * Wait for birth, the passes and a release of held questions in flight, at
-   * most `stopTimeoutMs`: their
-   * model calls are already aborted; what cannot be (an embedding) is left
-   * behind so stop can compact and persist.
+   * most `stopTimeoutMs`: their model calls are already aborted; what cannot
+   * be (an embedding) is left behind so stop can compact and persist.
    */
   private async settleInFlight(): Promise<void> {
     const work = [
