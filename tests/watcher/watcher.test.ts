@@ -1887,3 +1887,222 @@ describe('Watcher fast lane (O1)', () => {
     await watcher.stop();
   });
 });
+
+// O2 + O3 (docs/plans/watcher-optimizations-plan.md): passes wake on salience,
+// and what the watcher feels shapes what it does.
+describe('Watcher: salience-driven ticks (O2) and stakes (O3)', () => {
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+  };
+  const noticeLlm = (client: LLMClient) => ({
+    notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' as const },
+  });
+  const toolError = (botId: string, error: string) => ({
+    type: 'tool:error',
+    botId,
+    timestamp: t,
+    data: { toolName: 'web_fetch', error },
+  });
+
+  test('an operator message wakes notice on salience:crossed; the pass row says salience', async () => {
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const { watcher, hooks } = make({ llm: noticeLlm(client) }, noticeOn);
+    await watcher.start();
+    await watcher.idle();
+    t += 60_000;
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'Drop the Acme lead',
+    });
+    await settle();
+    expect(prompts).toHaveLength(1);
+    expect(watcher.log.recent(30).find((r) => r.op === 'notice:pass')?.trigger).toBe('salience');
+    await watcher.stop();
+  });
+
+  test('one item below the wake line waits for the age ceiling, not a 5-min timer', async () => {
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const { watcher, activityStream } = make({ llm: noticeLlm(client) }, noticeOn);
+    await watcher.start();
+    await watcher.idle();
+    activityStream.emit('activity', toolError('b1', 'fetch failed 403'));
+    expect(watcher.buffer.size()).toBe(1);
+    t += 5 * 60_000;
+    expect(watcher.wakeNotice()).toBeNull();
+    t += WATCHER_DEFAULTS.notice.maxWaitMs;
+    expect(watcher.wakeNotice()).toBe('age');
+    await settle();
+    expect(prompts).toHaveLength(1);
+    expect(watcher.log.recent(30).find((r) => r.op === 'notice:pass')?.trigger).toBe('age');
+    await watcher.stop();
+  });
+
+  test('notice budget at 75 %: the wake line doubles, one stakes row, on the pass row too', async () => {
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const { watcher, activityStream } = make(
+      { llm: noticeLlm(client) },
+      { notice: { ...WATCHER_DEFAULTS.notice, enabled: true, maxPerDay: 4 } }
+    );
+    await watcher.start();
+    await watcher.idle();
+    for (let i = 0; i < 3; i++) watcher.budget.record('notice', {});
+    t += 60_000;
+    activityStream.emit('activity', toolError('b1', 'fetch failed 403'));
+    activityStream.emit('activity', toolError('b2', 'quota exceeded on search'));
+    await settle();
+    // 1.0 pending: enough at the usual line, not at twice it.
+    expect(prompts).toHaveLength(0);
+    expect(watcher.wakeNotice()).toBeNull();
+    const rows = watcher.log.recent(50).filter((r) => r.op === 'stakes:noticeBudgetPressure');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].drivenBy).toEqual(['noticeBudgetPressure']);
+    // The manual pass still records the rule that shaped it.
+    await watcher.noticeNow();
+    const pass = watcher.log.recent(50).find((r) => r.op === 'notice:pass');
+    expect(pass?.trigger).toBe('manual');
+    expect(pass?.drivenBy).toEqual(['noticeBudgetPressure']);
+    await watcher.stop();
+  });
+
+  test('integrate budget pressure moves the integrate wake line; lifted, it wakes on salience', async () => {
+    const { client, prompts } = integrateClient(() => '{"insights":[]}');
+    const m = make(
+      { llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } } },
+      {
+        integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, wakeSalience: 1, maxPerDay: 4 },
+      }
+    );
+    const { watcher, activityStream } = m;
+    await watcher.start();
+    await watcher.idle();
+    for (let i = 0; i < 3; i++) watcher.budget.record('integrate', {});
+    activityStream.emit('activity', toolError('b1', 'fetch failed 403'));
+    activityStream.emit('activity', toolError('b2', 'quota exceeded on search'));
+    expect(watcher.buffer.size()).toBe(2);
+    expect(watcher.wakeIntegrate()).toBeNull();
+    expect(watcher.log.recent(50).some((r) => r.op === 'stakes:integrateBudgetPressure')).toBe(
+      true
+    );
+    (m.config.watcher.integrate as { maxPerDay: number }).maxPerDay = 100;
+    t += 30_000;
+    expect(watcher.wakeIntegrate()).toBe('salience');
+    await settle();
+    expect(prompts).toHaveLength(1);
+    expect(watcher.log.recent(50).find((r) => r.op === 'integrate:pass')?.trigger).toBe('salience');
+    await watcher.stop();
+  });
+
+  test('operator silent: a question is held (insight stays on the agenda), sent when the operator writes', async () => {
+    const asked: string[] = [];
+    const ref: { w?: Watcher } = {};
+    const goal = () => ref.w?.graph.list().find((n) => n.kind === 'goal')?.id as string;
+    const { client } = integrateClient(() =>
+      JSON.stringify({
+        insights: [
+          {
+            text: 'Jarvis keeps failing on the same fetch',
+            support: [goal()],
+            confidence: 'high',
+          },
+        ],
+        broadcasts: [{ bot: 'b1', kind: 'question', text: 'Is the key coming?', insightIndex: 0 }],
+      })
+    );
+    const { watcher, hooks, activityStream } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        broadcastDelivery: {
+          question: async (botId, text) => {
+            asked.push(`${botId}:${text}`);
+            return { ok: true, detail: 'sent' };
+          },
+        },
+      },
+      integrateOn
+    );
+    ref.w = watcher;
+    await watcher.start();
+    await watcher.idle();
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'Keep going',
+    });
+    watcher.buffer.size();
+    t += 49 * 3_600_000;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    const out = await watcher.integrateNow();
+    expect(out?.status).toBe('integrated');
+    expect(asked).toEqual([]);
+    const rows = watcher.log.recent(80);
+    expect(rows.filter((r) => r.op === 'stakes:operatorSilence')).toHaveLength(1);
+    expect(rows.find((r) => r.op === 'integrate:question-deferred')?.whyNoBroadcast).toBe(
+      'operator silent'
+    );
+    expect(rows.find((r) => r.op === 'integrate:pass')?.drivenBy).toContain('operatorSilence');
+    t += 60_000;
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'I am back',
+    });
+    watcher.buffer.size();
+    await settle();
+    expect(asked).toEqual(['b1:Is the key coming?']);
+    expect(watcher.log.recent(80).some((r) => r.op === 'integrate:question-released')).toBe(true);
+    await watcher.stop();
+  });
+
+  test('a tier whose breaker is open sleeps: wakeNotice does not run, one stakes row', async () => {
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const { watcher, hooks } = make(
+      {
+        llm: noticeLlm(client),
+        breaker: { isOpen: () => true, recordFailure: () => {}, recordSuccess: () => {} },
+      },
+      noticeOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    t += 60_000;
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'Drop the Acme lead',
+    });
+    await settle();
+    expect(watcher.wakeNotice()).toBeNull();
+    expect(prompts).toHaveLength(0);
+    expect(watcher.log.recent(50).filter((r) => r.op === 'stakes:breakerOpen')).toHaveLength(1);
+    await watcher.stop();
+  });
+
+  test('fleet karma falling 5 points in 24 h: the integrate prompt opens with "Something is wrong"', async () => {
+    let karma = 60;
+    const { client, prompts } = integrateClient(() => '{"insights":[]}');
+    const { watcher, activityStream } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        karmaScores: () => [karma],
+      },
+      integrateOn
+    );
+    await watcher.start();
+    await watcher.idle();
+    watcher.stakes();
+    t += 2 * 3_600_000;
+    karma = 54;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await watcher.integrateNow();
+    expect(prompts[0]).toContain('## Something is wrong');
+    expect(prompts[0]).toContain('from 60 to 54');
+    const pass = watcher.log.recent(50).find((r) => r.op === 'integrate:pass');
+    expect(pass?.drivenBy).toContain('fleetKarmaFalling');
+    await watcher.stop();
+  });
+});

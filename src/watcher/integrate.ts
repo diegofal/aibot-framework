@@ -2,12 +2,16 @@
  * Tier 2: integration (phase 3). Notice drains the working buffer, so the
  * integrator keeps its own "since my last thought" accumulation: every buffer
  * item tier 0 pushed (`observe`) and every neuron notice created or recognised
- * (`observeNotice`). A pass is due when that salience reaches
- * `integrate.salienceBar`, or on the heartbeat (`integrate.heartbeatMs`) with
- * `integrate.minItems` items pending or a non-empty standing agenda (a pass
- * with only the agenda to act on at most every `integrate.agendaEveryMs`),
- * never closer than `INTEGRATE_MIN_GAP_MS` to the previous attempt, and only
- * while `integrate.enabled`.
+ * (`observeNotice`). A pass wakes (O2, `wake`) when that salience reaches
+ * `integrate.wakeSalience` (the stakes may raise it), when the standing agenda
+ * holds a pair or an insight the last agenda pass was not shown
+ * (`agenda-changed`; `agendaIds` in the state), or on the heartbeat
+ * (`integrate.heartbeatMs`) with `integrate.minItems` items pending; never
+ * closer than `INTEGRATE_MIN_GAP_MS` to the previous attempt, and only while
+ * `integrate.enabled`. O3: a pass told to defer questions (the operator is
+ * silent) keeps them (`deferredQuestions`) instead of sending them; the insight
+ * stays on the agenda, and `releaseQuestions` sends them when the operator
+ * writes.
  *
  * The model (Opus, through the instrumented client: budget reservation and
  * fleet breaker before the call, query log under `__watcher__`) sees the
@@ -65,6 +69,7 @@ import {
   type Neuron,
   type NeuronKind,
   OPERATOR_SOURCED,
+  type PassTrigger,
   type Vec3,
   type WatcherConfig,
   isOperatorSourced,
@@ -89,6 +94,9 @@ const AGENDA_KINDS = new Set<NeuronKind>([
   'surprise',
   'question',
 ]);
+/** Questions deferred while the operator is silent (O3), kept at most this many and this long. */
+export const DEFERRED_QUESTIONS_MAX = 10;
+export const DEFERRED_QUESTION_MAX_AGE_MS = 7 * 24 * 3_600_000;
 /** Pending items kept between passes (the most salient win). */
 const PENDING_MAX_ITEMS = 100;
 const PENDING_MAX_NEURONS = 200;
@@ -171,6 +179,28 @@ export interface IntegrateState {
   lastAgendaAt?: string;
   /** The `drivenBy` of the newest applied pass shown a "How I am" record (introspection reads it). */
   drivenBy?: string[];
+  /** O2: the standing-agenda ids the last applied agenda pass was shown; a new id makes the agenda changed. */
+  agendaIds?: string[];
+  /** O3: questions a pass kept back while the operator was silent (`releaseQuestions` sends them). */
+  deferredQuestions?: DeferredQuestion[];
+}
+
+/** O3: a question broadcast kept back while the operator is silent. */
+export interface DeferredQuestion {
+  insightId: string;
+  botId: string;
+  text: string;
+  /** The insight's text (the broadcast's `reason`). */
+  reason: string;
+  deferredAt: string;
+}
+
+/** O2/O3: what woke the pass and what the stakes ask of it. */
+export interface IntegrateRunOptions extends PassOptions {
+  /** The operator is silent: a question broadcast is kept back (`deferredQuestions`). */
+  deferQuestions?: boolean;
+  /** Fleet karma is falling: the prompt opens with "## Something is wrong". */
+  somethingWrong?: string;
 }
 
 export interface IntegrateDeps {
@@ -279,6 +309,22 @@ function clip(text: string, max: number): string {
 
 const uniq = <T>(xs: T[]): T[] => [...new Set(xs)];
 
+function deferredQuestion(r: Record<string, unknown>): DeferredQuestion[] {
+  const q = {
+    insightId: str(r.insightId),
+    botId: str(r.botId),
+    text: str(r.text),
+    reason: str(r.reason),
+    deferredAt: str(r.deferredAt),
+  };
+  return q.insightId && q.botId && q.text && q.deferredAt ? [q] : [];
+}
+
+const agendaIdsOf = (a: IntegrateAgenda): string[] => [
+  ...a.pairs.map((p) => p.id),
+  ...a.insights.map((n) => n.id),
+];
+
 function emptyState(): IntegrateState {
   return { attending: [], pending: { items: [], neurons: [], salience: 0 } };
 }
@@ -307,6 +353,10 @@ function readState(dir: string): IntegrateState {
       ...(Array.isArray(raw.agendaCovered) ? { agendaCovered: strList(raw.agendaCovered) } : {}),
       ...(typeof raw.lastAgendaAt === 'string' ? { lastAgendaAt: raw.lastAgendaAt } : {}),
       ...(Array.isArray(raw.drivenBy) ? { drivenBy: strList(raw.drivenBy) } : {}),
+      ...(Array.isArray(raw.agendaIds) ? { agendaIds: strList(raw.agendaIds) } : {}),
+      ...(Array.isArray(raw.deferredQuestions)
+        ? { deferredQuestions: objList(raw.deferredQuestions).flatMap(deferredQuestion) }
+        : {}),
     };
   } catch {
     return emptyState();
@@ -319,9 +369,10 @@ export class Integrator {
   private inFlightCancelled: () => boolean = () => false;
   private pausedLogged = false;
   private readonly bornAt: number;
-  /** When `due` last found the standing agenda empty (the scan reads the whole graph). */
-  private emptyAgendaAt: number | undefined;
-  /** The non-empty agenda `due` computed, for the pass it triggers (fresh for `INTEGRATE_MIN_GAP_MS`). */
+  /**
+   * The agenda `wake` scanned (the scan reads the whole graph): reused by
+   * `wake` and taken once by the pass while fresh (`INTEGRATE_MIN_GAP_MS`).
+   */
   private carriedAgenda: { agenda: IntegrateAgenda; at: number } | undefined;
 
   constructor(private readonly deps: IntegrateDeps) {
@@ -377,47 +428,55 @@ export class Integrator {
     }
   }
 
+  /** A pass is due when `wake` says why. */
   due(): boolean {
+    return this.wake() !== null;
+  }
+
+  /**
+   * Why a pass should run now (O2): `salience` (pending salience ≥
+   * `wakeSalience`, default `integrate.wakeSalience`), `agenda-changed` (the
+   * standing agenda holds an id the last agenda pass was not shown) or
+   * `heartbeat` (`heartbeatMs` since the last pass with `minItems` pending).
+   * Null within `INTEGRATE_MIN_GAP_MS` of the last attempt.
+   */
+  wake(opts: { wakeSalience?: number } = {}): Exclude<PassTrigger, 'age' | 'manual'> | null {
     const cfg = this.deps.config().integrate;
-    if (!cfg.enabled) return false;
+    if (!cfg.enabled) return null;
     const p = this.st.pending;
     const nowMs = this.deps.now();
     const attempt = this.st.lastAttemptAt ? Date.parse(this.st.lastAttemptAt) : undefined;
-    if (attempt !== undefined && nowMs - attempt < INTEGRATE_MIN_GAP_MS) return false;
+    if (attempt !== undefined && nowMs - attempt < INTEGRATE_MIN_GAP_MS) return null;
     const anyPending = p.items.length > 0 || p.neurons.length > 0;
-    if (anyPending && p.salience >= cfg.salienceBar) return true;
+    if (anyPending && p.salience >= (opts.wakeSalience ?? cfg.wakeSalience)) return 'salience';
+    // A quiet fleet still acts on cross-bot pairs and waiting insights, but
+    // only on news: an agenda the last agenda pass already saw never wakes one.
+    if (this.agendaChanged(this.scanAgenda(cfg.agendaMax ?? 0, nowMs))) return 'agenda-changed';
     const last = this.st.lastRunAt ? Date.parse(this.st.lastRunAt) : this.bornAt;
-    if (nowMs - last < cfg.heartbeatMs) return false;
     // The heartbeat waits for enough salient items: a pass on 1-3 events had
     // nothing to integrate (live, 2026-10-24).
-    if (p.items.length >= (cfg.minItems ?? 1)) return true;
-    // ...or acts on the standing agenda, which no event brings up: a quiet
-    // fleet would otherwise never act on cross-bot pairs or waiting insights.
-    // At most every `agendaEveryMs`, so a static agenda does not burn the cap.
-    if (!this.agendaPassAllowed(nowMs)) return false;
-    return this.agendaNonEmpty(cfg.agendaMax ?? 0, nowMs);
-  }
-
-  /** An agenda-only pass runs at most once per `integrate.agendaEveryMs`. */
-  private agendaPassAllowed(nowMs: number): boolean {
-    const every = this.deps.config().integrate.agendaEveryMs;
-    const last = this.st.lastAgendaAt ? Date.parse(this.st.lastAgendaAt) : undefined;
-    return last === undefined || !Number.isFinite(last) || nowMs - last >= every;
-  }
-
-  /** Whether the standing agenda has anything; an empty answer is reused for `INTEGRATE_MIN_GAP_MS`. */
-  private agendaNonEmpty(max: number, nowMs: number): boolean {
-    if (this.emptyAgendaAt !== undefined && nowMs - this.emptyAgendaAt < INTEGRATE_MIN_GAP_MS) {
-      return false;
+    if (nowMs - last >= cfg.heartbeatMs && p.items.length >= (cfg.minItems ?? 1)) {
+      return 'heartbeat';
     }
-    const agenda = this.standingAgenda(max, this.broadcastsByInsight());
-    const any = agenda.pairs.length > 0 || agenda.insights.length > 0;
-    this.emptyAgendaAt = any ? undefined : nowMs;
-    this.carriedAgenda = any ? { agenda, at: nowMs } : undefined;
-    return any;
+    return null;
   }
 
-  /** The agenda `due` carried when still fresh (taken once), else a new scan. */
+  /** True when `agenda` holds an id the last applied agenda pass was not shown. */
+  private agendaChanged(agenda: IntegrateAgenda): boolean {
+    const seen = new Set(this.st.agendaIds ?? []);
+    return agendaIdsOf(agenda).some((id) => !seen.has(id));
+  }
+
+  /** The standing agenda, scanned at most once per `INTEGRATE_MIN_GAP_MS` (kept for the pass). */
+  private scanAgenda(max: number, nowMs: number): IntegrateAgenda {
+    const carried = this.carriedAgenda;
+    if (carried && nowMs - carried.at < INTEGRATE_MIN_GAP_MS) return carried.agenda;
+    const agenda = this.standingAgenda(max, this.broadcastsByInsight());
+    this.carriedAgenda = { agenda, at: nowMs };
+    return agenda;
+  }
+
+  /** The agenda `wake` carried when still fresh (taken once), else a new scan. */
   private takeAgenda(
     max: number,
     sent: Map<string, IntegrateInsightBroadcast[]>,
@@ -429,14 +488,90 @@ export class Integrator {
     return this.standingAgenda(max, sent);
   }
 
+  /** O3: the questions kept back while the operator was silent, oldest first. */
+  deferredQuestions(): DeferredQuestion[] {
+    return (this.st.deferredQuestions ?? []).map((q) => ({ ...q }));
+  }
+
+  /**
+   * O3: send every deferred question now (the operator wrote). One the shared
+   * throttle defers again stays deferred; any other answer (delivered, failed,
+   * duplicate, capped, invalid) takes it off the list; older than
+   * `DEFERRED_QUESTION_MAX_AGE_MS` is dropped unsent. One row when anything
+   * was sent. Never throws.
+   */
+  async releaseQuestions(opts: PassOptions = {}): Promise<BroadcastResult[]> {
+    const bc = this.deps.broadcaster;
+    const queue = this.st.deferredQuestions ?? [];
+    if (!bc || queue.length === 0) return [];
+    const isCancelled = opts.isCancelled ?? (() => false);
+    const nowMs = this.deps.now();
+    const keep: DeferredQuestion[] = [];
+    const results: BroadcastResult[] = [];
+    const released: DeferredQuestion[] = [];
+    for (const q of queue) {
+      if (isCancelled()) {
+        keep.push(q);
+        continue;
+      }
+      const at = Date.parse(q.deferredAt);
+      if (!Number.isFinite(at) || nowMs - at > DEFERRED_QUESTION_MAX_AGE_MS) continue;
+      let result: BroadcastResult;
+      try {
+        result = await bc.send({
+          botId: q.botId,
+          kind: 'question',
+          text: q.text,
+          insightId: q.insightId,
+          reason: q.reason,
+          source: 'integrate',
+        });
+      } catch (err) {
+        this.deps.logger?.warn({ err }, 'Watcher integrate: a deferred question failed to send');
+        keep.push(q);
+        continue;
+      }
+      results.push(result);
+      if (result.status === 'deferred') keep.push(q);
+      else released.push(q);
+    }
+    // A pass may have deferred more meanwhile: keep those too.
+    const handled = new Set(queue);
+    const added = (this.st.deferredQuestions ?? []).filter((q) => !handled.has(q));
+    this.st.deferredQuestions = [...keep, ...added];
+    if (this.st.deferredQuestions.length === 0) this.st.deferredQuestions = undefined;
+    this.persist();
+    if (released.length && !isCancelled()) {
+      this.deps.log.say(
+        'integrate',
+        'integrate:question-released',
+        `The operator is back: I sent ${released.length} question${released.length === 1 ? '' : 's'} I had held while they were silent.`,
+        {
+          neuronIds: uniq(released.map((q) => q.insightId)),
+          drivenBy: ['operatorPresent'],
+          source: 'watcher:integrate',
+        }
+      );
+    }
+    return results;
+  }
+
+  /** O3: keep a question back (newest replaces the same insight and bot; capped). */
+  private deferQuestion(q: DeferredQuestion): void {
+    const rest = (this.st.deferredQuestions ?? []).filter(
+      (x) => !(x.insightId === q.insightId && x.botId === q.botId)
+    );
+    this.st.deferredQuestions = [...rest, q].slice(-DEFERRED_QUESTIONS_MAX);
+  }
+
   /**
    * One pass; a call while one runs shares it, unless that one's run was
    * cancelled (it writes nothing more, so a new run starts its own).
    */
-  run(opts: PassOptions = {}): Promise<IntegrateOutcome> {
+  run(opts: IntegrateRunOptions = {}): Promise<IntegrateOutcome> {
     if (this.inFlight && !this.inFlightCancelled()) return this.inFlight;
     const isCancelled = opts.isCancelled ?? (() => false);
-    const run: Promise<IntegrateOutcome> = this.pass(isCancelled)
+    const run: Promise<IntegrateOutcome> = this.pass(isCancelled, opts)
       .catch((err): IntegrateOutcome => {
         if (isCancelled()) return { status: 'cancelled' };
         this.deps.logger?.warn({ err }, 'Watcher integrate: pass failed');
@@ -456,23 +591,21 @@ export class Integrator {
    * before the state and the log: after a stop the state was persisted and the
    * graph compacted, so a write here would land after the sleep row.
    */
-  private async pass(isCancelled: () => boolean): Promise<IntegrateOutcome> {
+  private async pass(
+    isCancelled: () => boolean,
+    opts: IntegrateRunOptions = {}
+  ): Promise<IntegrateOutcome> {
     const { graph, log } = this.deps;
     const cfg = this.deps.config();
     if (!cfg.integrate.enabled) return { status: 'idle' };
     const pending = this.st.pending;
     const nothingPending = pending.items.length === 0 && pending.neurons.length === 0;
-    // Nothing pending: only the agenda can justify a pass, and at most once
-    // per `agendaEveryMs` (also when `run` is called directly); checked before
-    // the agenda scan, which reads the whole graph.
-    if (nothingPending && !this.agendaPassAllowed(this.deps.now())) {
-      this.carriedAgenda = undefined;
-      return { status: 'idle' };
-    }
     const sentByInsight = this.broadcastsByInsight();
     const agenda = this.takeAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight, this.deps.now());
     const hasAgenda = agenda.pairs.length > 0 || agenda.insights.length > 0;
-    if (nothingPending && !hasAgenda) return { status: 'idle' };
+    // Nothing pending: only news on the agenda justifies a pass (also when
+    // `run` is called directly); an agenda the last pass saw is idle.
+    if (nothingPending && !this.agendaChanged(agenda)) return { status: 'idle' };
     if (isCancelled()) return { status: 'cancelled' };
 
     // Snapshot what this pass reads: anything observed meanwhile stays pending.
@@ -536,6 +669,7 @@ export class Integrator {
       ...(agenda.pairs.length || agenda.insights.length ? { agenda } : {}),
       ...(interoception ? { interoception } : {}),
       ...(attention ? { attention } : {}),
+      ...(opts.somethingWrong ? { somethingWrong: opts.somethingWrong } : {}),
     };
     const shown = new Map<string, Neuron>();
     const agendaNeurons = [...agenda.pairs.flatMap((p) => [p.a, p.b]), ...agenda.insights];
@@ -639,11 +773,17 @@ export class Integrator {
     this.st.attendingAt = nowIso;
     this.st.lastRunAt = nowIso;
     const shownVariables = new Set(Object.keys(interoception ?? {}));
-    const drivenBy = uniq(out.drivenBy.filter((k) => shownVariables.has(k)));
-    if (shownVariables.size) this.st.drivenBy = drivenBy;
-    // Only a pass that applied an answer uses up the agenda slot: a refused,
+    // The model's "How I am" variables, plus the stakes rules that shaped the
+    // pass (O3): introspection reads both as what drove it.
+    const stakesDrove = uniq(opts.drivenBy ?? []);
+    const drivenBy = uniq([...out.drivenBy.filter((k) => shownVariables.has(k)), ...stakesDrove]);
+    if (shownVariables.size || stakesDrove.length) this.st.drivenBy = drivenBy;
+    // Only a pass that applied an answer uses up the agenda change: a refused,
     // failed, unparsable or cancelled one leaves the agenda due again.
-    if (hasAgenda) this.st.lastAgendaAt = nowIso;
+    if (hasAgenda) {
+      this.st.lastAgendaAt = nowIso;
+      this.st.agendaIds = agendaIdsOf(agenda);
+    }
     // An agenda insight is retired only once it acted: a delivered broadcast
     // (after the sends below) or a `whyNoBroadcast`. Covered but capped,
     // deferred, failed or never sent leaves it on the agenda for a retry.
@@ -717,12 +857,38 @@ export class Integrator {
       );
       if (this.retireAgenda(acted)) this.persist();
     };
+    let deferred = 0;
     for (const b of out.broadcasts) {
       const insight = sendable(b);
       if (!insight || !this.deps.broadcaster) continue;
       if (isCancelled()) {
         retireActed();
         return { status: 'cancelled' };
+      }
+      // O3: the operator is silent, so a question would go unanswered. It is
+      // kept (sent when they write) and the insight stays on the agenda: no
+      // delivery and no `whyNoBroadcast` on the neuron, so it is not retired.
+      if (b.kind === 'question' && opts.deferQuestions) {
+        this.deferQuestion({
+          insightId: insight.id,
+          botId: b.bot,
+          text: clip(b.text, 500),
+          reason: insight.text,
+          deferredAt: nowIso,
+        });
+        deferred++;
+        log.say(
+          'integrate',
+          'integrate:question-deferred',
+          `The operator has been silent, so I am holding my question to ${this.deps.botName?.(b.bot) ?? b.bot} until they write: "${clip(b.text, 120)}".`,
+          {
+            neuronIds: [insight.id],
+            whyNoBroadcast: 'operator silent',
+            drivenBy: ['operatorSilence'],
+            source: 'watcher:integrate',
+          }
+        );
+        continue;
       }
       const result = await this.deps.broadcaster.send({
         botId: b.bot,
@@ -736,6 +902,7 @@ export class Integrator {
       if (result.status === 'delivered') deliveredFor.add(insight.id);
     }
     retireActed();
+    if (deferred) this.persist();
 
     if (isCancelled()) return { status: 'cancelled' };
 
@@ -754,7 +921,8 @@ export class Integrator {
       {
         ...cost,
         ...(createdIds.length ? { neuronIds: createdIds } : {}),
-        ...(shownVariables.size ? { drivenBy } : {}),
+        ...(shownVariables.size || stakesDrove.length ? { drivenBy } : {}),
+        trigger: opts.trigger ?? 'manual',
       }
     );
     return {

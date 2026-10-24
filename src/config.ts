@@ -876,25 +876,33 @@ export const WatcherConfigSchema = z
         enabled: z.boolean().default(false),
         backend: z.enum(['claude-cli', 'ollama']).default('claude-cli'),
         model: z.string().default('claude-haiku-5-5'),
+        /** Deprecated (O2, 2026-10-24): passes wake on salience or `maxWaitMs`; kept so live configs validate. */
         everyMs: z.number().int().min(10_000).default(300_000),
         salienceBar: z.number().min(0).default(0.4),
         maxPerDay: z.number().int().min(0).default(288),
+        /** A pass wakes when the salient items waiting add up to this (an operator message wakes it at once). */
+        wakeSalience: z.number().min(0).default(1.0),
+        /** ...or when the oldest salient item has waited this long (the ceiling). */
+        maxWaitMs: z.number().int().min(60_000).default(1_800_000),
       })
       .default({}),
     integrate: z
       .object({
         enabled: z.boolean().default(false),
         model: z.string().default('claude-opus-5-5'),
+        /** Deprecated (O2, 2026-10-24): `wakeSalience` decides; kept so live configs validate. */
         salienceBar: z.number().min(0).default(2.0),
         heartbeatMs: z.number().int().min(60_000).default(3_600_000),
         /** The heartbeat runs a pass only with at least this many salient items pending. */
         minItems: z.number().int().min(1).default(5),
         /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
         agendaMax: z.number().int().min(0).default(8),
-        /** A heartbeat pass with only the standing agenda to act on runs at most this often. */
+        /** Deprecated (O2, 2026-10-24): an agenda pass runs when the agenda changes; kept so live configs validate. */
         agendaEveryMs: z.number().int().min(60_000).default(21_600_000),
         maxPerDay: z.number().int().min(0).default(24),
         maxTokensPerDay: z.number().int().min(0).default(600_000),
+        /** A pass wakes when the salience pending since the last one adds up to this. */
+        wakeSalience: z.number().min(0).default(3.0),
       })
       .default({}),
     graph: z

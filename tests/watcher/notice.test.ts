@@ -11,7 +11,6 @@ import { Graph } from '../../src/watcher/graph';
 import { instrumented } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
 import {
-  NOTICE_EARLY_FACTOR,
   NOTICE_MIN_GAP_MS,
   Noticer,
   noticeItems,
@@ -475,28 +474,68 @@ describe('Noticer.run', () => {
   });
 });
 
-describe('Noticer.due', () => {
-  test('waits everyMs after construction, then is due', () => {
-    const s = setup({ cfg: { everyMs: 300_000 } });
-    s.buffer.push(item(toolError('b1')));
-    expect(s.noticer.due()).toBe(false);
+// Changed deliberately on 2026-10-24 (O2, docs/plans/watcher-optimizations-plan.md):
+// the pass used to be due every `notice.everyMs` (5 min) with anything
+// salient, or early at NOTICE_EARLY_FACTOR × the bar. It now wakes on
+// salience (`notice.wakeSalience`, an operator message at once) or when the
+// oldest salient item waited `notice.maxWaitMs`; the 5-min cadence is gone.
+describe('Noticer.wake / due', () => {
+  test('one salient item waits for the age ceiling, not a 5-min cadence', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.5));
     t += 300_000;
+    expect(s.noticer.wake()).toBeNull();
+    expect(s.noticer.due()).toBe(false);
+    t += WATCHER_DEFAULTS.notice.maxWaitMs - 300_000;
+    expect(s.noticer.wake()).toBe('age');
     expect(s.noticer.due()).toBe(true);
   });
 
-  test('is due early when salient items pile up, but never within the minimum gap', () => {
-    const s = setup({ cfg: { everyMs: 300_000, salienceBar: 0.4 } });
-    const needed = Math.ceil((NOTICE_EARLY_FACTOR * 0.4) / 0.9) + 1;
-    for (let i = 0; i < needed; i++) s.buffer.push(item(toolError('b1'), 0.9));
-    expect(s.noticer.due()).toBe(false);
+  test('salience adding up to wakeSalience wakes it, but never within the minimum gap', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.5));
+    s.buffer.push(item(toolError('b2'), 0.5));
+    expect(s.noticer.wake()).toBeNull();
     t += NOTICE_MIN_GAP_MS;
-    expect(s.noticer.due()).toBe(true);
+    expect(s.noticer.wake()).toBe('salience');
+  });
+
+  test('an operator message wakes it after the minimum gap, whatever wakeSalience says', () => {
+    const s = setup({ cfg: { wakeSalience: 50 } });
+    s.buffer.push(item(operatorSays('b1', 'drop the Acme lead'), 0.7, { fromOperator: true }));
+    t += NOTICE_MIN_GAP_MS;
+    expect(s.noticer.wake()).toBe('salience');
+  });
+
+  test('a raised wake line (the stakes) is honoured', () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1'), 0.6));
+    s.buffer.push(item(toolError('b2'), 0.6));
+    t += NOTICE_MIN_GAP_MS;
+    expect(s.noticer.wake()).toBe('salience');
+    expect(s.noticer.wake({ wakeSalience: 2 })).toBeNull();
   });
 
   test('is never due with nothing salient', () => {
     const s = setup();
     t += 10 * 300_000;
     expect(s.noticer.due()).toBe(false);
+  });
+
+  test('the pass row records the trigger and the stakes that drove it', async () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1')));
+    await s.noticer.run({ trigger: 'age', drivenBy: ['noticeBudgetPressure'] });
+    const row = s.rows.find((r) => r.op === 'notice:pass');
+    expect(row?.trigger).toBe('age');
+    expect(row?.drivenBy).toEqual(['noticeBudgetPressure']);
+  });
+
+  test('a pass without a trigger is manual', async () => {
+    const s = setup();
+    s.buffer.push(item(toolError('b1')));
+    await s.noticer.run();
+    expect(s.rows.find((r) => r.op === 'notice:pass')?.trigger).toBe('manual');
   });
 });
 

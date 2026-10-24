@@ -14,6 +14,12 @@
  * and the queue is sensed in one batch on the next macrotask (`defer`), so a
  * bot's `ActivityStream.publish` costs a push. `flush()` senses the queue at
  * once (the watcher calls it before reading the buffer and on stop).
+ *
+ * O2 (salience-driven ticks): after a batch, `onCrossed` fires when what the
+ * buffer holds for notice crosses the wake line (`noticeWake`: salient items
+ * adding up to `notice.wakeSalience`, or an operator message / an item at
+ * `NOTICE_URGENT_SALIENCE`). The watcher then asks the noticer, which adds the
+ * minimum gap and the age ceiling (`notice.maxWaitMs`).
  */
 import { randomBytes } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
@@ -30,11 +36,54 @@ import { describeEvent, narrateNoticed, narrateSenseSummary } from './narration'
 import { REPEAT_WINDOW_MS, privateView, repeatKey, scoreEvent, withoutNovelty } from './salience';
 import {
   type BufferItem,
+  type PassTrigger,
   type SensedEvent,
   type WatcherConfig,
   type WatcherLogRow,
   isHumanInbound,
 } from './types';
+
+/** An item at least this salient wakes notice on its own (O2). */
+export const NOTICE_URGENT_SALIENCE = 0.9;
+
+export interface NoticeWakeInput {
+  items: ReadonlyArray<Pick<BufferItem, 'salience' | 'noticedAt' | 'fromOperator'>>;
+  /** `notice.salienceBar`: what notice shows (and so what counts). */
+  bar: number;
+  /** `notice.wakeSalience`, possibly raised by the stakes (budget pressure). */
+  wakeSalience: number;
+  /** `notice.maxWaitMs`. */
+  maxWaitMs: number;
+  nowMs: number;
+  /** The last notice pass: the wait counts from the later of it and the item. */
+  sinceMs?: number;
+}
+
+/**
+ * Whether notice should wake, and why (O2): an operator message or an urgent
+ * item → `salience`; the salient items adding up to `wakeSalience` →
+ * `salience`; the oldest salient item waiting `maxWaitMs` (since it arrived or
+ * the last pass, whichever is later) → `age`. Null otherwise. Pure.
+ */
+export function noticeWake(
+  input: NoticeWakeInput
+): Extract<PassTrigger, 'salience' | 'age'> | null {
+  const salient = input.items.filter((i) => Number.isFinite(i.salience) && i.salience >= input.bar);
+  if (salient.length === 0) return null;
+  if (salient.some((i) => i.fromOperator === true || i.salience >= NOTICE_URGENT_SALIENCE)) {
+    return 'salience';
+  }
+  const sum = salient.reduce((s, i) => s + i.salience, 0);
+  if (sum >= input.wakeSalience) return 'salience';
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const i of salient) {
+    const at = Date.parse(i.noticedAt);
+    if (Number.isFinite(at) && at < oldest) oldest = at;
+  }
+  if (!Number.isFinite(oldest)) return null;
+  const waitingSince = Math.max(oldest, input.sinceMs ?? oldest);
+  return input.nowMs - waitingSince >= input.maxWaitMs ? 'age' : null;
+}
 
 /** The watcher's own pseudo bot id; its events are never sensed back. */
 export const WATCHER_BOT_ID = '__watcher__';
@@ -77,6 +126,10 @@ export interface SenseDeps {
   defer?: (fn: () => void) => void;
   /** After each batch that sensed anything, with the number of events in it. */
   onBatch?: (events: number) => void;
+  /** O2 `salience:crossed`: after a batch, when the buffer crosses the notice wake line. */
+  onCrossed?: (trigger: Extract<PassTrigger, 'salience'>) => void;
+  /** The wake line `onCrossed` uses (default `notice.wakeSalience`; the stakes may raise it). */
+  wakeSalience?: () => number;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -302,6 +355,26 @@ export class Sense {
     } catch (err) {
       this.deps.logger?.warn({ err }, 'Watcher sense: a batch listener threw');
     }
+    if (!this.deps.onCrossed) return;
+    try {
+      if (this.crossed()) this.deps.onCrossed('salience');
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher sense: a crossing listener threw');
+    }
+  }
+
+  /** True when the buffer crosses the notice wake line by salience (`noticeWake`, no age). */
+  crossed(): boolean {
+    const cfg = this.deps.config().notice;
+    return (
+      noticeWake({
+        items: this.deps.buffer.items(),
+        bar: cfg.salienceBar,
+        wakeSalience: this.deps.wakeSalience?.() ?? cfg.wakeSalience,
+        maxWaitMs: cfg.maxWaitMs,
+        nowMs: this.deps.now(),
+      }) === 'salience'
+    );
   }
 
   private enqueue(

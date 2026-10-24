@@ -126,7 +126,7 @@ function setup(opts: Setup = {}) {
   const config: WatcherConfig = {
     ...WATCHER_DEFAULTS,
     enabled: true,
-    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, salienceBar: 1, ...opts.cfg },
+    integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true, wakeSalience: 1, ...opts.cfg },
   };
   const delivered: string[] = [];
   const broadcaster = new Broadcaster({
@@ -265,7 +265,7 @@ describe('Integrator.due', () => {
   // on 1-3 events produced nothing live, so the heartbeat now waits for
   // `integrate.minItems` salient items.
   test('the heartbeat makes a pass due only with integrate.minItems salient items pending', () => {
-    const s = setup({ cfg: { heartbeatMs: 3_600_000, salienceBar: 100, minItems: 3 } });
+    const s = setup({ cfg: { heartbeatMs: 3_600_000, wakeSalience: 100, minItems: 3 } });
     s.integrator.observeNotice({ status: 'noticed', created: [s.n.leadA], recognised: [] });
     s.integrator.observe(item(cycleDone('b1'), 0.2));
     s.integrator.observe(item(cycleDone('b2'), 0.2));
