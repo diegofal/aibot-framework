@@ -239,6 +239,8 @@ describe('parseIntegrateOutput', () => {
       broadcasts: [],
       attending: [],
       drivenBy: [],
+      agendaCovered: [],
+      noBroadcast: [],
     });
   });
 });
@@ -259,12 +261,23 @@ describe('Integrator.due', () => {
     expect(s.integrator.due()).toBe(true);
   });
 
-  test('the heartbeat makes a pass due with anything pending', () => {
-    const s = setup({ cfg: { heartbeatMs: 3_600_000 } });
+  // Changed on 2026-10-24 (was "due with anything pending"): heartbeat passes
+  // on 1-3 events produced nothing live, so the heartbeat now waits for
+  // `integrate.minItems` salient items.
+  test('the heartbeat makes a pass due only with integrate.minItems salient items pending', () => {
+    const s = setup({ cfg: { heartbeatMs: 3_600_000, salienceBar: 100, minItems: 3 } });
     s.integrator.observeNotice({ status: 'noticed', created: [s.n.leadA], recognised: [] });
-    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(cycleDone('b1'), 0.2));
+    s.integrator.observe(item(cycleDone('b2'), 0.2));
     t += 3_600_000;
+    expect(s.integrator.due()).toBe(false);
+    s.integrator.observe(item(cycleDone('b1'), 0.2));
     expect(s.integrator.due()).toBe(true);
+  });
+
+  test('minItems defaults to 5 and agendaMax to 8', () => {
+    expect(WATCHER_DEFAULTS.integrate.minItems).toBe(5);
+    expect(WATCHER_DEFAULTS.integrate.agendaMax).toBe(8);
   });
 
   test('never two attempts closer than the minimum gap', async () => {

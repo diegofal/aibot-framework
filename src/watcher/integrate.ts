@@ -38,6 +38,7 @@ import {
   narrateIntegrateContradiction,
   narrateIntegrateFailed,
   narrateIntegrateInsight,
+  narrateIntegrateNoBroadcast,
   narrateIntegratePass,
   narrateIntegratePaused,
   narrateIntegratePrediction,
@@ -47,6 +48,9 @@ import {
 import { type NoticeOutcome, type PassOptions, earliestEventAt, noticeItems } from './notice';
 import {
   BROADCAST_KINDS,
+  type IntegrateAgenda,
+  type IntegrateAgendaPair,
+  type IntegrateInsightBroadcast,
   type IntegratePredictionRow,
   type IntegratePromptInput,
   buildIntegratePrompt,
@@ -71,6 +75,17 @@ export const INTEGRATE_NEIGHBOURHOOD_MAX = 80;
 export const INTEGRATE_LAST_INSIGHTS = 10;
 export const INTEGRATE_LAST_PREDICTIONS = 10;
 const INTEGRATE_MAX_GOALS = 40;
+/** Agenda ids the model said it addressed, kept between passes (newest win). */
+const AGENDA_COVERED_MAX = 500;
+/** Neuron kinds a standing-agenda pair is made of (not bots, people, or the watcher's own thoughts). */
+const AGENDA_KINDS = new Set<NeuronKind>([
+  'fact',
+  'topic',
+  'goal',
+  'pattern',
+  'surprise',
+  'question',
+]);
 /** Pending items kept between passes (the most salient win). */
 const PENDING_MAX_ITEMS = 100;
 const PENDING_MAX_NEURONS = 200;
@@ -86,6 +101,8 @@ export interface IntegrateInsightOut {
   text: string;
   support: string[];
   confidence?: string;
+  /** One line: why this insight calls for no broadcast. */
+  whyNoBroadcast?: string;
 }
 export interface IntegrateContradictionOut {
   a: string;
@@ -105,6 +122,8 @@ export interface IntegrateBroadcastOut {
   kind: string;
   text: string;
   insightIndex: number;
+  /** An insight already in the graph and shown in the prompt (instead of `insightIndex`). */
+  insightId?: string;
 }
 export interface IntegrateOutput {
   insights: IntegrateInsightOut[];
@@ -114,6 +133,10 @@ export interface IntegrateOutput {
   attending: string[];
   /** Phase 4: which "How I am" variables the model says shaped this pass. */
   drivenBy: string[];
+  /** Standing-agenda ids (edge or insight) the model addressed: no longer shown. */
+  agendaCovered: string[];
+  /** Shown insights the model decided not to broadcast, with its one line why. */
+  noBroadcast: Array<{ insightId: string; why: string }>;
 }
 
 export type IntegrateOutcome =
@@ -139,6 +162,8 @@ export interface IntegrateState {
   attending: string[];
   attendingAt?: string;
   pending: { items: BufferItem[]; neurons: string[]; salience: number };
+  /** Standing-agenda ids a pass addressed (`agendaCovered`); never shown again. */
+  agendaCovered?: string[];
 }
 
 export interface IntegrateDeps {
@@ -152,7 +177,9 @@ export interface IntegrateDeps {
   /** Bots a broadcast may target (enabled bots of the config). */
   bots: () => Array<{ id: string; name: string }>;
   botName?: (botId: string) => string;
-  broadcaster?: Pick<Broadcaster, 'send'>;
+  /** `list`, `countToday` and `cap` (optional for older fakes) feed the prompt's caps and per-insight history. */
+  broadcaster?: Pick<Broadcaster, 'send'> &
+    Partial<Pick<Broadcaster, 'list' | 'countToday' | 'cap'>>;
   embed?: (text: string) => Promise<number[]>;
   /** Phase 4: the interoceptive record for "## How I am"; absent until then. */
   interoception?: () => Record<string, unknown>;
@@ -183,16 +210,27 @@ export function parseIntegrateOutput(
   return parseLLMJson<IntegrateOutput>(text ?? '', warnOnly as never, {
     label: 'watcher integrate',
     extractPattern:
-      /\{[\s\S]*"(insights|contradictions|predictions|broadcasts|attending)"[\s\S]*\}/,
+      /\{[\s\S]*"(insights|contradictions|predictions|broadcasts|attending|noBroadcast|agendaCovered)"[\s\S]*\}/,
     validate: (raw) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-      const known = ['insights', 'contradictions', 'predictions', 'broadcasts', 'attending'];
+      const known = [
+        'insights',
+        'contradictions',
+        'predictions',
+        'broadcasts',
+        'attending',
+        'noBroadcast',
+        'agendaCovered',
+      ];
       if (!known.some((k) => k in raw)) return null;
       return {
         insights: objList(raw.insights).map((i) => ({
           text: str(i.text),
           support: strList(i.support),
           ...(typeof i.confidence === 'string' ? { confidence: i.confidence } : {}),
+          ...(typeof i.whyNoBroadcast === 'string' && i.whyNoBroadcast.trim()
+            ? { whyNoBroadcast: i.whyNoBroadcast }
+            : {}),
         })),
         contradictions: objList(raw.contradictions).map((c) => ({
           a: str(c.a),
@@ -212,9 +250,14 @@ export function parseIntegrateOutput(
           kind: str(b.kind),
           text: str(b.text),
           insightIndex: typeof b.insightIndex === 'number' ? b.insightIndex : -1,
+          ...(typeof b.insightId === 'string' && b.insightId ? { insightId: b.insightId } : {}),
         })),
         attending: strList(raw.attending),
         drivenBy: strList(raw.drivenBy),
+        agendaCovered: strList(raw.agendaCovered),
+        noBroadcast: objList(raw.noBroadcast)
+          .map((x) => ({ insightId: str(x.insightId), why: str(x.why).trim() }))
+          .filter((x) => x.insightId && x.why),
       };
     },
   });
@@ -254,6 +297,7 @@ function readState(dir: string): IntegrateState {
         neurons: strList(p.neurons),
         salience: typeof p.salience === 'number' && Number.isFinite(p.salience) ? p.salience : 0,
       },
+      ...(Array.isArray(raw.agendaCovered) ? { agendaCovered: strList(raw.agendaCovered) } : {}),
     };
   } catch {
     return emptyState();
@@ -324,6 +368,9 @@ export class Integrator {
     const attempt = this.st.lastAttemptAt ? Date.parse(this.st.lastAttemptAt) : undefined;
     if (attempt !== undefined && nowMs - attempt < INTEGRATE_MIN_GAP_MS) return false;
     if (p.salience >= cfg.salienceBar) return true;
+    // The heartbeat waits for enough salient items: a pass on 1-3 events had
+    // nothing to integrate (live, 2026-10-24).
+    if (p.items.length < (cfg.minItems ?? 1)) return false;
     const last = this.st.lastRunAt ? Date.parse(this.st.lastRunAt) : this.bornAt;
     return nowMs - last >= cfg.heartbeatMs;
   }
@@ -394,6 +441,10 @@ export class Integrator {
     const insights = this.latest('insight', INTEGRATE_LAST_INSIGHTS);
     const predictions = this.latest('prediction', INTEGRATE_LAST_PREDICTIONS);
     const bots = this.deps.bots();
+    const sentByInsight = this.broadcastsByInsight();
+    const agenda = this.standingAgenda(cfg.integrate.agendaMax ?? 0, sentByInsight);
+    const bc = this.deps.broadcaster;
+    const cap = bc?.countToday ? bc.cap : undefined;
     const interoception = this.readSelf(() => this.deps.interoception?.());
     const attention = this.readSelf(() => this.deps.attention?.());
 
@@ -407,14 +458,36 @@ export class Integrator {
       }),
       insights,
       predictions: predictions.map(predictionRow),
-      bots,
+      bots: bots.map((b) => ({
+        ...b,
+        ...(cap !== undefined ? { broadcastsToday: this.countToday(b.id) } : {}),
+      })),
+      ...(cap !== undefined ? { broadcastCap: cap } : {}),
+      insightBroadcasts: Object.fromEntries(
+        insights
+          .map((n) => [n.id, sentByInsight.get(n.id) ?? []] as const)
+          .filter(([, v]) => v.length > 0)
+      ),
+      ...(agenda.pairs.length || agenda.insights.length ? { agenda } : {}),
       ...(interoception ? { interoception } : {}),
       ...(attention ? { attention } : {}),
     };
     const shown = new Map<string, Neuron>();
-    for (const n of [...fresh, ...neighbourhood, ...goals, ...insights, ...predictions]) {
+    const agendaNeurons = [...agenda.pairs.flatMap((p) => [p.a, p.b]), ...agenda.insights];
+    for (const n of [
+      ...fresh,
+      ...neighbourhood,
+      ...goals,
+      ...insights,
+      ...predictions,
+      ...agendaNeurons,
+    ]) {
       shown.set(n.id, n);
     }
+    const agendaIds = new Set([
+      ...agenda.pairs.map((p) => p.id),
+      ...agenda.insights.map((n) => n.id),
+    ]);
     // Same rule as notice: any event that is not a non-operator human message
     // (bot activity is operator material) marks what the pass creates.
     const sawOperator =
@@ -454,9 +527,10 @@ export class Integrator {
     };
     const insightByIndex: Array<Neuron | undefined> = [];
     const createdInsights: Neuron[] = [];
-    for (const i of out.insights) {
+    for (const [index, i] of out.insights.entries()) {
       if (isCancelled()) return { status: 'cancelled' };
-      const r = await this.insight(i, ctx, isCancelled);
+      const proposed = out.broadcasts.some((b) => b.insightIndex === index && !b.insightId);
+      const r = await this.insight(i, ctx, isCancelled, { proposed, bots });
       if (isCancelled()) return { status: 'cancelled' };
       insightByIndex.push(r?.neuron);
       if (r?.created) createdInsights.push(r.neuron);
@@ -483,6 +557,12 @@ export class Integrator {
     this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
     this.st.attendingAt = nowIso;
     this.st.lastRunAt = nowIso;
+    const covered = out.agendaCovered.filter((id) => agendaIds.has(id));
+    if (covered.length) {
+      this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...covered]).slice(
+        -AGENDA_COVERED_MAX
+      );
+    }
     const readIds = new Set(readItems.map((i) => i.id));
     const readNeuronIds = new Set(readNeurons);
     this.st.pending = {
@@ -494,8 +574,24 @@ export class Integrator {
 
     const broadcasts: BroadcastResult[] = [];
     const botIds = new Set(bots.map((b) => b.id));
+    const shownInsight = (id: string | undefined) => {
+      const n = id ? (shown.get(id) ?? insightByIndex.find((x) => x?.id === id)) : undefined;
+      return n?.kind === 'insight' ? n : undefined;
+    };
+    for (const nb of out.noBroadcast) {
+      const insight = shownInsight(nb.insightId);
+      if (!insight) continue;
+      const why = clip(nb.why, 200);
+      graph.patchMeta(insight.id, { whyNoBroadcast: why });
+      log.say(
+        'integrate',
+        'integrate:no-broadcast',
+        narrateIntegrateNoBroadcast({ insight: insight.text, why }),
+        { neuronIds: [insight.id], whyNoBroadcast: why, source: 'watcher:integrate' }
+      );
+    }
     for (const b of out.broadcasts) {
-      const insight = insightByIndex[b.insightIndex];
+      const insight = b.insightId ? shownInsight(b.insightId) : insightByIndex[b.insightIndex];
       if (
         !insight ||
         !botIds.has(b.bot) ||
@@ -613,6 +709,89 @@ export class Integrator {
     return out;
   }
 
+  private countToday(botId: string): number {
+    try {
+      return this.deps.broadcaster?.countToday?.(botId) ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** What each insight already broadcast (bot name, kind, status); empty without a broadcaster list. */
+  private broadcastsByInsight(): Map<string, IntegrateInsightBroadcast[]> {
+    const out = new Map<string, IntegrateInsightBroadcast[]>();
+    let all: ReturnType<NonNullable<Broadcaster['list']>> = [];
+    try {
+      all = this.deps.broadcaster?.list?.() ?? [];
+    } catch (err) {
+      this.deps.logger?.warn({ err }, 'Watcher integrate: could not read the broadcasts');
+    }
+    const botName = this.deps.botName ?? ((id: string) => id);
+    for (const b of all) {
+      const status: IntegrateInsightBroadcast['status'] = b.deliveredAt
+        ? 'delivered'
+        : b.deferred
+          ? 'deferred'
+          : b.deliveryError !== undefined
+            ? 'failed'
+            : 'in flight';
+      const list = out.get(b.insightId) ?? [];
+      list.push({ bot: botName(b.botId), kind: b.kind, status });
+      out.set(b.insightId, list);
+    }
+    return out;
+  }
+
+  /**
+   * Knowledge no event brings up: the strongest cross-bot `related` pairs no
+   * insight stands on yet (both ends cited by one insight, edge `caused`),
+   * and insights at medium confidence or more with no delivered or in-flight
+   * broadcast and no `whyNoBroadcast`. What a pass said it covered
+   * (`agendaCovered`) never comes back. At most `max` of each.
+   */
+  private standingAgenda(
+    max: number,
+    sent: Map<string, IntegrateInsightBroadcast[]>
+  ): IntegrateAgenda {
+    if (max <= 0) return { pairs: [], insights: [] };
+    const { graph } = this.deps;
+    const covered = new Set(this.st.agendaCovered ?? []);
+    const live = (n: Neuron | undefined): n is Neuron => !!n && !n.archivedAt;
+    const insightsOf = (id: string) =>
+      new Set(
+        graph
+          .edgesOf(id)
+          .filter((e) => e.rel === 'caused' && e.from === id)
+          .map((e) => e.to)
+      );
+    const pairs: IntegrateAgendaPair[] = [];
+    const insights: Neuron[] = [];
+    for (const n of graph.list()) {
+      if (!live(n)) continue;
+      if (n.kind === 'insight') {
+        if (covered.has(n.id) || n.meta?.whyNoBroadcast) continue;
+        if (n.confidence !== 'medium' && n.confidence !== 'high') continue;
+        const acted = (sent.get(n.id) ?? []).some(
+          (b) => b.status === 'delivered' || b.status === 'in flight'
+        );
+        if (!acted) insights.push(n);
+        continue;
+      }
+      if (!AGENDA_KINDS.has(n.kind)) continue;
+      for (const e of graph.edgesOf(n.id)) {
+        if (e.rel !== 'related' || e.from !== n.id || covered.has(e.id)) continue;
+        const m = graph.get(e.to);
+        if (!live(m) || !AGENDA_KINDS.has(m.kind) || !crossBot(n, m)) continue;
+        const onA = insightsOf(n.id);
+        if ([...insightsOf(m.id)].some((id) => onA.has(id))) continue;
+        pairs.push({ id: e.id, weight: e.weight, a: n, b: m });
+      }
+    }
+    pairs.sort((x, y) => y.weight - x.weight);
+    insights.sort((x, y) => y.createdAt.localeCompare(x.createdAt));
+    return { pairs: pairs.slice(0, max), insights: insights.slice(0, max) };
+  }
+
   private latest(kind: NeuronKind, n: number): Neuron[] {
     return this.deps.graph
       .list()
@@ -657,7 +836,11 @@ export class Integrator {
   private async insight(
     i: IntegrateInsightOut,
     ctx: ApplyCtx,
-    isCancelled: () => boolean
+    isCancelled: () => boolean,
+    act: { proposed: boolean; bots: Array<{ id: string; name: string }> } = {
+      proposed: false,
+      bots: [],
+    }
   ): Promise<{ neuron: Neuron; created: boolean } | null> {
     const { graph, log } = this.deps;
     const text = clip(i.text, MAX_TEXT);
@@ -670,13 +853,19 @@ export class Integrator {
     const same = graph
       .findSimilarText(text, INTEGRATE_DEDUPE_TEXT)
       .find((n) => n.kind === 'insight');
+    const why = i.whyNoBroadcast ? clip(i.whyNoBroadcast, 200) : undefined;
     if (same) {
       const active = graph.activate(same.id) ?? same;
+      if (why) graph.patchMeta(active.id, { whyNoBroadcast: why });
       log.say(
         'integrate',
         'integrate:recognised',
         narrateNoticeRecognised({ text: active.text, activations: active.activations }),
-        { neuronIds: [active.id], source: 'watcher:integrate' }
+        {
+          neuronIds: [active.id],
+          source: 'watcher:integrate',
+          ...(why && !act.proposed ? { whyNoBroadcast: why } : {}),
+        }
       );
       return { neuron: active, created: false };
     }
@@ -699,7 +888,10 @@ export class Integrator {
       activations: 1,
       ...(isConfidence(i.confidence) ? { confidence: i.confidence } : {}),
       pos: this.place(text, 'insight', support),
-      meta: this.meta(ctx, support, { supportNeurons: support.map((n) => n.id).join(',') }),
+      meta: this.meta(ctx, support, {
+        supportNeurons: support.map((n) => n.id).join(','),
+        ...(why && !act.proposed ? { whyNoBroadcast: why } : {}),
+      }),
     });
     if (vec) graph.setEmbedding(neuron.id, vec);
     const edgeIds = support.map(
@@ -713,6 +905,10 @@ export class Integrator {
         }).id
     );
     const botName = this.deps.botName ?? ((id: string) => id);
+    // An insight that should act names a broadcast or says why not; the row
+    // shows which, so the operator can read the reasoning.
+    const reasonMissing = !act.proposed && !why && insightNeedsBroadcast(neuron, act.bots);
+    const noBroadcastWhy = !act.proposed ? why : undefined;
     log.say(
       'integrate',
       'integrate:insight',
@@ -720,8 +916,17 @@ export class Integrator {
         text,
         ...(neuron.confidence ? { confidence: neuron.confidence } : {}),
         bots: neuron.support.bots.map(botName),
+        ...(noBroadcastWhy ? { whyNoBroadcast: noBroadcastWhy } : {}),
+        ...(reasonMissing ? { reasonMissing: true } : {}),
       }),
-      { neuronIds: [neuron.id], edgeIds, model: ctx.model, source: 'watcher:integrate' }
+      {
+        neuronIds: [neuron.id],
+        edgeIds,
+        model: ctx.model,
+        source: 'watcher:integrate',
+        ...(noBroadcastWhy ? { whyNoBroadcast: noBroadcastWhy } : {}),
+        ...(reasonMissing ? { broadcastReasonMissing: true as const } : {}),
+      }
     );
     return { neuron, created: true };
   }
@@ -821,6 +1026,35 @@ export class Integrator {
     );
     return neuron;
   }
+}
+
+/** Two neurons known by different bots (one has a bot the other lacks). */
+function crossBot(a: Neuron, b: Neuron): boolean {
+  const A = new Set(a.support.bots);
+  const B = new Set(b.support.bots);
+  if (A.size === 0 || B.size === 0) return false;
+  return [...A].some((x) => !B.has(x)) || [...B].some((x) => !A.has(x));
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * An insight that should come with a broadcast or a `whyNoBroadcast`:
+ * confidence medium or high, supported by two or more bots, and naming one
+ * of the bots (its name or id, as a whole word).
+ */
+export function insightNeedsBroadcast(
+  n: Pick<Neuron, 'text' | 'support' | 'confidence'>,
+  bots: Array<{ id: string; name: string }>
+): boolean {
+  if (n.confidence !== 'medium' && n.confidence !== 'high') return false;
+  if (new Set(n.support.bots).size < 2) return false;
+  return bots.some((b) =>
+    [b.name, b.id].some(
+      (w) =>
+        !!w && new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(w)}($|[^\\p{L}\\p{N}])`, 'iu').test(n.text)
+    )
+  );
 }
 
 interface ApplyCtx {

@@ -887,6 +887,10 @@ export const WatcherConfigSchema = z
         model: z.string().default('claude-opus-5-5'),
         salienceBar: z.number().min(0).default(2.0),
         heartbeatMs: z.number().int().min(60_000).default(3_600_000),
+        /** The heartbeat runs a pass only with at least this many salient items pending. */
+        minItems: z.number().int().min(1).default(5),
+        /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
+        agendaMax: z.number().int().min(0).default(8),
         maxPerDay: z.number().int().min(0).default(24),
         maxTokensPerDay: z.number().int().min(0).default(600_000),
       })

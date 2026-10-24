@@ -103,6 +103,10 @@ export interface WatcherLogRow {
   durationMs?: number;
   /** Phase 4, `integrate:pass` only: the "How I am" variables the model named (known keys only). */
   drivenBy?: string[];
+  /** `integrate:insight` / `integrate:no-broadcast`: why the insight calls for no broadcast (model text). */
+  whyNoBroadcast?: string;
+  /** `integrate:insight`: the insight needed a broadcast or a reason (`insightNeedsBroadcast`) and got neither. */
+  broadcastReasonMissing?: true;
 }
 
 /** What tier 0 senses: an activity-stream event or a `human_inbound` hook event. */
@@ -209,6 +213,10 @@ export interface WatcherConfig {
     model: string;
     salienceBar: number;
     heartbeatMs: number;
+    /** The heartbeat runs a pass only with at least this many salient items pending. */
+    minItems: number;
+    /** Cross-bot related pairs (and waiting insights) the "Standing agenda" shows. */
+    agendaMax: number;
     maxPerDay: number;
     maxTokensPerDay: number;
   };
@@ -233,6 +241,8 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     model: 'claude-opus-5-5',
     salienceBar: 2.0,
     heartbeatMs: 3_600_000,
+    minItems: 5,
+    agendaMax: 8,
     maxPerDay: 24,
     maxTokensPerDay: 600_000,
   },

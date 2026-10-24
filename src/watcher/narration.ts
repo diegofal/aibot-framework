@@ -345,13 +345,23 @@ export function narrateIntegrateInsight(input: {
   text: string;
   confidence?: string;
   bots: string[];
+  /** The model's one line on why it broadcast nothing (quoted). */
+  whyNoBroadcast?: string;
+  /** It needed a broadcast or a reason and got neither. */
+  reasonMissing?: boolean;
 }): string {
   const parts = [
     ...(input.confidence ? [`confidence ${input.confidence}`] : []),
     ...(input.bots.length > 1 ? [`across ${andList(input.bots)}`] : []),
     ...(input.bots.length === 1 ? [`from ${input.bots[0]}`] : []),
+    ...(input.whyNoBroadcast ? [`no broadcast: ${quoteModelText(input.whyNoBroadcast)}`] : []),
+    ...(input.reasonMissing ? ['no broadcast and no reason given'] : []),
   ];
   return `I realised: ${quoteModelText(input.text, 300)}${parts.length ? ` (${parts.join('; ')})` : ''}.`;
+}
+
+export function narrateIntegrateNoBroadcast(input: { insight: string; why: string }): string {
+  return `Not broadcasting ${quoteModelText(input.insight, 160)}: ${quoteModelText(input.why)}.`;
 }
 
 export function narrateIntegrateContradiction(input: { text: string }): string {
