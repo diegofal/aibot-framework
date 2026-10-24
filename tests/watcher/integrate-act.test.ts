@@ -7,7 +7,7 @@
  * acted and did not.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LLMClient } from '../../src/core/llm-client';
@@ -779,6 +779,58 @@ describe('Integrator: stakes shape the pass (O3)', () => {
     deferNext.value = true;
     expect((await s.integrator.releaseQuestions()).map((r) => r.status)).toEqual(['deferred']);
     expect(s.integrator.deferredQuestions()).toHaveLength(1);
+  });
+
+  // Review 2026-10-24: the queue was persisted only after the whole loop, so a
+  // stop (or a crash) mid-release resent what had already gone out.
+  test('each released question leaves the persisted queue as soon as it is sent', async () => {
+    const queued = ['n-q0000001', 'n-q0000002'].map((insightId, i) => ({
+      insightId,
+      botId: 'b1',
+      text: `Question ${i}?`,
+      reason: 'x',
+      deferredAt: new Date(t - 60_000).toISOString(),
+    }));
+    writeFileSync(
+      integrateStateFile(dir),
+      JSON.stringify({
+        attending: [],
+        pending: { items: [], neurons: [], salience: 0 },
+        deferredQuestions: queued,
+      })
+    );
+    let release: () => void = () => {};
+    const onDisk = () =>
+      (
+        JSON.parse(readFileSync(integrateStateFile(dir), 'utf-8')) as {
+          deferredQuestions?: Array<{ text: string }>;
+        }
+      ).deferredQuestions?.map((q) => q.text) ?? [];
+    let seenBeforeSecond: string[] = [];
+    let n = 0;
+    const broadcaster = new Broadcaster({
+      dir,
+      now: () => t,
+      delivery: {
+        question: async () => {
+          n++;
+          if (n === 2) {
+            seenBeforeSecond = onDisk();
+            await new Promise<void>((r) => {
+              release = r;
+            });
+          }
+          return { ok: true, detail: 'sent' };
+        },
+      },
+    });
+    const s = setup(() => ({}), {}, { broadcaster });
+    const done = s.integrator.releaseQuestions();
+    for (let i = 0; i < 20 && n < 2; i++) await new Promise((r) => setImmediate(r));
+    expect(seenBeforeSecond).toEqual(['Question 1?']);
+    release();
+    await done;
+    expect(onDisk()).toEqual([]);
   });
 
   // Review 2026-10-24: a held question dropped by age or by the cap left no trace.

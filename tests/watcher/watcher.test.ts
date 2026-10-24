@@ -2200,6 +2200,69 @@ describe('Watcher: salience-driven ticks (O2) and stakes (O3)', () => {
     await watcher.stop();
   });
 
+  // Review 2026-10-24: stop() waited for every pass in flight but not for a
+  // release of held questions, so the state was persisted under it.
+  test('stop waits for a release of held questions in flight', async () => {
+    const order: string[] = [];
+    let gate: () => void = () => {};
+    let delivering = false;
+    const ref: { w?: Watcher } = {};
+    const goal = () => ref.w?.graph.list().find((n) => n.kind === 'goal')?.id as string;
+    const { client } = integrateClient(() =>
+      JSON.stringify({
+        insights: [
+          { text: 'Jarvis keeps failing on the same fetch', support: [goal()], confidence: 'high' },
+        ],
+        broadcasts: [{ bot: 'b1', kind: 'question', text: 'Is the key coming?', insightIndex: 0 }],
+      })
+    );
+    const { watcher, hooks, activityStream } = make(
+      {
+        llm: { integrate: { client, model: 'claude-opus-5-5', backend: 'claude-cli' } },
+        broadcastDelivery: {
+          question: async () => {
+            delivering = true;
+            await new Promise<void>((r) => {
+              gate = r;
+            });
+            order.push('delivered');
+            return { ok: true, detail: 'sent' };
+          },
+        },
+      },
+      integrateOn
+    );
+    ref.w = watcher;
+    await watcher.start();
+    await watcher.idle();
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'Keep going',
+    });
+    watcher.buffer.size();
+    t += 49 * 3_600_000;
+    activityStream.emit('activity', { type: 'llm:error', botId: 'b1', timestamp: t });
+    await watcher.integrateNow();
+    t += 60_000;
+    hooks.emit(OPERATOR_MESSAGE_HOOK, {
+      botId: 'b1',
+      channelKind: 'dashboard',
+      timestamp: t,
+      text: 'I am back',
+    });
+    watcher.buffer.size();
+    await settle();
+    expect(delivering).toBe(true);
+    const stopped = watcher.stop().then(() => order.push('stopped'));
+    await settle();
+    expect(order).toEqual([]);
+    gate();
+    await stopped;
+    expect(order).toEqual(['delivered', 'stopped']);
+  });
+
   test('a tier whose breaker is open sleeps: wakeNotice does not run, one stakes row', async () => {
     const { client, prompts } = noticeClient('{"keep":[]}');
     const { watcher, hooks } = make(

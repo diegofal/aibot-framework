@@ -549,17 +549,22 @@ export class Integrator {
     if (!bc || queue.length === 0) return [];
     const isCancelled = opts.isCancelled ?? (() => false);
     const nowMs = this.deps.now();
-    const keep: DeferredQuestion[] = [];
     const results: BroadcastResult[] = [];
     const released: DeferredQuestion[] = [];
-    for (const q of queue) {
-      if (isCancelled()) {
-        keep.push(q);
-        continue;
-      }
+    // Off the persisted list at once, one by one: a stop or a crash mid-release
+    // never resends what already went out. A pass may defer more meanwhile:
+    // those stay.
+    const take = (q: DeferredQuestion) => {
+      const next = (this.st.deferredQuestions ?? []).filter((x) => x !== q);
+      this.st.deferredQuestions = next.length ? next : undefined;
+      this.persist();
+    };
+    for (const q of [...queue]) {
+      if (isCancelled()) break;
       const at = Date.parse(q.deferredAt);
       if (!Number.isFinite(at) || nowMs - at > DEFERRED_QUESTION_MAX_AGE_MS) {
         this.questionDropped(q, 'held over 7 days');
+        take(q);
         continue;
       }
       let result: BroadcastResult;
@@ -574,19 +579,13 @@ export class Integrator {
         });
       } catch (err) {
         this.deps.logger?.warn({ err }, 'Watcher integrate: a deferred question failed to send');
-        keep.push(q);
         continue;
       }
       results.push(result);
-      if (result.status === 'deferred') keep.push(q);
-      else released.push(q);
+      if (result.status === 'deferred') continue;
+      released.push(q);
+      take(q);
     }
-    // A pass may have deferred more meanwhile: keep those too.
-    const handled = new Set(queue);
-    const added = (this.st.deferredQuestions ?? []).filter((q) => !handled.has(q));
-    this.st.deferredQuestions = [...keep, ...added];
-    if (this.st.deferredQuestions.length === 0) this.st.deferredQuestions = undefined;
-    this.persist();
     if (released.length && !isCancelled()) {
       this.deps.log.say(
         'integrate',

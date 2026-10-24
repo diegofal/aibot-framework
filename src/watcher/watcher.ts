@@ -968,7 +968,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   }
 
   /**
-   * Wait for birth and the passes in flight, at most `stopTimeoutMs`: their
+   * Wait for birth, the passes and a release of held questions in flight, at
+   * most `stopTimeoutMs`: their
    * model calls are already aborted; what cannot be (an embedding) is left
    * behind so stop can compact and persist.
    */
@@ -979,6 +980,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.integrateRun,
       this.outcomesRun,
       this.introspectRun,
+      this.releaseRun,
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
