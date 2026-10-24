@@ -298,6 +298,14 @@ export function isHumanInbound(event: SensedEvent): event is HumanInboundEvent {
  */
 export const OPERATOR_SOURCED = 'operatorSourced';
 
+/**
+ * `Neuron.meta` key set to `'true'` when an operator message (a buffer item
+ * `fromOperator`) is among the items behind the neuron, at creation or at a
+ * later recognition. Narrower than `OPERATOR_SOURCED`: the neuron's text may be
+ * the operator's own words, so the fast lane never quotes it to a bot.
+ */
+export const OPERATOR_MESSAGE = 'operatorMessage';
+
 /** A buffer item that is a non-operator human message (already reduced to topic words by tier 0). */
 export function isPublicHumanItem(item: Pick<BufferItem, 'event' | 'fromOperator'>): boolean {
   return isHumanInbound(item.event) && item.fromOperator !== true;

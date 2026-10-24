@@ -9,7 +9,10 @@
  * `pattern` (or a `fact` at confidence `high`) supported by at least
  * `fastLane.minBots` bots is a candidate (`fastLaneCandidates`): a recognition
  * unions the pass's bots into the neuron's support, so two bots hitting the
- * same wall in different passes qualify on the second. Its targets (`fastLaneTargets`) are the
+ * same wall in different passes qualify on the second. Privacy: the directive
+ * quotes the neuron text, so a neuron an operator message supports
+ * (`OPERATOR_MESSAGE`) is never a candidate, nor is an `operatorSourced` fact;
+ * a pattern resting on bot activity is. Its targets (`fastLaneTargets`) are the
  * eligible bots (enabled, not a customer tenant's: the caller passes them, and
  * the broadcaster refuses a tenant bot anyway) that are NOT among its
  * supporting bots and that relate to it: a `related` edge between the pattern
@@ -27,7 +30,7 @@ import type { BroadcastResult, Broadcaster } from './broadcast';
 import type { Graph } from './graph';
 import type { WatcherLog } from './log';
 import { quoteModelText } from './narration';
-import type { Neuron, WatcherConfig } from './types';
+import { type Neuron, OPERATOR_MESSAGE, type WatcherConfig, isOperatorSourced } from './types';
 
 export type FastLaneConfig = NonNullable<WatcherConfig['fastLane']>;
 
@@ -68,6 +71,11 @@ export function fastLaneCandidates(created: Neuron[], cfg: FastLaneConfig): Fast
     if (n.archivedAt) continue;
     const kindOk = n.kind === 'pattern' || (n.kind === 'fact' && n.confidence === 'high');
     if (!kindOk) continue;
+    // Privacy: the directive quotes the text verbatim. Never what an operator
+    // message supports, and never an operator-sourced fact (it may be their
+    // words); a pattern resting on bot activity is the lesson itself.
+    if (n.meta?.[OPERATOR_MESSAGE] === 'true') continue;
+    if (n.kind !== 'pattern' && isOperatorSourced(n)) continue;
     const bots = [...new Set(n.support.bots)];
     if (bots.length < cfg.minBots) continue;
     out.push({ neuronId: n.id, bots, text: n.text });

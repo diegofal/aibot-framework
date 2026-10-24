@@ -13,7 +13,12 @@ import {
 import { Graph } from '../../src/watcher/graph';
 import { WatcherLog } from '../../src/watcher/log';
 import { buildIntegratePrompt } from '../../src/watcher/prompts';
-import type { Neuron, WatcherLogRow } from '../../src/watcher/types';
+import {
+  type Neuron,
+  OPERATOR_MESSAGE,
+  OPERATOR_SOURCED,
+  type WatcherLogRow,
+} from '../../src/watcher/types';
 
 let dir: string;
 let t: number;
@@ -154,6 +159,30 @@ describe('fastLaneCandidates', () => {
     expect(fastLaneCandidates([n({ archivedAt: 'x' })], FAST_LANE_DEFAULTS)).toEqual([]);
     expect(fastLaneCandidates([n({})], { ...FAST_LANE_DEFAULTS, enabled: false })).toEqual([]);
     expect(fastLaneCandidates([n({})], { ...FAST_LANE_DEFAULTS, minBots: 3 })).toEqual([]);
+  });
+
+  // Review 2026-10-24 (privacy): the directive quotes the neuron text
+  // verbatim, and a fact may be the operator's own words.
+  test('anything an operator message supports never goes out, pattern or fact', () => {
+    const fromOperator = { [OPERATOR_MESSAGE]: 'true' };
+    expect(fastLaneCandidates([n({ meta: fromOperator })], FAST_LANE_DEFAULTS)).toEqual([]);
+    expect(
+      fastLaneCandidates(
+        [n({ kind: 'fact', confidence: 'high', meta: fromOperator })],
+        FAST_LANE_DEFAULTS
+      )
+    ).toEqual([]);
+  });
+
+  test('an operatorSourced fact never goes out; an operatorSourced pattern (bot activity) does', () => {
+    const sourced = { [OPERATOR_SOURCED]: 'true' };
+    expect(
+      fastLaneCandidates(
+        [n({ kind: 'fact', confidence: 'high', meta: sourced })],
+        FAST_LANE_DEFAULTS
+      )
+    ).toEqual([]);
+    expect(fastLaneCandidates([n({ meta: sourced })], FAST_LANE_DEFAULTS)).toHaveLength(1);
   });
 });
 

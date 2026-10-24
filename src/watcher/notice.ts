@@ -52,6 +52,7 @@ import {
   type BufferItem,
   type Confidence,
   type Neuron,
+  OPERATOR_MESSAGE,
   OPERATOR_SOURCED,
   type PassTrigger,
   type Vec3,
@@ -432,16 +433,20 @@ export class Noticer {
       ),
     ];
     const operatorSourced = shownOperator || restsOnOperatorMaterial(support);
+    // An operator message behind it: the fast lane never quotes it to a bot.
+    const operatorMessage = support.some((i) => i.fromOperator === true);
     if (match) {
       graph.activate(match.id);
       // What this pass's items add: their bots and cycles join the support,
       // and operator material behind them marks it (never unmarks).
-      if (isKeepKind(match.kind)) {
-        graph.addSupport(match.id, { bots, cycles });
-        if (operatorSourced && !isOperatorSourced(match)) {
-          graph.patchMeta(match.id, { [OPERATOR_SOURCED]: 'true' });
-        }
-      }
+      if (isKeepKind(match.kind)) graph.addSupport(match.id, { bots, cycles });
+      const marks: Record<string, string> = {
+        ...(operatorSourced && !isOperatorSourced(match) ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        ...(operatorMessage && match.meta?.[OPERATOR_MESSAGE] !== 'true'
+          ? { [OPERATOR_MESSAGE]: 'true' }
+          : {}),
+      };
+      if (Object.keys(marks).length) graph.patchMeta(match.id, marks);
       const active = graph.get(match.id) ?? match;
       log.say(
         'notice',
@@ -476,6 +481,7 @@ export class Noticer {
         model,
         ...(eventAt ? { eventAt } : {}),
         ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        ...(operatorMessage ? { [OPERATOR_MESSAGE]: 'true' } : {}),
       },
     });
     if (vec) graph.setEmbedding(neuron.id, vec);

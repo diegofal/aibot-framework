@@ -634,6 +634,41 @@ describe('Noticer provenance (phase 3)', () => {
     expect(s.graph.get(n.id)?.activations).toBe(2);
   });
 
+  test('an operator message behind a new neuron marks operatorMessage', async () => {
+    let from: string[] = [];
+    const s = setup({
+      reply: async () => ({
+        text: JSON.stringify({ keep: [{ text: 'School starts on Monday', kind: 'fact', from }] }),
+      }),
+    });
+    const op = item(operatorSays('b1', 'School starts on Monday'), 0.9, { fromOperator: true });
+    from = [op.id];
+    s.buffer.push(op);
+    const made = ((await s.noticer.run()) as { created: Neuron[] }).created[0] as Neuron;
+    expect(made.meta?.operatorMessage).toBe('true');
+  });
+
+  test('an operator message behind a recognition marks operatorMessage too', async () => {
+    let from: string[] = [];
+    const s2 = setup({
+      reply: async () => ({
+        text: JSON.stringify({
+          keep: [{ text: 'wiley.com blocks the fetcher', kind: 'pattern', from }],
+        }),
+      }),
+    });
+    const err = item(toolError('b1', 'c-1'));
+    from = [err.id];
+    s2.buffer.push(err);
+    const p = ((await s2.noticer.run()) as { created: Neuron[] }).created[0] as Neuron;
+    expect(p.meta?.operatorMessage).toBeUndefined();
+    const op2 = item(operatorSays('b2', 'wiley blocks you'), 0.9, { fromOperator: true });
+    from = [op2.id];
+    s2.buffer.push(op2);
+    await s2.noticer.run();
+    expect(s2.graph.get(p.id)?.meta?.operatorMessage).toBe('true');
+  });
+
   test('a neuron a curiosity surprise supports is operatorSourced', async () => {
     const e = item(surprise('b1'));
     const s = setup({ reply: keepOf('Jarvis learned the tax deadline moved', [e.id]) });
