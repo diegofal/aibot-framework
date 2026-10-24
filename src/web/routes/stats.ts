@@ -38,6 +38,8 @@ export interface StatsRouteDeps {
   now?: () => number;
   /** Bytes of log tail to scan (default 8 MB). */
   logTailBytes?: number;
+  /** The embedding service probe (O7); absent → the infra ollama row has no `embedding`. */
+  embeddingProbe?: Pick<import('../../stats/embedding-probe').EmbeddingProbe, 'get'>;
 }
 
 export function statsRoutes(deps: StatsRouteDeps) {
@@ -124,11 +126,18 @@ export function statsRoutes(deps: StatsRouteDeps) {
     }
   });
 
-  app.get('/infra', (c) => {
+  app.get('/infra', async (c) => {
     const bots = scopeBots(deps.config.bots, getTenantId(c));
     try {
+      const embedding = deps.embeddingProbe
+        ? await deps.embeddingProbe.get().catch(() => undefined)
+        : undefined;
       const key = `infra:${scopeKey(bots.map((b) => b.id))}`;
-      return c.json(ctx.cache.get(key, ctx.cacheTtlMs, () => buildInfra(ctx, bots)));
+      return c.json(
+        ctx.cache.get(key, ctx.cacheTtlMs, () =>
+          buildInfra(ctx, bots, embedding ? { embedding } : {})
+        )
+      );
     } catch (err) {
       deps.logger.warn({ err }, 'Stats: infra aggregation failed');
       return c.json({ error: 'Stats aggregation failed' }, 500);
