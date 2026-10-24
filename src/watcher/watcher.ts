@@ -76,9 +76,9 @@ import {
 } from './llm';
 import { WatcherLog } from './log';
 import { narrateIntrospection, narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
-import { type NoticeOutcome, Noticer } from './notice';
+import { type NoticeOutcome, Noticer, readNoticeLastRun, writeNoticeLastRun } from './notice';
 import { applyServed, duePredictions, resolvePredictions } from './outcomes';
-import { bufferFile, watcherDir, watcherLogDir } from './paths';
+import { bufferFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
 import {
   type Attention,
@@ -450,6 +450,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         return null;
       })
       .finally(() => {
+        this.persistNoticeLastRun();
         if (this.noticeRun === run) {
           this.noticeRun = null;
           this.noticeRunSignal = null;
@@ -459,6 +460,13 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     this.noticeRun = run;
     this.noticeRunSignal = signal;
     return run;
+  }
+
+  /** Keep when the last notice pass ran (a restart keeps the age ceiling). */
+  private persistNoticeLastRun(): void {
+    if (this.noticer && this.noticer.lastRunAt > 0) {
+      writeNoticeLastRun(noticeStateFile(this.dir), this.noticer.lastRunAt);
+    }
   }
 
   /**
@@ -855,6 +863,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     try {
       this.graph.load();
       this.buffer.restore(bufferFile(this.dir));
+      // The age ceiling counts from the last pass: the one before the restart,
+      // or (none recorded) from the items themselves.
+      if (this.noticer) this.noticer.lastRunAt = readNoticeLastRun(noticeStateFile(this.dir)) ?? 0;
       this.lastOperatorAt = lastOperatorMs(
         [...this.buffer.items(), ...(this.integrator?.state().pending.items ?? [])],
         this.lastOperatorAt ?? this.karmaTrend.operatorAt()
@@ -945,6 +956,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.sense.tick();
       this.graph.compact();
       this.buffer.persist(bufferFile(this.dir));
+      this.persistNoticeLastRun();
       this.log.say('sleep', 'sleep', narrateSleep({ neurons: this.graph.liveCount() }));
     } catch (err) {
       this.fail(err);

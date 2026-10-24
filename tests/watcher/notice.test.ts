@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
@@ -15,6 +15,8 @@ import {
   Noticer,
   noticeItems,
   parseNoticeOutput,
+  readNoticeLastRun,
+  writeNoticeLastRun,
 } from '../../src/watcher/notice';
 import {
   type BufferItem,
@@ -591,6 +593,17 @@ describe('Noticer.wake / due', () => {
       t += 3 * MIN;
       expect(s.noticer.wake()).toBe('age');
     });
+  });
+});
+
+describe('readNoticeLastRun / writeNoticeLastRun', () => {
+  test('round trip; absent or corrupt is undefined', () => {
+    const file = join(dir, 'sub', 'notice.json');
+    expect(readNoticeLastRun(file)).toBeUndefined();
+    writeNoticeLastRun(file, 1234);
+    expect(readNoticeLastRun(file)).toBe(1234);
+    writeFileSync(file, '{nope');
+    expect(readNoticeLastRun(file)).toBeUndefined();
   });
 });
 

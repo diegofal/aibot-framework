@@ -24,6 +24,8 @@
  * after an answer was read; a failure keeps it for the next pass. Never throws.
  */
 import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { parseLLMJson } from '../bot/llm-json-parser';
 import type { DailyBudget } from './budget';
 import type { WorkingBuffer } from './buffer';
@@ -225,6 +227,31 @@ export function noticeItems(
 const isKeepKind = (k: string): k is NoticeKeepKind =>
   (NOTICE_KEEP_KINDS as readonly string[]).includes(k);
 const isConfidence = (c: unknown): c is Confidence => c === 'low' || c === 'medium' || c === 'high';
+
+/** The persisted `lastRunAt` (`noticeStateFile`); undefined when absent or unreadable. Never throws. */
+export function readNoticeLastRun(file: string): number | undefined {
+  try {
+    if (!existsSync(file)) return undefined;
+    const raw = JSON.parse(readFileSync(file, 'utf-8')) as { lastRunAt?: unknown };
+    return typeof raw.lastRunAt === 'number' && Number.isFinite(raw.lastRunAt)
+      ? raw.lastRunAt
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Keep `lastRunAt` (atomic). Never throws. */
+export function writeNoticeLastRun(file: string, lastRunAt: number): void {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}`;
+    writeFileSync(tmp, JSON.stringify({ lastRunAt }), 'utf-8');
+    renameSync(tmp, file);
+  } catch {
+    // a lost time is the next start's: the age then counts from the items
+  }
+}
 
 /** Outcomes of a pass that ran but read no answer: they back off the next one. */
 const MISSED = new Set<NoticeOutcome['status']>(['failed', 'breaker', 'capped', 'unparsable']);

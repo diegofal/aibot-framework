@@ -2028,6 +2028,60 @@ describe('Watcher: salience-driven ticks (O2) and stakes (O3)', () => {
     await watcher.stop();
   });
 
+  // Review 2026-10-24: the age ceiling counted from max(noticedAt, lastRunAt)
+  // and lastRunAt was the constructor's time, so a restored item waited
+  // another maxWaitMs after every restart.
+  test('a restored 28-min-old item wakes within 2 min after a restart', async () => {
+    const first = make({ llm: noticeLlm(noticeClient('{"keep":[]}').client) }, noticeOn);
+    await first.watcher.start();
+    await first.watcher.idle();
+    first.activityStream.emit('activity', toolError('b1', 'fetch failed 403'));
+    expect(first.watcher.buffer.size()).toBe(1);
+    t += 20 * 60_000;
+    await first.watcher.stop();
+
+    t += 8 * 60_000;
+    const { client, prompts } = noticeClient('{"keep":[]}');
+    const second = make({ llm: noticeLlm(client) }, noticeOn);
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.watcher.buffer.size()).toBe(1);
+    t += 2 * 60_000;
+    expect(second.watcher.wakeNotice()).toBe('age');
+    await settle();
+    expect(prompts).toHaveLength(1);
+    await second.watcher.stop();
+  });
+
+  test('after a restart the last pass time still holds the age ceiling back', async () => {
+    const first = make({ llm: noticeLlm(noticeClient('{"keep":[]}').client) }, noticeOn);
+    await first.watcher.start();
+    await first.watcher.idle();
+    first.activityStream.emit('activity', toolError('b1', 'fetch failed 403'));
+    t += 60_000;
+    await first.watcher.noticeNow();
+    first.activityStream.emit('activity', {
+      type: 'tool:error',
+      botId: 'b1',
+      timestamp: t,
+      data: { toolName: 'file_read', error: 'ENOENT notes.md' },
+    });
+    await settle();
+    expect(first.watcher.buffer.size()).toBe(1);
+    t += 5 * 60_000;
+    await first.watcher.stop();
+
+    const second = make({ llm: noticeLlm(noticeClient('{"keep":[]}').client) }, noticeOn);
+    await second.watcher.start();
+    await second.watcher.idle();
+    // 5 min since the last pass and the item: the ceiling is 30 min away.
+    t += 20 * 60_000;
+    expect(second.watcher.wakeNotice()).toBeNull();
+    t += 5 * 60_000;
+    expect(second.watcher.wakeNotice()).toBe('age');
+    await second.watcher.stop();
+  });
+
   test('notice budget at 75 %: the wake line doubles, one stakes row, on the pass row too', async () => {
     const { client, prompts } = noticeClient('{"keep":[]}');
     const { watcher, activityStream } = make(
