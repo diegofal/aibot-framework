@@ -881,9 +881,23 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     // starts its own at once.
     if (!this.running || this.stopping || deps.isCancelled?.()) return undefined;
     const isCancelled = () => deps.isCancelled?.() ?? false;
+    const statusBefore = this.linkStatus(readBirthRecord(this.dir));
     const entry = {
       isCancelled,
       promise: linkMissing(deps)
+        .then((res) => {
+          // An idle watcher publishes nothing else: an open dashboard would
+          // keep the old embedding status until the next event.
+          if (
+            !isCancelled() &&
+            this.running &&
+            !this.stopping &&
+            this.linkStatus(readBirthRecord(this.dir)) !== statusBefore
+          ) {
+            this.publish('watcher:state', this.state());
+          }
+          return res;
+        })
         .catch((err) => {
           if (!isCancelled()) this.logger.warn({ err }, 'Watcher: linking the unembedded failed');
           return undefined;

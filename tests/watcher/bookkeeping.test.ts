@@ -12,6 +12,10 @@ describe('isBookkeepingLine (daily-log lines birth skips)', () => {
     '[agent-loop] Ran 3 tools, plan: research suppliers',
     '[ERROR] Claude CLI exited with code 1',
     'cron-8f2a1c-1729700000000-ab12 ran: daily digest',
+    'cron-abc123-1729700000000-x7',
+    'cron-1729700000000-x7 delivered',
+    'cron-3f2b9c1e-4d5a-4b6c-8e7f-0123456789ab-1729700000000-k3j9 ran',
+    'cron job 3f2b9c1e-4d5a-4b6c-8e7f-0123456789ab fired: weekly summary',
     'send_proactive_message to operator: weekly summary',
     'task_progress: drafted section 2',
     't-cff5b1',
@@ -32,6 +36,8 @@ describe('isBookkeepingLine (daily-log lines birth skips)', () => {
     'El operador confirmó que el informe trimestral fue enviado al cliente Acme',
     'La factura fue enviada el viernes por correo',
     'Los presupuestos enviados en septiembre siguen sin respuesta',
+    'The operator uses cron-job.org for scheduling',
+    'A cron job runs the backups every night',
   ];
   for (const line of facts) {
     test(`keeps: ${line}`, () => expect(isBookkeepingLine(line)).toBe(false));

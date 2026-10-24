@@ -1435,6 +1435,40 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.stop();
   });
 
+  test('a backfill that flips the link status on an idle watcher publishes one watcher:state', async () => {
+    let up = false;
+    const { watcher, events } = make({
+      embed: async () => {
+        if (!up) throw new Error('ollama down');
+        return [1, 0, 0];
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    expect(watcher.state().linkStatus).toBe('no-embeddings');
+    up = true;
+    const before = events.length;
+    await watcher.maintainNow();
+    const states = events.slice(before).filter((e) => e.type === 'watcher:state');
+    expect(states.length).toBe(1);
+    expect((states[0]?.data as { linkStatus?: string }).linkStatus).toBe('ok');
+    await watcher.stop();
+  });
+
+  test('maintenance that leaves the link status as it was publishes no watcher:state', async () => {
+    const { watcher, events } = make({
+      embed: async () => {
+        throw new Error('ollama down');
+      },
+    });
+    await watcher.start();
+    await watcher.idle();
+    const before = events.length;
+    await watcher.maintainNow();
+    expect(events.slice(before).filter((e) => e.type === 'watcher:state').length).toBe(0);
+    await watcher.stop();
+  });
+
   test('maintenance that embedded publishes one layout, not two', async () => {
     let up = false;
     const { watcher, events } = make({

@@ -578,7 +578,11 @@ const BOOKKEEPING_MARKS: RegExp[] = [
   /\[error\]/i,
   // a leading tag that names an error or the agent loop: "[tool-error] …"
   /^\[[^\]]*(?:agent-loop|error)[^\]]*\]/i,
-  /\bcron-[\w-]+/i,
+  // The framework's cron ids only (`cron-<jobId>-<ms>-<rand>`, older
+  // `cron-<ms>-<rand>`) and `cron job <uuid>` traces, never the bare prefix:
+  // "the operator uses cron-job.org" is a fact.
+  /\bcron-(?:[\w-]+-)?\d{10,}-[a-z0-9]+\b/i,
+  /\bcron\s+job\s+[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/i,
   /\bsend_proactive/i,
   /\btask_progress\b/i,
 ];
@@ -588,7 +592,8 @@ const ID_RE = /\b[tg]-[0-9a-f]{6,8}\b/gi;
 /**
  * A daily-log line that is bookkeeping, not a fact: an `ask_human <id>` /
  * "<tool|id> enviada" / "mensaje enviado al operador" trace, an
- * `[agent-loop]` / `[error]` (or `[…error…]`-tagged) row, a `cron-…` run, a
+ * `[agent-loop]` / `[error]` (or `[…error…]`-tagged) row, a cron run (its
+ * message id or `cron job <id>`), a
  * `send_proactive` / `task_progress` call, or a line that is only task/goal
  * ids or only URLs. Birth's memory stage skips these. Pure.
  */
