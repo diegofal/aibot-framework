@@ -138,6 +138,12 @@ export interface WatcherState {
   attendingAt?: string;
   /** Whether the notice and integrate timers are running now (`Watcher.applyConfig`). */
   timers?: { notice: boolean; integrate: boolean };
+  /**
+   * The live tier switches and daily caps (`tierSwitches`): every state
+   * publish carries them, so a change made in one dashboard tab
+   * (`POST /api/watcher/config` → `applyConfig`) reaches the others.
+   */
+  tiers?: Record<'notice' | 'integrate', { enabled: boolean; maxPerDay: number }>;
 }
 
 export type WatcherEventType =

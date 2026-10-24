@@ -47,6 +47,7 @@ import {
 } from './broadcast';
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
+import { tierSwitches } from './config-file';
 import { Graph, type GraphChange } from './graph';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
@@ -809,6 +810,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),
       timers: { notice: !!this.noticeTimer, integrate: !!this.integrateTimer },
+      tiers: tierSwitches(this.cfg()),
       ...(this.lastError ? { lastError: this.lastError } : {}),
       ...(this.integrator ? { attending: this.integrator.attending() } : {}),
       ...(this.integrator?.state().attendingAt
@@ -898,7 +900,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * Re-read `notice.enabled` / `integrate.enabled` (the live config changed,
    * `POST /api/watcher/config`): start or stop the tier timers without a
    * restart. Before birth/resync is done nothing starts (it starts them when
-   * it ends). Publishes the state. Never throws.
+   * it ends). Publishes the state, which carries the new `tiers`, so every
+   * open dashboard tab redraws its tier controls. Never throws.
    */
   applyConfig(): void {
     try {

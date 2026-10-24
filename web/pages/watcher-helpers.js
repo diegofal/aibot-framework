@@ -426,8 +426,9 @@ export function tierPatchFromInput(tier, field, value) {
 
 /** A new state over the previous one, keeping the tier `config` an event does not carry. */
 export function mergeWatcherState(prev, next) {
-  const keep = prev?.config && !next?.config ? { config: prev.config } : {};
-  return { ...keep, ...(next ?? {}), enabled: true };
+  const tiers = next?.tiers && typeof next.tiers === 'object' ? next.tiers : null;
+  const config = next?.config ?? tiers ?? prev?.config;
+  return { ...(next ?? {}), ...(config ? { config } : {}), enabled: true };
 }
 
 /** Colour key for the ball: one dot per kind, plus the origin pair. */

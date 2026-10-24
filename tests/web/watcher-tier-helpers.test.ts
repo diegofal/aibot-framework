@@ -80,6 +80,28 @@ describe('mergeWatcherState keeps the tier config a state event does not carry',
   });
 });
 
+describe('a watcher:state with tiers (another tab changed them) reaches the tier controls', () => {
+  const changed = {
+    notice: { enabled: false, maxPerDay: 288 },
+    integrate: { enabled: true, maxPerDay: 6 },
+  };
+  it('the server tiers become the config the controls draw from', () => {
+    expect(mergeWatcherState({ config: CONFIG }, { tiers: changed }).config).toEqual(changed);
+  });
+  it('an unfocused control redraws with the new values; a focused one is left alone', () => {
+    const model = createWatcherModel({ state: { config: CONFIG, phase: 'sense' } });
+    const prev = { config: model.state.config, busy: false };
+    applyWatcherEvent(model, { type: 'watcher:state', data: { phase: 'sense', tiers: changed } });
+    const next = { config: model.state.config, busy: false };
+    expect(shouldRedrawTiers(prev, next, false)).toBe(true);
+    expect(shouldRedrawTiers(prev, next, true)).toBe(false);
+    expect(tierControlsHtml(next.config)).toContain('value="6"');
+  });
+  it('a state without tiers keeps the known config', () => {
+    expect(mergeWatcherState({ config: CONFIG }, { phase: 'notice' }).config).toEqual(CONFIG);
+  });
+});
+
 describe('shouldRedrawTiers (the 5 s state republish never wipes what the operator types)', () => {
   const view = (config: unknown, busy = false) => ({ config, busy });
   it('first draw', () => {

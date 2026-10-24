@@ -1686,6 +1686,28 @@ describe('Watcher: live tier switches (applyConfig)', () => {
     expect(watcher.state().timers).toEqual({ notice: false, integrate: false });
   });
 
+  test('applyConfig publishes a watcher:state carrying the new tier switches and caps', async () => {
+    const { watcher, config, events } = make({ llm });
+    await watcher.start();
+    await watcher.idle();
+    const w = config.watcher as {
+      notice: { enabled: boolean; maxPerDay: number };
+      integrate: { enabled: boolean; maxPerDay: number };
+    };
+    w.notice = { ...w.notice, enabled: true, maxPerDay: 7 };
+    w.integrate = { ...w.integrate, enabled: false, maxPerDay: 3 };
+    const before = events.length;
+    watcher.applyConfig();
+    const published = events.slice(before).filter((e) => e.type === 'watcher:state');
+    expect(published.length).toBe(1);
+    expect((published[0]?.data as { tiers?: unknown }).tiers).toEqual({
+      notice: { enabled: true, maxPerDay: 7 },
+      integrate: { enabled: false, maxPerDay: 3 },
+    });
+    expect(watcher.state().tiers?.notice.maxPerDay).toBe(7);
+    await watcher.stop();
+  });
+
   test('before birth is done, applyConfig starts nothing (birth starts the timers when it ends)', async () => {
     const { watcher, config } = make({ llm });
     await watcher.start();
