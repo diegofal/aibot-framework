@@ -17,6 +17,7 @@ import {
   isWatcherOff,
   kindLabel,
   legendHtml,
+  legendState,
   logListHtml,
   logRowHtml,
   mergeLogRows,
@@ -298,6 +299,18 @@ describe('stateHtml', () => {
     expect(html).not.toContain('data-action="watcher-start"');
   });
 
+  it('says "last event sensed", and "fleet quiet" after 30 min of nothing while awake', () => {
+    expect(stateHtml(runningState(), NOW)).toContain('last event sensed just now');
+    expect(stateHtml(runningState(), NOW)).not.toContain('last tick');
+    const quiet = stateHtml(runningState({ lastTickAt: '2026-10-23T08:00:00Z' }), NOW);
+    expect(quiet).toContain('last event sensed 2 h ago (fleet quiet)');
+    const asleep = stateHtml(
+      runningState({ running: false, lastTickAt: '2026-10-23T08:00:00Z' }),
+      NOW
+    );
+    expect(asleep).not.toContain('fleet quiet');
+  });
+
   it('skips zero counts', () => {
     expect(stateHtml(runningState(), NOW)).not.toContain('goal');
   });
@@ -405,6 +418,7 @@ describe('reconcileGraph', () => {
       added: ['n-new'],
       updated: ['n-2'],
       archived: ['n-gone'],
+      revived: [],
       edgesChanged: true,
     });
     expect(m.neurons.get('n-2')?.text).toBe('new');
@@ -432,8 +446,25 @@ describe('reconcileGraph', () => {
       added: [],
       updated: [],
       archived: [],
+      revived: [],
       edgesChanged: false,
     });
+  });
+
+  it('an archived neuron that is live again in the snapshot is reported as revived', () => {
+    const m = model();
+    m.neurons.set('n-2', { ...m.neurons.get('n-2'), archivedAt: '2026-10-23T09:00:00Z' });
+    const snap = {
+      neurons: [...m.neurons.values()].map((x) =>
+        x.id === 'n-2' ? { ...x, archivedAt: null } : x
+      ),
+      edges: [...m.edges.values()],
+    };
+    const out = reconcileGraph(m, snap);
+    expect(out.revived).toEqual(['n-2']);
+    expect(out.updated).toEqual([]);
+    expect(out.archived).toEqual([]);
+    expect(m.neurons.get('n-2')?.archivedAt).toBeNull();
   });
 
   it('a junk snapshot changes nothing', () => {
@@ -442,6 +473,7 @@ describe('reconcileGraph', () => {
       added: [],
       updated: [],
       archived: [],
+      revived: [],
       edgesChanged: false,
     });
     expect(m.neurons.size).toBe(3);
@@ -506,6 +538,28 @@ describe('applyWatcherEvent', () => {
     });
     expect(again).toEqual({ kind: 'update', id: 'n-00000001' });
     expect(model.neurons.get('n-00000001')?.text).toBe('changed');
+  });
+
+  it('reports revive when an archived neuron has its archivedAt cleared', () => {
+    const model = fresh();
+    applyWatcherEvent(model, {
+      type: 'watcher:neuron',
+      ts: 't',
+      data: neuron({ archivedAt: '2026-10-23T09:30:00Z' }),
+    });
+    const back = applyWatcherEvent(model, {
+      type: 'watcher:neuron',
+      ts: 't',
+      data: neuron({ archivedAt: null }),
+    });
+    expect(back).toEqual({ kind: 'revive', id: 'n-00000001' });
+    expect(model.neurons.get('n-00000001')?.archivedAt).toBeNull();
+    const omitted = applyWatcherEvent(model, {
+      type: 'watcher:neuron',
+      ts: 't',
+      data: neuron({ text: 'x' }),
+    });
+    expect(omitted).toEqual({ kind: 'update', id: 'n-00000001' });
   });
 
   it('records an activation and asks for a pulse', () => {
@@ -760,9 +814,47 @@ describe('small formatters', () => {
 
   it('legendHtml lists every kind and both origins', () => {
     const html = legendHtml();
-    for (const k of NEURON_KINDS) expect(html).toContain(`</i>${k}</span>`);
+    for (const k of NEURON_KINDS) expect(html).toContain(`</i>${k}</button>`);
     expect(html).toContain('from a bot');
     expect(html).toContain("the watcher's own");
+  });
+
+  it('legendHtml: every kind is a filter button, the active one pressed', () => {
+    const html = legendHtml('goal');
+    for (const k of NEURON_KINDS) expect(html).toContain(`data-legend-kind="${k}"`);
+    expect(html).toMatch(/data-legend-kind="goal"[^>]*aria-pressed="true"/);
+    expect(html).toMatch(/data-legend-kind="fact"[^>]*aria-pressed="false"/);
+    expect(legendHtml()).not.toContain('aria-pressed="true"');
+  });
+
+  it('legendHtml: the active kind carries its live count, zero included', () => {
+    const zero = legendHtml('goal', 0);
+    expect(zero).toMatch(
+      /data-legend-kind="goal"[^>]*aria-pressed="true"[^>]*>.*goal<b class="watcher-legend-count">0<\/b><\/button>/
+    );
+    expect(zero).toContain('is-filtered');
+    expect(legendHtml('goal', 1234)).toContain('<b class="watcher-legend-count">1,234</b>');
+    expect(legendHtml('goal')).not.toContain('watcher-legend-count');
+    expect(legendHtml(null, 3)).not.toContain('watcher-legend-count');
+  });
+});
+
+describe('legendState', () => {
+  it('one entry per kind with its pressed state, title and count (active kind only)', () => {
+    const st = legendState('goal', 1234);
+    expect(st.map((k) => k.kind)).toEqual([...NEURON_KINDS]);
+    const goal = st.find((k) => k.kind === 'goal');
+    expect(goal).toMatchObject({ active: true, count: '1,234', title: 'Show every kind' });
+    const fact = st.find((k) => k.kind === 'fact');
+    expect(fact?.active).toBe(false);
+    expect(fact?.count).toBeNull();
+    expect(fact?.title).toStartWith('Show only ');
+  });
+
+  it('zero counts; no active kind or no count means no count', () => {
+    expect(legendState('goal', 0).find((k) => k.kind === 'goal')?.count).toBe('0');
+    expect(legendState('goal').every((k) => k.count === null)).toBe(true);
+    expect(legendState(null, 3).every((k) => !k.active && k.count === null)).toBe(true);
   });
 });
 

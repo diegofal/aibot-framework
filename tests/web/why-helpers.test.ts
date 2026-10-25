@@ -48,6 +48,11 @@ describe('whyPanel', () => {
     expect(WHY_ROW_ORDER[0]).toBe('what');
   });
 
+  it('renders open when asked, so a page can keep a fold open across a redraw', () => {
+    expect(whyPanel(full, { nowMs: NOW, open: true })).toMatch(/^<details class="why" open>/);
+    expect(whyPanel(full, { nowMs: NOW, open: false })).toMatch(/^<details class="why">/);
+  });
+
   it('escapes everything it prints', () => {
     const html = whyPanel(full, { nowMs: NOW });
     expect(html).toContain('A finding &lt;from&gt; a cycle');

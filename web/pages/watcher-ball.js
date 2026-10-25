@@ -123,11 +123,6 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
   tip.hidden = true;
   host.appendChild(tip);
 
-  const hint = document.createElement('div');
-  hint.className = 'watcher-hint';
-  hint.textContent = 'Click the ball, then scroll to zoom (or Ctrl + scroll)';
-  host.appendChild(hint);
-
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(FOV, 1, 0.01, 50);
   const orbit = { theta: 0.6, phi: 1.2, dist: 3.1 };
@@ -368,9 +363,14 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
 
   /* ── Highlight ───────────────────────────────────────────────── */
 
-  function highlight(ids) {
+  /**
+   * Light `ids` and dim the rest. With nothing lit the ball shows every point
+   * as usual, unless `dim` (a legend kind with no live neurons): then every
+   * point stays dimmed.
+   */
+  function highlight(ids, { dim = false } = {}) {
     highlighted = new Set(Array.isArray(ids) ? ids : []);
-    let any = false;
+    let any = Boolean(dim);
     for (let i = 0; i < count; i++) {
       const on = highlighted.has(idAt[i]);
       arr.aHl[i] = on ? 1 : 0;
@@ -640,7 +640,6 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
       edgeMaterial.dispose();
       flashGeometry.dispose();
       flashMaterial.dispose();
-      hint.remove();
       for (const r of rings) r.geometry.dispose();
       ringMat.dispose();
       renderer.dispose();

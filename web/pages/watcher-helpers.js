@@ -282,6 +282,8 @@ function relTime(iso, nowMs) {
 }
 
 const fmt = (n) => Number(n).toLocaleString('en-US');
+/** No event sensed for this long while awake reads as "fleet quiet". */
+const QUIET_AFTER_MS = 30 * 60_000;
 
 const LINK_NOTES = {
   'no-embeddings': 'no embeddings: neurons sit on shells by kind, without related links',
@@ -307,7 +309,13 @@ export function stateParts(state, nowMs = Date.now(), { busy = false, embedding 
   ];
   if (s.phase) main.push(`phase <span class="watcher-state-phase">${esc(s.phase)}</span>`);
   main.push(s.bornAt ? `born ${esc(relTime(s.bornAt, nowMs))}` : 'not born yet');
-  if (s.lastTickAt) main.push(`last tick ${esc(relTime(s.lastTickAt, nowMs))}`);
+  if (s.lastTickAt) {
+    // Sense hears every activity event of the fleet: nothing for a while
+    // while awake means the fleet itself was quiet, not that the watcher stalled.
+    const gap = nowMs - Date.parse(s.lastTickAt);
+    const quiet = running && Number.isFinite(gap) && gap >= QUIET_AFTER_MS ? ' (fleet quiet)' : '';
+    main.push(`last event sensed ${esc(relTime(s.lastTickAt, nowMs))}${quiet}`);
+  }
 
   const counts = s.counts && typeof s.counts === 'object' ? s.counts : {};
   const keys = [
@@ -451,12 +459,41 @@ export function mergeWatcherState(prev, next) {
   return { ...(next ?? {}), ...(config ? { config } : {}), enabled: true };
 }
 
-/** Colour key for the ball: one dot per kind, plus the origin pair. */
-export function legendHtml() {
-  const kinds = NEURON_KINDS.map(
-    (k) =>
-      `<span class="watcher-legend-item"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}</span>`
-  ).join('');
+/**
+ * Colour key for the ball: one button per kind (click filters the ball to
+ * that kind, `data-legend-kind`; `active` is pressed and, given
+ * `activeCount`, shows how many live neurons it lights, zero included),
+ * plus the origin pair.
+ */
+/**
+ * Each legend kind's state: pressed, its title and, for the active kind only,
+ * its formatted live count (zero included). The page patches the legend in
+ * place from this so a focused legend button survives a filter toggle.
+ */
+export function legendState(active = null, activeCount = null) {
+  const count =
+    active && activeCount != null && Number.isFinite(Number(activeCount))
+      ? Number(activeCount).toLocaleString('en-US')
+      : null;
+  return NEURON_KINDS.map((k) => ({
+    kind: k,
+    active: k === active,
+    title: k === active ? 'Show every kind' : `Show only ${kindLabel(k, 2)}`,
+    count: k === active ? count : null,
+  }));
+}
+
+export function legendHtml(active = null, activeCount = null) {
+  const kinds = legendState(active, activeCount)
+    .map(
+      (s) =>
+        `<button type="button" class="watcher-legend-item watcher-legend-kind${
+          s.active ? ' is-active' : ''
+        }" data-legend-kind="${s.kind}" aria-pressed="${s.active ? 'true' : 'false'}" title="${esc(s.title)}"><i style="background:${neuronColour(
+          { kind: s.kind }
+        )}"></i>${esc(s.kind)}${s.count != null ? `<b class="watcher-legend-count">${s.count}</b>` : ''}</button>`
+    )
+    .join('');
   const origin = `<span class="watcher-legend-item"><i style="background:${neuronColour({
     kind: 'insight',
     createdBy: 'bot:x',
@@ -466,7 +503,7 @@ export function legendHtml() {
       createdBy: 'watcher',
     }
   )}"></i>the watcher's own</span>`;
-  return `<div class="watcher-legend"><div class="watcher-legend-row">${kinds}</div><div class="watcher-legend-row">${origin}</div></div>`;
+  return `<div class="watcher-legend${active ? ' is-filtered' : ''}"><div class="watcher-legend-row">${kinds}</div><div class="watcher-legend-row">${origin}</div></div>`;
 }
 
 /**
@@ -568,8 +605,10 @@ export function applyWatcherEvent(model, event) {
         bump(model, data.kind);
         return { kind: 'spawn', id: data.id };
       }
-      model.neurons.set(data.id, { ...prev, ...data });
+      const next = { ...prev, ...data };
+      model.neurons.set(data.id, next);
       if (!prev.archivedAt && data.archivedAt) return { kind: 'archive', id: data.id };
+      if (prev.archivedAt && !next.archivedAt) return { kind: 'revive', id: data.id };
       return { kind: 'update', id: data.id };
     }
     case 'watcher:edge': {
@@ -642,7 +681,7 @@ const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * snapshot changes nothing.
  */
 export function reconcileGraph(model, snapshot, { nowIso = new Date().toISOString() } = {}) {
-  const out = { added: [], updated: [], archived: [], edgesChanged: false };
+  const out = { added: [], updated: [], archived: [], revived: [], edgesChanged: false };
   if (!model || !snapshot || !Array.isArray(snapshot.neurons)) return out;
   const seen = new Set();
   for (const n of snapshot.neurons) {
@@ -657,6 +696,7 @@ export function reconcileGraph(model, snapshot, { nowIso = new Date().toISOStrin
     if (sameJson(prev, n)) continue;
     model.neurons.set(n.id, n);
     if (!prev.archivedAt && n.archivedAt) out.archived.push(n.id);
+    else if (prev.archivedAt && !n.archivedAt) out.revived.push(n.id);
     else out.updated.push(n.id);
   }
   for (const [id, n] of model.neurons) {
