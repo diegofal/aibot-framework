@@ -56,6 +56,7 @@ import {
   mindRows,
   mindTabBlurb,
   mindTabsHtml,
+  refocusOnEffect,
 } from './watcher-mind-helpers.js';
 import {
   graphCleanSummary,
@@ -236,6 +237,10 @@ function drawMind() {
   if (!page) return;
   clearTimeout(page.mindTimer);
   page.mindTimer = null;
+  if (page.mindRefocus) {
+    page.mindRefocus = false;
+    applyFocus();
+  }
   const m = page.mind;
   const neurons = [...page.model.neurons.values()];
   const tabs = $('#watcher-mind-tabs');
@@ -251,6 +256,7 @@ function drawMind() {
     shown: m.shown,
     query: m.query,
     broadcasts: page.broadcasts,
+    broadcastLimit: BROADCAST_LIMIT,
     sidesOf: (id) =>
       contradictionSides(id, edges, (other) => page?.model.neurons.get(other)?.text ?? null),
     open: m.open,
@@ -496,6 +502,7 @@ function onEffect(effect) {
       return;
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
+  if (ballLive && refocusOnEffect(effect.kind, page.kindFilter)) page.mindRefocus = true;
   if (['spawn', 'update', 'archive', 'edge'].includes(effect.kind)) scheduleMind();
 }
 
@@ -520,6 +527,10 @@ async function refetchGraph() {
     if (out.edgesChanged) page.ball.edgesChanged();
   }
   if (out.added.length || out.updated.length || out.archived.length || out.edgesChanged) {
+    const kindChanged =
+      (out.added.length && refocusOnEffect('spawn', page.kindFilter)) ||
+      (out.archived.length && refocusOnEffect('archive', page.kindFilter));
+    if (page.ball && !page.replay && kindChanged) page.mindRefocus = true;
     drawState();
     drawMind();
   }

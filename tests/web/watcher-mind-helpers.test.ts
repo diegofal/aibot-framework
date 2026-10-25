@@ -13,6 +13,7 @@ import {
   mindTabBlurb,
   mindTabsHtml,
   predictionOutcome,
+  refocusOnEffect,
 } from '../../web/pages/watcher-mind-helpers.js';
 
 const NOW = Date.parse('2026-10-24T12:00:00Z');
@@ -215,6 +216,37 @@ describe('mindListHtml', () => {
     expect(held).toContain('not broadcast: Only one bot');
   });
 
+  test('an insight older than the oldest fetched broadcast, with the list capped: status unknown', () => {
+    const capped = [
+      bc({ id: 'b-2', insightId: 'n-8', createdAt: '2026-10-24T12:00:00Z' }),
+      bc({ id: 'b-3', insightId: 'n-9', createdAt: '2026-10-24T11:00:00Z' }),
+    ];
+    const old = n('n-1', 'insight', '2026-10-24T09:00:00Z');
+    const html = mindListHtml('insight', [old], {
+      nowMs: NOW,
+      broadcasts: capped,
+      broadcastLimit: 2,
+    });
+    expect(html).toContain('broadcast status unknown (older than the last 2 broadcasts)');
+    expect(html).not.toContain('>not broadcast<');
+    // Newer than the oldest fetched broadcast: any broadcast of it would be in the list.
+    const fresh = n('n-1', 'insight', '2026-10-24T11:30:00Z');
+    expect(
+      mindListHtml('insight', [fresh], { nowMs: NOW, broadcasts: capped, broadcastLimit: 2 })
+    ).toContain('>not broadcast<');
+    // Under the cap the list is complete: an old insight is still "not broadcast".
+    expect(
+      mindListHtml('insight', [old], { nowMs: NOW, broadcasts: capped, broadcastLimit: 200 })
+    ).toContain('>not broadcast<');
+    // A recorded reason wins over the guess.
+    const why = n('n-1', 'insight', '2026-10-24T09:00:00Z', {
+      meta: { whyNoBroadcast: 'Only one bot' },
+    });
+    expect(
+      mindListHtml('insight', [why], { nowMs: NOW, broadcasts: capped, broadcastLimit: 2 })
+    ).toContain('not broadcast: Only one bot');
+  });
+
   test('a broadcast: target bot, kind, status, Open cycle, Why through the shared panel', () => {
     const html = mindListHtml(
       'broadcast',
@@ -415,6 +447,16 @@ describe('highlightState', () => {
       ...none,
       kindFilter: 'goal',
     });
+  });
+});
+
+describe('refocusOnEffect', () => {
+  test('a spawn or archive re-lights the ball only while a legend kind is selected', () => {
+    expect(refocusOnEffect('spawn', 'insight')).toBe(true);
+    expect(refocusOnEffect('archive', 'insight')).toBe(true);
+    expect(refocusOnEffect('spawn', null)).toBe(false);
+    expect(refocusOnEffect('update', 'insight')).toBe(false);
+    expect(refocusOnEffect('edge', 'insight')).toBe(false);
   });
 });
 

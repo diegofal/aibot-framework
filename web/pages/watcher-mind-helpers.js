@@ -201,6 +201,14 @@ export function highlightState(state, action) {
 }
 
 /**
+ * Whether a live graph effect changes what a legend kind lights: a spawned
+ * neuron of the kind must light, an archived one must go dark.
+ */
+export function refocusOnEffect(effectKind, kindFilter) {
+  return Boolean(kindFilter) && (effectKind === 'spawn' || effectKind === 'archive');
+}
+
+/**
  * The ids the ball lights for a `highlightState`: a selected row's neurons,
  * else the filtered neuron, else the legend kind, else what the watcher
  * attends to (`attention.focusNeuronIds`).
@@ -300,7 +308,24 @@ function predictionRow(n, { nowMs, open }) {
   return `${openText(n.id, n.text)}${meta(parts)}${evidence}${signalButtonsHtml(n.id, m.signal)}`;
 }
 
-function insightRow(n, { nowMs, broadcasts }) {
+/**
+ * Whether an insight with no broadcast in `broadcasts` may still have one the
+ * page never fetched: the list hit `limit` and the insight is older than its
+ * oldest record (a broadcast is never older than its insight).
+ */
+function broadcastUnknown(n, broadcasts, limit) {
+  const list = broadcasts ?? [];
+  if (!Number.isFinite(Number(limit)) || list.length < Number(limit)) return false;
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const b of list) {
+    const t = Date.parse(b?.createdAt ?? '');
+    if (Number.isFinite(t) && t < oldest) oldest = t;
+  }
+  const created = Date.parse(n?.createdAt ?? '');
+  return Number.isFinite(oldest) && (!Number.isFinite(created) || created < oldest);
+}
+
+function insightRow(n, { nowMs, broadcasts, broadcastLimit }) {
   const sent = (broadcasts ?? []).filter((b) => b?.insightId === n.id);
   const parts = [];
   const b = bots(n);
@@ -314,6 +339,10 @@ function insightRow(n, { nowMs, broadcasts }) {
       .join(', ');
   } else if (n.meta?.whyNoBroadcast) {
     status = `<span class="text-dim">not broadcast: ${esc(n.meta.whyNoBroadcast)}</span>`;
+  } else if (broadcastUnknown(n, broadcasts, broadcastLimit)) {
+    status = `<span class="text-dim">broadcast status unknown (older than the last ${esc(
+      String(broadcastLimit)
+    )} broadcasts)</span>`;
   } else status = '<span class="text-dim">not broadcast</span>';
   return `${openText(n.id, n.text)}${meta(parts)}<div class="watcher-mind-status">${status}</div>${signalButtonsHtml(
     n.id,
@@ -396,7 +425,8 @@ const ROW = {
 /**
  * A tab's list: `rows` from `mindRows`, the first `shown` of them, then
  * "Showing N of M" and "Show 50 more". `broadcasts` feeds an insight's
- * broadcast status, `sidesOf(id)` a contradiction's sides, `open` the fold
+ * broadcast status (`broadcastLimit`: the cap they were fetched with, so an
+ * insight older than a capped list reads "unknown", not "not broadcast"), `sidesOf(id)` a contradiction's sides, `open` the fold
  * keys to keep open.
  */
 export function mindListHtml(
@@ -407,6 +437,7 @@ export function mindListHtml(
     shown = MIND_PAGE_SIZE,
     query = '',
     broadcasts = [],
+    broadcastLimit = null,
     sidesOf = null,
     open = null,
   } = {}
@@ -421,7 +452,7 @@ export function mindListHtml(
   const limit = Math.max(MIND_PAGE_SIZE, Number(shown) || MIND_PAGE_SIZE);
   const page = list.slice(0, limit);
   const render = ROW[kind] ?? plainRow;
-  const ctx = { nowMs, broadcasts, sidesOf, open };
+  const ctx = { nowMs, broadcasts, broadcastLimit, sidesOf, open };
   const colour = kind === 'broadcast' ? null : neuronColour({ kind, createdBy: 'watcher' });
   const items = page.map(
     (r) =>
