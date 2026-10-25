@@ -202,10 +202,24 @@ export function highlightState(state, action) {
 
 /**
  * Whether a live graph effect changes what a legend kind lights: a spawned
- * neuron of the kind must light, an archived one must go dark.
+ * or revived neuron of the kind must light, an archived one must go dark.
  */
 export function refocusOnEffect(effectKind, kindFilter) {
-  return Boolean(kindFilter) && (effectKind === 'spawn' || effectKind === 'archive');
+  return (
+    Boolean(kindFilter) &&
+    (effectKind === 'spawn' || effectKind === 'archive' || effectKind === 'revive')
+  );
+}
+
+/**
+ * Whether the ball dims what `highlightFor` does not light even when it
+ * lights nothing: true while a legend kind is the highlight source, so a kind
+ * with no live neurons shows an empty ball instead of every kind.
+ */
+export function highlightDims({ kindFilter = null, selectedSeq = null, filterId = null } = {}) {
+  if (selectedSeq !== null && selectedSeq !== undefined) return false;
+  if (filterId) return false;
+  return Boolean(kindFilter);
 }
 
 /**
@@ -227,18 +241,32 @@ export function highlightFor({
   return Array.isArray(attention?.focusNeuronIds) ? [...attention.focusNeuronIds] : [];
 }
 
+/**
+ * What each tab shows: kind, formatted count, active. The page renders the
+ * strip once (`mindTabsHtml`) and then patches counts and the active tab in
+ * place from this, so a redraw keeps the strip's scroll and keyboard focus.
+ */
+export function mindTabState(counts, active) {
+  return MIND_TABS.map((t) => ({
+    kind: t.kind,
+    count: Number(counts?.[t.kind] ?? 0).toLocaleString('en-US'),
+    active: t.kind === active,
+  }));
+}
+
 /** The tab strip: a button per kind with its colour dot and count. */
 export function mindTabsHtml(counts, active) {
+  const state = mindTabState(counts, active);
   return `<div class="watcher-mind-tabs" role="tablist" aria-label="What the watcher holds">${MIND_TABS.map(
-    (t) => {
-      const on = t.kind === active;
+    (t, i) => {
+      const on = state[i].active;
       const dot =
         t.kind === 'broadcast'
           ? '<i class="watcher-mind-dot is-broadcast"></i>'
           : `<i class="watcher-mind-dot" style="background:${neuronColour({ kind: t.kind, createdBy: 'watcher' })}"></i>`;
       return `<button type="button" role="tab" class="watcher-mind-tab${on ? ' is-active' : ''}" data-mind-tab="${t.kind}" aria-selected="${
         on ? 'true' : 'false'
-      }">${dot}<span>${t.label}</span><b class="watcher-mind-count">${Number(counts?.[t.kind] ?? 0).toLocaleString('en-US')}</b></button>`;
+      }">${dot}<span>${t.label}</span><b class="watcher-mind-count">${state[i].count}</b></button>`;
     }
   ).join('')}</div>`;
 }

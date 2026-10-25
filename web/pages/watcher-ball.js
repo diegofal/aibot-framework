@@ -363,9 +363,14 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
 
   /* ── Highlight ───────────────────────────────────────────────── */
 
-  function highlight(ids) {
+  /**
+   * Light `ids` and dim the rest. With nothing lit the ball shows every point
+   * as usual, unless `dim` (a legend kind with no live neurons): then every
+   * point stays dimmed.
+   */
+  function highlight(ids, { dim = false } = {}) {
     highlighted = new Set(Array.isArray(ids) ? ids : []);
-    let any = false;
+    let any = Boolean(dim);
     for (let i = 0; i < count; i++) {
       const on = highlighted.has(idAt[i]);
       arr.aHl[i] = on ? 1 : 0;
@@ -635,7 +640,6 @@ export async function mountBall(host, model, { onPick, pace = SPAWN_PACE } = {})
       edgeMaterial.dispose();
       flashGeometry.dispose();
       flashMaterial.dispose();
-      hint.remove();
       for (const r of rings) r.geometry.dispose();
       ringMat.dispose();
       renderer.dispose();

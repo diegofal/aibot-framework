@@ -4,6 +4,7 @@ import {
   MIND_TABS,
   broadcastStatus,
   contradictionSides,
+  highlightDims,
   highlightFor,
   highlightState,
   kindFilterIds,
@@ -11,6 +12,7 @@ import {
   mindListHtml,
   mindRows,
   mindTabBlurb,
+  mindTabState,
   mindTabsHtml,
   predictionOutcome,
   refocusOnEffect,
@@ -458,6 +460,11 @@ describe('refocusOnEffect', () => {
     expect(refocusOnEffect('update', 'insight')).toBe(false);
     expect(refocusOnEffect('edge', 'insight')).toBe(false);
   });
+
+  test('an archived neuron that comes back to life re-lights the legend kind', () => {
+    expect(refocusOnEffect('revive', 'insight')).toBe(true);
+    expect(refocusOnEffect('revive', null)).toBe(false);
+  });
 });
 
 describe('highlightFor', () => {
@@ -477,5 +484,42 @@ describe('highlightFor', () => {
   test('nothing picked: what the watcher attends to', () => {
     expect(highlightFor({ neurons, attention })).toEqual(['n-3']);
     expect(highlightFor({ neurons })).toEqual([]);
+  });
+});
+
+describe('highlightDims', () => {
+  test('a legend kind dims the ball even when none of its neurons is live', () => {
+    const neurons = [n('n-1', 'fact', 'x')];
+    expect(highlightFor({ kindFilter: 'goal', neurons })).toEqual([]);
+    expect(highlightDims({ kindFilter: 'goal' })).toBe(true);
+  });
+
+  test('no kind, or a selection over the kind, keeps the old behaviour', () => {
+    expect(highlightDims({})).toBe(false);
+    expect(highlightDims({ kindFilter: null })).toBe(false);
+    expect(highlightDims({ kindFilter: 'goal', selectedSeq: 3 })).toBe(false);
+    expect(highlightDims({ kindFilter: 'goal', filterId: 'n-1' })).toBe(false);
+    expect(highlightDims({ kindFilter: 'goal', selectedSeq: 0 })).toBe(false);
+  });
+});
+
+describe('mindTabState', () => {
+  test('one entry per tab, in tab order, with the formatted count and the active flag', () => {
+    const st = mindTabState({ insight: 1234, prediction: 2 }, 'prediction');
+    expect(st.map((t) => t.kind)).toEqual(MIND_TABS.map((t) => t.kind));
+    expect(st[0]).toEqual({ kind: 'insight', count: '1,234', active: false });
+    expect(st[1]).toEqual({ kind: 'prediction', count: '2', active: true });
+    expect(st.filter((t) => t.active)).toHaveLength(1);
+  });
+
+  test('missing counts are zero; an unknown active tab marks none', () => {
+    const st = mindTabState(null, 'nope');
+    expect(st.every((t) => t.count === '0' && !t.active)).toBe(true);
+  });
+
+  test('mindTabsHtml renders the same state', () => {
+    const html = mindTabsHtml({ insight: 1234 }, 'insight');
+    expect(html).toContain('<b class="watcher-mind-count">1,234</b>');
+    expect(html).toMatch(/data-mind-tab="insight" aria-selected="true"/);
   });
 });

@@ -9893,6 +9893,11 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   color: var(--stage-ink);
   background: rgba(124, 156, 255, 0.18);
 }
+.watcher-legend-count {
+  margin-left: 6px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
 .watcher-replay {
   position: absolute;
   left: 50%;
