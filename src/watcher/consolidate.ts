@@ -21,12 +21,21 @@
  * the model saw are merged. Eligibility is checked again when the call returns:
  * a member that became protected or important meanwhile stays live, and if
  * fewer than `minCluster` remain the summary is skipped and logged. The cap
- * (`maxNeurons`) is enforced after the merge, never by evicting a member. A summary that is empty, longer than the members' mean,
- * or names a bot none of them came from is skipped and logged. The night
+ * (`maxNeurons`) is enforced after the merge, never by evicting a member. A summary that is empty, longer than the members' mean
+ * or than `MAX_SUMMARY_CHARS` (the whole answer is checked, never cut), or names
+ * a bot none of them came from is skipped and logged. Public facts cluster only
+ * with facts of the same readers (`readershipOf`: identical `support.bots`), so
+ * a summary is read by exactly who read its members; operator-sourced ones may
+ * span bots (only the operator reads them). The summary's provenance is the
+ * strictest of every member shown in the prompt, whoever is merged. Archiving
+ * never rests on the model's prose alone: only members sharing >= 2 distinctive
+ * words with the summary (`coveredMembers`) are merged, and if fewer than
+ * `minCoverage` of them (or than `minCluster`) are described it is skipped. The night
  * stops when the fleet wakes up (`isQuiet`), the budget or breaker refuses,
  * or the watcher stops. Every row is code-written. Never throws.
  */
 import { parseLLMJson } from '../bot/llm-json-parser';
+import { titleTokens } from '../hygiene/text-utils';
 import type { Graph } from './graph';
 import { type ImportanceContext, importanceOf } from './importance';
 import { placeWithoutEmbedding } from './layout';
@@ -38,6 +47,7 @@ import {
   narrateConsolidated,
 } from './narration';
 import {
+  CONSOLIDATE_PROMPT_MEMBERS,
   type Neuron,
   OPERATOR_MESSAGE,
   OPERATOR_SOURCED,
@@ -55,18 +65,54 @@ export function provenanceClass(n: Pick<Neuron, 'kind' | 'meta'>): ProvenanceCla
   return 'public';
 }
 
+const STRICTNESS: Record<ProvenanceClass, number> = {
+  'operator-message': 2,
+  operator: 1,
+  public: 0,
+};
+
+/** The strictest class of the neurons (public when there are none). */
+export function strictestProvenance(ns: Array<Pick<Neuron, 'kind' | 'meta'>>): ProvenanceClass {
+  let out: ProvenanceClass = 'public';
+  for (const n of ns) {
+    const c = provenanceClass(n);
+    if (STRICTNESS[c] > STRICTNESS[out]) out = c;
+  }
+  return out;
+}
+
+const stricter = (a: ProvenanceClass, b: ProvenanceClass): ProvenanceClass =>
+  STRICTNESS[a] >= STRICTNESS[b] ? a : b;
+
+/**
+ * Who reads a public neuron: its distinct `support.bots`, sorted. Public
+ * memory is visible to its supporting bots (`fleet_memory_search`), and a
+ * summary's support is its members' union, so public facts are clustered only
+ * with facts of exactly the same readers.
+ */
+export function readershipOf(n: Pick<Neuron, 'support'>): string {
+  return [...new Set(n.support?.bots ?? [])].sort().join(',');
+}
+
 export interface Cluster {
   members: Neuron[];
   provenance: ProvenanceClass;
+  /** Public clusters: the readership every member shares (`readershipOf`). */
+  readership?: string;
 }
 
 /**
- * Most member texts one prompt shows. A larger cluster is split into chunks of
- * at most this many (`chunkCluster`), each its own call: a fact the model never
+ * Most member texts one prompt shows (defined in `types.ts`, which the config
+ * schema bounds `minCluster` by). A larger cluster is split into chunks of at
+ * most this many (`chunkCluster`), each its own call: a fact the model never
  * saw is never folded into a summary.
  */
-export const CONSOLIDATE_PROMPT_MEMBERS = 40;
-const MAX_SUMMARY_CHARS = 400;
+export { CONSOLIDATE_PROMPT_MEMBERS };
+/** Longest summary accepted; a longer answer is rejected whole, never cut. */
+export const MAX_SUMMARY_CHARS = 400;
+/** Distinctive words a member must share with the summary to count as described. */
+export const COVERAGE_MIN_TOKENS = 2;
+export const DEFAULT_MIN_COVERAGE = 0.5;
 const CONSOLIDATE_TEMPERATURE = 0.2;
 
 /** The clusters to consolidate, largest first. Pure over the graph. */
@@ -75,12 +121,18 @@ export function findClusters(
   ctx: ImportanceContext,
   opts: { threshold: number; minCluster: number }
 ): Cluster[] {
-  const eligible = new Map<string, ProvenanceClass>();
+  // Group key: the provenance class, and for public facts also who reads them.
+  // Operator-sourced facts are read only by the operator, so they may merge
+  // across bots; public facts of different readers never do.
+  const eligible = new Map<string, string>();
+  const classOf = new Map<string, ProvenanceClass>();
   for (const n of graph.list()) {
     if (n.archivedAt || n.kind !== 'fact') continue;
     const s = importanceOf(n, ctx);
     if (s.protected || s.score >= opts.threshold) continue;
-    eligible.set(n.id, provenanceClass(n));
+    const c = provenanceClass(n);
+    classOf.set(n.id, c);
+    eligible.set(n.id, c === 'public' ? `public:${readershipOf(n)}` : c);
   }
   const seen = new Set<string>();
   const out: Cluster[] = [];
@@ -101,9 +153,11 @@ export function findClusters(
       }
     }
     if (ids.length < opts.minCluster) continue;
+    const provenance = classOf.get(start) as ProvenanceClass;
     out.push({
       members: ids.map((id) => graph.get(id)).filter((n): n is Neuron => !!n),
-      provenance: cls,
+      provenance,
+      ...(provenance === 'public' ? { readership: cls.slice('public:'.length) } : {}),
     });
   }
   return out.sort(
@@ -124,8 +178,8 @@ export function chunkCluster(cluster: Cluster, minCluster: number): Cluster[] {
   const cap = CONSOLIDATE_PROMPT_MEMBERS;
   if (n <= cap) return [cluster];
   const chunk = (from: number, to: number): Cluster => ({
+    ...cluster,
     members: cluster.members.slice(from, to),
-    provenance: cluster.provenance,
   });
   const parts = Math.ceil(n / cap);
   if (Math.floor(n / parts) < minCluster) {
@@ -170,6 +224,9 @@ export function validateSummary(
 ): string | null {
   const summary = text.trim();
   if (!summary) return 'the summary was empty';
+  if (summary.length > MAX_SUMMARY_CHARS) {
+    return `the summary was longer than ${MAX_SUMMARY_CHARS} characters`;
+  }
   const mean = members.reduce((s, n) => s + n.text.length, 0) / Math.max(1, members.length);
   if (summary.length > mean) return 'the summary was longer than the facts it would replace';
   const support = new Set(members.flatMap((n) => n.support.bots));
@@ -182,6 +239,24 @@ export function validateSummary(
     if (named.length) return `it named ${b.name || b.id}, which none of the facts came from`;
   }
   return null;
+}
+
+const distinctive = (text: string): Set<string> =>
+  new Set(titleTokens(text).filter((t) => t.length >= 3));
+
+/**
+ * The members the summary describes: those sharing at least
+ * `COVERAGE_MIN_TOKENS` distinctive words with it (`titleTokens`: stopwords
+ * dropped; tokens under 3 chars dropped too). Archiving depends on this, never
+ * on the model's prose alone.
+ */
+export function coveredMembers<T extends Pick<Neuron, 'text'>>(summary: string, members: T[]): T[] {
+  const words = distinctive(summary);
+  return members.filter((n) => {
+    let shared = 0;
+    for (const t of distinctive(n.text)) if (words.has(t)) shared++;
+    return shared >= COVERAGE_MIN_TOKENS;
+  });
 }
 
 function parseSummary(text: string): string | null {
@@ -202,6 +277,8 @@ export interface ConsolidateDeps {
   threshold: number;
   minCluster: number;
   maxClusters: number;
+  /** Share of the members a summary must describe (`coveredMembers`); default 0.5. */
+  minCoverage?: number;
   /** The fleet's bots (ids and names), for the "names a bot not in support" check. */
   bots: () => Array<{ id: string; name: string }>;
   botName?: (id: string) => string;
@@ -271,12 +348,21 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         break;
       }
       // Members may have fired or been archived since the clusters were read.
+      // A still-public member of a public cluster whose readers changed would
+      // change who reads the summary: it waits for a later night.
       const stillEligible = (): Neuron[] => {
         const ctx = deps.importance();
         return cluster.members
           .map((n) => graph.get(n.id))
           .filter((n): n is Neuron => {
             if (!n || n.archivedAt) return false;
+            if (
+              cluster.readership !== undefined &&
+              provenanceClass(n) === 'public' &&
+              readershipOf(n) !== cluster.readership
+            ) {
+              return false;
+            }
             const score = importanceOf(n, ctx);
             return !score.protected && score.score < deps.threshold;
           });
@@ -286,6 +372,10 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         out.skipped++;
         continue;
       }
+      // The summary may carry anything the prompt showed: its provenance is
+      // the strictest of every member shown (read now, after any earlier call
+      // of the night), whoever is merged afterwards.
+      let shownProvenance = stricter(cluster.provenance, strictestProvenance(shown));
       const prompt = buildConsolidatePrompt(shown, botName);
       const res = await deps.client.chat(
         [
@@ -315,8 +405,14 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
       // insight, got a 👍, been activated into importance or been archived.
       // Only the members that are still eligible (and were shown) are merged.
       const shownIds = new Set(shown.map((n) => n.id));
-      const members = stillEligible().filter((n) => shownIds.has(n.id));
-      const changed = shown.length - members.length;
+      // A shown member flagged as operator material during the call was
+      // operator material in the prompt too.
+      shownProvenance = stricter(
+        shownProvenance,
+        strictestProvenance(shown.map((n) => graph.get(n.id)).filter((n): n is Neuron => !!n))
+      );
+      const eligibleNow = stillEligible().filter((n) => shownIds.has(n.id));
+      const changed = shown.length - eligibleNow.length;
       const skip = (why: string) => {
         out.skipped++;
         log.say(
@@ -330,7 +426,7 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         skip('the model call failed');
         continue;
       }
-      if (members.length < deps.minCluster) {
+      if (eligibleNow.length < deps.minCluster) {
         skip(
           `${changed} of the facts became important or protected while the model wrote, leaving fewer than ${deps.minCluster}`
         );
@@ -341,13 +437,34 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         skip("the model's answer was not readable JSON");
         continue;
       }
-      const text = parsed.replace(/\s+/g, ' ').trim().slice(0, MAX_SUMMARY_CHARS);
+      // The whole answer is validated: a cut would hide what came after it.
+      const text = parsed.replace(/\s+/g, ' ').trim();
+      if (text.length > MAX_SUMMARY_CHARS) {
+        skip(`the summary was longer than ${MAX_SUMMARY_CHARS} characters`);
+        continue;
+      }
+      const unfit = validateSummary(text, eligibleNow, deps.bots());
+      if (unfit) {
+        skip(unfit);
+        continue;
+      }
+      // Only the members the summary describes are merged; if too few are
+      // described, nothing is archived on the model's word.
+      const members = coveredMembers(text, eligibleNow);
+      const minCoverage = deps.minCoverage ?? DEFAULT_MIN_COVERAGE;
+      if (members.length < deps.minCluster || members.length < minCoverage * eligibleNow.length) {
+        skip(
+          `the summary does not describe its members (${members.length} of ${eligibleNow.length} share its words)`
+        );
+        continue;
+      }
+      // Again over the merged members: their support is what the summary gets.
       const invalid = validateSummary(text, members, deps.bots());
       if (invalid) {
         skip(invalid);
         continue;
       }
-      const summary = writeSummary(graph, text, members, cluster.provenance, res.model);
+      const summary = writeSummary(graph, text, members, shownProvenance, res.model);
       out.summaries.push(summary);
       out.members += members.length;
       log.say(
@@ -389,8 +506,9 @@ function writeSummary(
   if (cycles) support.cycles = cycles;
   if (conversations) support.conversations = conversations;
   if (paths) support.paths = paths;
-  // Strictest of the members: any operator material makes it operator-sourced,
-  // any member that may carry an operator message's words taints it too.
+  // Strictest of everything shown in the prompt (`provenance`) and of the
+  // merged members: any operator material makes it operator-sourced, any
+  // member that may carry an operator message's words taints it too.
   const operatorSourced = provenance !== 'public' || members.some((n) => isOperatorSourced(n));
   const operatorMessage =
     provenance === 'operator-message' || members.some((n) => mayCarryOperatorMessage(n));

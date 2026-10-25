@@ -6,6 +6,13 @@
 import type { ActivityEvent } from '../bot/activity-stream';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 
+/**
+ * O10: most member texts one consolidation prompt shows (`consolidate.ts`). A
+ * larger cluster is split into chunks of at most this many, each its own call;
+ * `consolidate.minCluster` is bounded by it (a larger minimum could never be met).
+ */
+export const CONSOLIDATE_PROMPT_MEMBERS = 40;
+
 export const NEURON_KINDS = [
   'entity',
   'person',
@@ -262,7 +269,13 @@ export interface WatcherConfig {
   /** O10 forgetting (`importance.ts`); absent = `WATCHER_DEFAULTS.forget`. */
   forget?: { threshold: number; graceDays: number };
   /** O10 nightly consolidation (`consolidate.ts`); absent = `WATCHER_DEFAULTS.consolidate`. */
-  consolidate?: { enabled: boolean; hour: number; minCluster: number; maxClusters: number };
+  consolidate?: {
+    enabled: boolean;
+    hour: number;
+    minCluster: number;
+    maxClusters: number;
+    minCoverage?: number;
+  };
 }
 
 /** Mirrors `WatcherConfigSchema` in `src/config.ts` (tests/watcher/types.test.ts keeps them equal). */
@@ -296,7 +309,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
   forget: { threshold: 0.15, graceDays: 7 },
-  consolidate: { enabled: true, hour: 4, minCluster: 6, maxClusters: 10 },
+  consolidate: { enabled: true, hour: 4, minCluster: 6, maxClusters: 10, minCoverage: 0.5 },
 };
 
 export function emptyCounts(): Record<NeuronKind, number> {

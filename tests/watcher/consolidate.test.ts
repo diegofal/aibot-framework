@@ -3,9 +3,10 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Config } from '../../src/config';
+import { type Config, WatcherConfigSchema } from '../../src/config';
 import type { LLMClient } from '../../src/core/llm-client';
 import {
+  CONSOLIDATE_PROMPT_MEMBERS,
   type ConsolidateDeps,
   chunkCluster,
   findClusters,
@@ -185,10 +186,12 @@ describe('validateSummary', () => {
 describe('runConsolidation', () => {
   test('a Haiku fixture becomes a summary; members are archived into it and their topics linked', async () => {
     const g = graph();
-    const ns = Array.from({ length: 6 }, (_, i) =>
-      fact(g, i, i === 3 ? ({ support: { bots: ['b2'], cycles: ['c-x'] } } as never) : {})
-    );
-    chain(g, ns);
+    const ns = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    // A related public fact of another bot (b2) is read by another set of bots:
+    // it never joins b1's cluster, or b2 would read b1's material through the
+    // summary (support = readership, `fleet_memory_search`).
+    const other = fact(g, 6, { support: { bots: ['b2'], cycles: ['c-x'] } } as never);
+    chain(g, [...ns, other]);
     const topic = g.addNeuron({
       kind: 'topic',
       text: 'deploys',
@@ -208,7 +211,8 @@ describe('runConsolidation', () => {
     expect(s.text).toBe('Nightly deploys kept failing on a stale build cache.');
     expect(s.meta?.consolidated).toBe('true');
     expect(s.meta?.members?.split(',').sort()).toEqual(ns.map((n) => n.id).sort());
-    expect(s.support.bots.sort()).toEqual(['b1', 'b2']);
+    expect(s.support.bots).toEqual(['b1']);
+    expect(g.get(other.id)?.archivedAt).toBeUndefined();
     expect(s.createdBy).toBe('watcher');
     for (const n of ns) {
       const m = g.get(n.id) as Neuron;
@@ -566,5 +570,169 @@ describe('fleetQuietFrom', () => {
     expect(fleetQuietFrom({ running: true, sleeping: true })).toBe(false);
     expect(fleetQuietFrom({ running: false, sleeping: true, draining: true })).toBe(false);
     expect(fleetQuietFrom(undefined)).toBe(false);
+  });
+});
+
+describe('consolidate: config bounds, answer size, provenance, readership, coverage', () => {
+  test('consolidate.minCluster is bounded by the prompt cap (a larger value could never consolidate)', () => {
+    expect(() =>
+      WatcherConfigSchema.parse({ consolidate: { minCluster: CONSOLIDATE_PROMPT_MEMBERS + 1 } })
+    ).toThrow();
+    const ok = WatcherConfigSchema.parse({
+      consolidate: { minCluster: CONSOLIDATE_PROMPT_MEMBERS },
+    });
+    expect(ok.consolidate.minCluster).toBe(CONSOLIDATE_PROMPT_MEMBERS);
+    expect(WatcherConfigSchema.parse({}).consolidate.minCoverage).toBe(0.5);
+  });
+
+  test('an answer over the size limit is rejected whole, never cut and accepted (a bot named after char 400 is not hidden)', async () => {
+    const g = graph();
+    const long = `${LONG} `.repeat(8);
+    const ns = Array.from({ length: 6 }, (_, i) =>
+      fact(g, i, { text: `Run ${i} of the pipeline ${long}` } as never)
+    );
+    chain(g, ns);
+    t += 10 * DAY;
+    const head = 'Nightly deploys kept failing on a stale build cache. '.repeat(8).slice(0, 410);
+    const answer = `${head} Scout saw it too.`;
+    const d = deps(
+      g,
+      fakeClient(() => JSON.stringify({ summary: answer }))
+    );
+    const out = await runConsolidation(d);
+    expect(out.summaries.length).toBe(0);
+    expect(out.skipped).toBe(1);
+    for (const n of ns) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+    expect(g.list().some((n) => n.kind === 'summary')).toBe(false);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:skipped');
+    expect(row?.text).toContain('400');
+  });
+
+  test('provenance comes from every member shown: one turned operator-sourced and then excluded still taints the summary', async () => {
+    const g = graph();
+    const a = Array.from({ length: 8 }, (_, i) => fact(g, i));
+    const b = Array.from({ length: 7 }, (_, i) => fact(g, 100 + i));
+    chain(g, a);
+    chain(g, b);
+    t += 10 * DAY;
+    let call = 0;
+    const client = fakeClient(() => {
+      call++;
+      // during the first call (cluster a), a member of b becomes operator material
+      if (call === 1) g.patchMeta(b[0].id, { operatorSourced: 'true', operatorMessage: 'true' });
+      // during the second call (cluster b, which showed it), it gets a 👍 and stays live
+      if (call === 2) g.patchMeta(b[0].id, { signal: 'up' });
+      return SUMMARY;
+    });
+    const out = await runConsolidation(deps(g, client));
+    expect(client.calls.length).toBe(2);
+    expect(client.calls[1]).toContain('Run 100 of the pipeline');
+    expect(out.summaries.length).toBe(2);
+    const live = out.summaries.map((s) => g.get(s.id) as Neuron);
+    const sb = live.find((s) => s.meta?.members?.includes(b[1].id)) as Neuron;
+    expect(sb.meta?.members?.split(',')).not.toContain(b[0].id);
+    expect(g.get(b[0].id)?.archivedAt).toBeUndefined();
+    expect(sb.meta?.operatorSourced).toBe('true');
+    expect(sb.meta?.operatorMessage).toBe('true');
+    const sa = live.find((s) => s.meta?.members?.includes(a[0].id)) as Neuron;
+    expect(sa.meta?.operatorSourced).toBeUndefined();
+    expect(sa.meta?.operatorMessage).toBe('false');
+  });
+
+  test('public facts of different bots are never clustered together: a summary is read by exactly who read its members', async () => {
+    const g = graph();
+    const b1 = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    const b2 = Array.from({ length: 6 }, (_, i) =>
+      fact(g, 20 + i, { support: { bots: ['b2'], cycles: [`c2-${i}`] } } as never)
+    );
+    chain(g, [...b1, ...b2]);
+    t += 10 * DAY;
+    const clusters = findClusters(g, importance(g)(), { threshold: 0.15, minCluster: 6 });
+    expect(clusters.length).toBe(2);
+    for (const c of clusters) {
+      expect(new Set(c.members.map((n) => n.support.bots.join(','))).size).toBe(1);
+    }
+    const out = await runConsolidation(
+      deps(
+        g,
+        fakeClient(() => SUMMARY)
+      )
+    );
+    expect(out.summaries.length).toBe(2);
+    const supports = out.summaries.map((s) => (g.get(s.id) as Neuron).support.bots.join(','));
+    expect(supports.sort()).toEqual(['b1', 'b2']);
+  });
+
+  test('operator-sourced facts of different bots stay one cluster (only the operator reads them)', () => {
+    const g = graph();
+    const ns = Array.from({ length: 6 }, (_, i) =>
+      fact(g, i, {
+        support: { bots: [i % 2 ? 'b2' : 'b1'] },
+        meta: { operatorSourced: 'true', operatorMessage: 'false' },
+      } as never)
+    );
+    chain(g, ns);
+    t += 10 * DAY;
+    const clusters = findClusters(g, importance(g)(), { threshold: 0.15, minCluster: 6 });
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].members.length).toBe(6);
+  });
+
+  test('a public member that gains another bot while a call is pending is not folded into a summary read by fewer bots', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 7 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const client = fakeClient(() => {
+      g.addSupport(ns[0].id, { bots: ['b2'] });
+      return SUMMARY;
+    });
+    const out = await runConsolidation(deps(g, client));
+    expect(out.summaries.length).toBe(1);
+    const s = g.get(out.summaries[0].id) as Neuron;
+    expect(s.support.bots).toEqual(['b1']);
+    expect(s.meta?.members?.split(',')).not.toContain(ns[0].id);
+    expect(g.get(ns[0].id)?.archivedAt).toBeUndefined();
+  });
+
+  test('an answer that does not describe its members archives nothing', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const d = deps(
+      g,
+      fakeClient(() => JSON.stringify({ summary: 'Everything is healthy.' }))
+    );
+    const out = await runConsolidation(d);
+    expect(out.summaries.length).toBe(0);
+    expect(out.skipped).toBe(1);
+    for (const n of ns) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+    expect(g.list().some((n) => n.kind === 'summary')).toBe(false);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:skipped');
+    expect(row?.text).toContain('summary does not describe its members');
+  });
+
+  test('a faithful summary merges the members it covers; the ones it does not describe stay live', async () => {
+    const g = graph();
+    const covered = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    const other = [
+      fact(g, 50, { text: 'The marketing newsletter went out to subscribers on Tuesday' } as never),
+      fact(g, 51, { text: 'Quarterly invoices were reconciled against the ledger' } as never),
+    ];
+    chain(g, [...covered, ...other]);
+    t += 10 * DAY;
+    const out = await runConsolidation(
+      deps(
+        g,
+        fakeClient(() => SUMMARY)
+      )
+    );
+    expect(out.summaries.length).toBe(1);
+    expect(out.members).toBe(6);
+    const s = g.get(out.summaries[0].id) as Neuron;
+    expect(s.meta?.members?.split(',').sort()).toEqual(covered.map((n) => n.id).sort());
+    for (const n of covered) expect(g.get(n.id)?.archivedAt).toBeDefined();
+    for (const n of other) expect(g.get(n.id)?.archivedAt).toBeUndefined();
   });
 });

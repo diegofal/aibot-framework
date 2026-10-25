@@ -7,6 +7,7 @@ import {
   IMPORTANCE_WEIGHTS,
   USE_HALF_LIFE_MS,
   importanceOf,
+  planForgetting,
   protectionOf,
 } from '../../src/watcher/importance';
 import type { Neuron } from '../../src/watcher/types';
@@ -110,6 +111,27 @@ describe('importance', () => {
     expect(importanceOf(g.get(b.id) as Neuron, c1).components.consequence).toBe(0);
     const served = ctx({ graph: g, servedInsights: new Set([insight.id]) });
     expect(importanceOf(g.get(a.id) as Neuron, served).reason).toContain('served broadcast');
+  });
+
+  test('consequence: a fact named in meta.supportNeurons of an insight nobody served yet still supports it', () => {
+    const g = graph();
+    const old = fact(g, 'the deploy cache was stale on Tuesday');
+    g.addNeuron({
+      kind: 'insight',
+      text: 'stale caches keep breaking deploys',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { supportNeurons: `n-unknown,${old.id}` },
+    } as never);
+    t += 60 * DAY;
+    const c1 = ctx({ nowMs: t, graph: g });
+    const s = importanceOf(g.get(old.id) as Neuron, c1);
+    expect(s.components.consequence).toBe(1);
+    expect(s.score).toBeCloseTo(IMPORTANCE_WEIGHTS.consequence);
+    expect(s.reason).toContain('supports an insight');
+    expect(s.protected).toBeNull();
+    const plan = planForgetting(g.list(), c1, { threshold: 0.15, target: 0 });
+    expect(plan.archive.map((x) => x.neuron.id)).not.toContain(old.id);
   });
 
   test('breadth counts distinct bots and related links, log-scaled', () => {

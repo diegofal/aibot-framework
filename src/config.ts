@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { CONSOLIDATE_PROMPT_MEMBERS } from './watcher/types';
 
 // Zod schemas for type-safe configuration
 const BotConversationOverrideSchema = z
@@ -947,14 +948,18 @@ export const WatcherConfigSchema = z
      * O10 consolidation (`src/watcher/consolidate.ts`): nightly at `hour`
      * (local), only while no agent-loop cycle runs, one notice-tier call per
      * cluster of ≥ `minCluster` related low-importance facts, at most
-     * `maxClusters` a night.
+     * `maxClusters` a night. `minCluster` is at most the prompt cap
+     * (`CONSOLIDATE_PROMPT_MEMBERS`): a larger minimum could never be met.
+     * `minCoverage`: the share of the members a summary must describe (≥ 2
+     * distinctive words in common) before anything is archived.
      */
     consolidate: z
       .object({
         enabled: z.boolean().default(true),
         hour: z.number().int().min(0).max(23).default(4),
-        minCluster: z.number().int().min(2).default(6),
+        minCluster: z.number().int().min(2).max(CONSOLIDATE_PROMPT_MEMBERS).default(6),
         maxClusters: z.number().int().min(0).default(10),
+        minCoverage: z.number().min(0).max(1).default(0.5),
       })
       .default({}),
   })

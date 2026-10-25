@@ -5,7 +5,7 @@
  * | Component    | Source                                                          | Weight |
  * |--------------|-----------------------------------------------------------------|--------|
  * | use          | `activations`, decayed by `lastActivatedAt` (half-life 14 d)     | 0.25   |
- * | consequence  | supports an insight, a resolved prediction, a served broadcast   | 0.35   |
+ * | consequence  | supports an insight (edge or `meta.supportNeurons`, served or not), a resolved prediction, a served broadcast | 0.35 |
  * | breadth      | distinct `support.bots` + `related` edges (log-scaled)           | 0.15   |
  * | surprise     | kind `surprise` / `contradiction`, or `meta.novel`               | 0.10   |
  * | operator     | 👍 = +1 (protected), 👎 = −1                                     | 0.15   |
@@ -42,6 +42,8 @@ export type Protection = 'kind' | 'operator' | 'served' | 'grace';
 export interface ImportanceGraph {
   get(id: string): Neuron | undefined;
   edgesOf(id: string): Edge[];
+  /** Every neuron; read once per context to find what insights name in `meta.supportNeurons`. */
+  list?(): Neuron[];
 }
 
 export interface ImportanceContext {
@@ -93,7 +95,13 @@ function consequenceOf(n: Neuron, ctx: ImportanceContext): Consequence {
       if (isResolvedPrediction(ctx.graph.get(e.from))) out.prediction = true;
     }
   }
-  // An insight names what it stands on in `meta.supportNeurons` too.
+  // An insight names what it stands on in `meta.supportNeurons` too:
+  // supporting any live insight is a consequence, a served one protects.
+  const named = insightSupportOf(ctx).get(n.id);
+  if (named) {
+    out.insight = true;
+    if (named.some((id) => ctx.servedInsights.has(id))) out.served = true;
+  }
   if (!out.served) {
     for (const id of ctx.servedInsights) {
       const insight = ctx.graph.get(id);
@@ -106,6 +114,27 @@ function consequenceOf(n: Neuron, ctx: ImportanceContext): Consequence {
     }
   }
   return out;
+}
+
+/** Per context: neuron id → the live insights that name it in `meta.supportNeurons`. */
+const insightSupportCache = new WeakMap<ImportanceContext, Map<string, string[]>>();
+
+function insightSupportOf(ctx: ImportanceContext): Map<string, string[]> {
+  const cached = insightSupportCache.get(ctx);
+  if (cached) return cached;
+  const map = new Map<string, string[]>();
+  for (const insight of ctx.graph.list?.() ?? []) {
+    if (insight.kind !== 'insight' || insight.archivedAt) continue;
+    for (const id of insight.meta?.supportNeurons?.split(',') ?? []) {
+      const key = id.trim();
+      if (!key) continue;
+      const list = map.get(key);
+      if (list) list.push(insight.id);
+      else map.set(key, [insight.id]);
+    }
+  }
+  insightSupportCache.set(ctx, map);
+  return map;
 }
 
 /** Why the neuron may never be forgotten, or null. */

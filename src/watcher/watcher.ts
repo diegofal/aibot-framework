@@ -147,7 +147,13 @@ const FORGET_DEFAULTS = { threshold: 0.15, graceDays: 7 };
 const TARGET_NEURONS_DEFAULT = 8000;
 /** A `forget:archive` row names at most this many neurons (the lowest). */
 const FORGET_ROW_IDS = 100;
-const CONSOLIDATE_DEFAULTS = { enabled: true, hour: 4, minCluster: 6, maxClusters: 10 };
+const CONSOLIDATE_DEFAULTS = {
+  enabled: true,
+  hour: 4,
+  minCluster: 6,
+  maxClusters: 10,
+  minCoverage: 0.5,
+};
 /** How often the nightly consolidation checks the hour and the fleet. */
 export const CONSOLIDATE_CHECK_MS = 10 * 60_000;
 
@@ -1397,6 +1403,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       threshold: (cfg.forget ?? FORGET_DEFAULTS).threshold,
       minCluster: c.minCluster,
       maxClusters: c.maxClusters,
+      minCoverage: c.minCoverage ?? CONSOLIDATE_DEFAULTS.minCoverage,
       bots: () =>
         (this.deps.config().bots ?? []).map((b) => ({ id: b.id, name: this.botName(b.id) })),
       botName: (id) => this.botName(id),
