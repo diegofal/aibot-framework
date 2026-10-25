@@ -15,7 +15,9 @@
  * with `Graph.mergeInto` (archived with `mergedInto`; their edges, topics
  * included, re-pointed onto the summary) and keep `consolidatedInto` and an
  * `archivedReason`. A cluster larger than `CONSOLIDATE_PROMPT_MEMBERS` is split
- * into chunks, one call each (each counts against `maxClusters`), so only facts
+ * into chunks of at least `minCluster` (or full chunks of the cap when no such
+ * split exists; the rest waits for a later night), one call each (each counts
+ * against `maxClusters`), so only facts
  * the model saw are merged. Eligibility is checked again when the call returns:
  * a member that became protected or important meanwhile stays live, and if
  * fewer than `minCluster` remain the summary is skipped and logged. The cap
@@ -109,16 +111,29 @@ export function findClusters(
   );
 }
 
-/** A cluster split into balanced chunks of at most `CONSOLIDATE_PROMPT_MEMBERS`, in member order. */
-export function chunkCluster(cluster: Cluster): Cluster[] {
+/**
+ * A cluster split into balanced chunks of at most `CONSOLIDATE_PROMPT_MEMBERS`,
+ * in member order, each of at least `minCluster` (a smaller chunk would only be
+ * skipped). The fewest chunks that fit the prompt give the largest chunks, so
+ * if even that split leaves one under `minCluster` (minCluster 30 and 41 facts:
+ * 20 + 21) no split works: the cluster gives full chunks of
+ * `CONSOLIDATE_PROMPT_MEMBERS` and the remainder stays live for a later night.
+ */
+export function chunkCluster(cluster: Cluster, minCluster: number): Cluster[] {
   const n = cluster.members.length;
-  if (n <= CONSOLIDATE_PROMPT_MEMBERS) return [cluster];
-  const parts = Math.ceil(n / CONSOLIDATE_PROMPT_MEMBERS);
+  const cap = CONSOLIDATE_PROMPT_MEMBERS;
+  if (n <= cap) return [cluster];
+  const chunk = (from: number, to: number): Cluster => ({
+    members: cluster.members.slice(from, to),
+    provenance: cluster.provenance,
+  });
+  const parts = Math.ceil(n / cap);
+  if (Math.floor(n / parts) < minCluster) {
+    return Array.from({ length: Math.floor(n / cap) }, (_, i) => chunk(i * cap, (i + 1) * cap));
+  }
   const out: Cluster[] = [];
   for (let i = 0; i < parts; i++) {
-    const from = Math.floor((i * n) / parts);
-    const to = Math.floor(((i + 1) * n) / parts);
-    out.push({ members: cluster.members.slice(from, to), provenance: cluster.provenance });
+    out.push(chunk(Math.floor((i * n) / parts), Math.floor(((i + 1) * n) / parts)));
   }
   return out;
 }
@@ -243,7 +258,7 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
       threshold: deps.threshold,
       minCluster: deps.minCluster,
     })
-      .flatMap(chunkCluster)
+      .flatMap((c) => chunkCluster(c, deps.minCluster))
       .slice(0, Math.max(0, deps.maxClusters));
     out.clusters = clusters.length;
     for (const cluster of clusters) {

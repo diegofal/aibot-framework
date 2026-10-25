@@ -7,6 +7,7 @@ import type { Config } from '../../src/config';
 import type { LLMClient } from '../../src/core/llm-client';
 import {
   type ConsolidateDeps,
+  chunkCluster,
   findClusters,
   provenanceClass,
   runConsolidation,
@@ -325,6 +326,40 @@ describe('runConsolidation: what the model saw, what changed meanwhile, the cap'
     }
     expect(out.members).toBe(55);
     expect(out.summaries.length).toBe(2);
+  });
+
+  test('minCluster 30 and 41 facts: no even split fits, so one chunk of 40 is summarised and 1 stays live', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 41 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const client = fakeClient(() => SUMMARY);
+    const out = await runConsolidation(deps(g, client, { minCluster: 30 }));
+    expect(client.calls.length).toBe(1);
+    expect(client.calls[0]).not.toContain('more facts like these');
+    expect(out.summaries.length).toBe(1);
+    expect(out.members).toBe(40);
+    expect(out.skipped).toBe(0);
+    const live = g.list().filter((n) => n.kind === 'fact' && !n.archivedAt);
+    expect(live.length).toBe(1);
+  });
+
+  test('chunkCluster: every chunk between minCluster and 40, or full chunks of 40 when no split fits', () => {
+    const g = graph();
+    const cluster = (n: number) => ({
+      members: Array.from({ length: n }, (_, i) => fact(g, i)),
+      provenance: 'public' as const,
+    });
+    const sizes = (n: number, min: number) =>
+      chunkCluster(cluster(n), min).map((c) => c.members.length);
+    expect(sizes(55, 6)).toEqual([27, 28]);
+    const s41 = sizes(41, 6);
+    expect(s41.length).toBe(2);
+    for (const k of s41) expect(k).toBeGreaterThanOrEqual(6);
+    expect(s41.reduce((a, b) => a + b, 0)).toBe(41);
+    expect(sizes(41, 30)).toEqual([40]);
+    expect(sizes(40, 30)).toEqual([40]);
+    expect(sizes(85, 30)).toEqual([40, 40]);
   });
 
   test('each chunk counts against maxClusters', async () => {
