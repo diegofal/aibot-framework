@@ -50,12 +50,15 @@ import { metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
   MIND_PAGE_SIZE,
   contradictionSides,
+  highlightDims,
   highlightFor,
   highlightState,
+  kindFilterIds,
   mindCounts,
   mindListHtml,
   mindRows,
   mindTabBlurb,
+  mindTabState,
   mindTabsHtml,
   refocusOnEffect,
 } from './watcher-mind-helpers.js';
@@ -246,12 +249,13 @@ function drawMind() {
   drawSummaries();
   if (page.mindRefocus) {
     page.mindRefocus = false;
+    drawLegend();
     applyFocus();
   }
   const m = page.mind;
   const neurons = [...page.model.neurons.values()];
   const tabs = $('#watcher-mind-tabs');
-  if (tabs) tabs.innerHTML = mindTabsHtml(mindCounts(neurons, page.broadcasts), m.tab);
+  if (tabs) drawMindTabs(tabs, mindCounts(neurons, page.broadcasts), m.tab);
   const blurb = $('#watcher-mind-blurb');
   if (blurb) blurb.textContent = mindTabBlurb(m.tab);
   const list = $('#watcher-mind-list');
@@ -270,6 +274,27 @@ function drawMind() {
   });
 }
 
+/**
+ * The tab strip is rendered once; later redraws patch each tab's count and
+ * active state in place, so its horizontal scroll and keyboard focus survive.
+ */
+function drawMindTabs(host, counts, active) {
+  const buttons = host.querySelectorAll('[data-mind-tab]');
+  const state = mindTabState(counts, active);
+  if (buttons.length !== state.length) {
+    host.innerHTML = mindTabsHtml(counts, active);
+    return;
+  }
+  for (const t of state) {
+    const btn = host.querySelector(`[data-mind-tab="${t.kind}"]`);
+    if (!btn) continue;
+    btn.classList.toggle('is-active', t.active);
+    btn.setAttribute('aria-selected', t.active ? 'true' : 'false');
+    const count = btn.querySelector('.watcher-mind-count');
+    if (count && count.textContent !== t.count) count.textContent = t.count;
+  }
+}
+
 /** A neuron event: redraw the Mind panel soon, once per burst. */
 function scheduleMind() {
   if (!page || page.mindTimer) return;
@@ -278,7 +303,11 @@ function scheduleMind() {
 
 function drawLegend() {
   const host = $('#watcher-legend');
-  if (host) host.innerHTML = legendHtml(page.kindFilter);
+  if (!host) return;
+  const count = page.kindFilter
+    ? kindFilterIds(page.model.neurons.values(), page.kindFilter).length
+    : null;
+  host.innerHTML = legendHtml(page.kindFilter, count);
 }
 
 /**
@@ -333,15 +362,19 @@ function drawSelf() {
 
 /** Light what `highlightFor` picks: the selection, else the legend kind, else attention. */
 function applyFocus() {
+  const source = {
+    kindFilter: page.kindFilter,
+    selectedSeq: page.selectedSeq,
+    selectedIds: page.selectedIds,
+    filterId: page.filterId,
+  };
   page.ball?.highlight(
     highlightFor({
-      kindFilter: page.kindFilter,
-      selectedSeq: page.selectedSeq,
-      selectedIds: page.selectedIds,
-      filterId: page.filterId,
+      ...source,
       neurons: page.model.neurons.values(),
       attention: page.self?.attention,
-    })
+    }),
+    { dim: highlightDims(source) }
   );
 }
 
@@ -485,6 +518,7 @@ function onEffect(effect) {
       break;
     case 'update':
     case 'archive':
+    case 'revive':
       if (ballLive) page.ball.update(effect.id);
       break;
     case 'pulse': {
@@ -517,7 +551,7 @@ function onEffect(effect) {
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
   if (ballLive && refocusOnEffect(effect.kind, page.kindFilter)) page.mindRefocus = true;
-  if (['spawn', 'update', 'archive', 'edge'].includes(effect.kind)) scheduleMind();
+  if (['spawn', 'update', 'archive', 'revive', 'edge'].includes(effect.kind)) scheduleMind();
   if (effectRedrawsThoughts(effect, page.model.neurons.get(effect.id))) drawSummaries();
 }
 
@@ -538,13 +572,20 @@ async function refetchGraph() {
   const out = reconcileGraph(page.model, snap);
   if (page.ball && !page.replay) {
     for (const id of out.added) page.ball.spawn(id);
-    for (const id of [...out.updated, ...out.archived]) page.ball.update(id);
+    for (const id of [...out.updated, ...out.archived, ...out.revived]) page.ball.update(id);
     if (out.edgesChanged) page.ball.edgesChanged();
   }
-  if (out.added.length || out.updated.length || out.archived.length || out.edgesChanged) {
+  if (
+    out.added.length ||
+    out.updated.length ||
+    out.archived.length ||
+    out.revived.length ||
+    out.edgesChanged
+  ) {
     const kindChanged =
       (out.added.length && refocusOnEffect('spawn', page.kindFilter)) ||
-      (out.archived.length && refocusOnEffect('archive', page.kindFilter));
+      (out.archived.length && refocusOnEffect('archive', page.kindFilter)) ||
+      (out.revived.length && refocusOnEffect('revive', page.kindFilter));
     if (page.ball && !page.replay && kindChanged) page.mindRefocus = true;
     drawState();
     drawMind();

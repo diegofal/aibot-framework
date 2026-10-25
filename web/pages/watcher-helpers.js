@@ -461,16 +461,22 @@ export function mergeWatcherState(prev, next) {
 
 /**
  * Colour key for the ball: one button per kind (click filters the ball to
- * that kind, `data-legend-kind`; `active` is pressed), plus the origin pair.
+ * that kind, `data-legend-kind`; `active` is pressed and, given
+ * `activeCount`, shows how many live neurons it lights, zero included),
+ * plus the origin pair.
  */
-export function legendHtml(active = null) {
+export function legendHtml(active = null, activeCount = null) {
+  const count =
+    active && activeCount != null && Number.isFinite(Number(activeCount))
+      ? `<b class="watcher-legend-count">${Number(activeCount).toLocaleString('en-US')}</b>`
+      : '';
   const kinds = NEURON_KINDS.map(
     (k) =>
       `<button type="button" class="watcher-legend-item watcher-legend-kind${
         k === active ? ' is-active' : ''
       }" data-legend-kind="${k}" aria-pressed="${k === active ? 'true' : 'false'}" title="${
         k === active ? 'Show every kind' : `Show only ${esc(kindLabel(k, 2))}`
-      }"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}</button>`
+      }"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}${k === active ? count : ''}</button>`
   ).join('');
   const origin = `<span class="watcher-legend-item"><i style="background:${neuronColour({
     kind: 'insight',
@@ -583,8 +589,10 @@ export function applyWatcherEvent(model, event) {
         bump(model, data.kind);
         return { kind: 'spawn', id: data.id };
       }
-      model.neurons.set(data.id, { ...prev, ...data });
+      const next = { ...prev, ...data };
+      model.neurons.set(data.id, next);
       if (!prev.archivedAt && data.archivedAt) return { kind: 'archive', id: data.id };
+      if (prev.archivedAt && !next.archivedAt) return { kind: 'revive', id: data.id };
       return { kind: 'update', id: data.id };
     }
     case 'watcher:edge': {
@@ -657,7 +665,7 @@ const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * snapshot changes nothing.
  */
 export function reconcileGraph(model, snapshot, { nowIso = new Date().toISOString() } = {}) {
-  const out = { added: [], updated: [], archived: [], edgesChanged: false };
+  const out = { added: [], updated: [], archived: [], revived: [], edgesChanged: false };
   if (!model || !snapshot || !Array.isArray(snapshot.neurons)) return out;
   const seen = new Set();
   for (const n of snapshot.neurons) {
@@ -672,6 +680,7 @@ export function reconcileGraph(model, snapshot, { nowIso = new Date().toISOStrin
     if (sameJson(prev, n)) continue;
     model.neurons.set(n.id, n);
     if (!prev.archivedAt && n.archivedAt) out.archived.push(n.id);
+    else if (prev.archivedAt && !n.archivedAt) out.revived.push(n.id);
     else out.updated.push(n.id);
   }
   for (const [id, n] of model.neurons) {
