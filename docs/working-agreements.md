@@ -7,8 +7,8 @@
   Mantener los marcadores zero:rule alrededor de cada regla: son invisibles al renderizar y le
   permiten a /zero saber qué reglas ya tiene este documento. El texto entre ellos se edita libre.
 
-  Deliberadamente liviano: un solo desarrollador, sin tracker ni PRs; cada cambio en su propio
-  worktree, mergeado a main. Las reglas de equipo que Zero trae (branch por ticket, labels de
+  Deliberadamente liviano: un solo desarrollador, sin tracker; cada cambio en su propio worktree,
+  mergeado a main por pull request con su review. Las reglas de equipo que Zero trae (branch por ticket, labels de
   entorno, gate de producción por ticket, etc.) están declinadas con su motivo en
   .claude/zero.config.json.
 -->
@@ -120,6 +120,21 @@ commits sin mergear.
 
 La carpeta principal se queda en el branch en que está; no se cambia de branch ahí. `git switch`,
 `git checkout -b/-B` están en el deny list.
+<!-- /zero:rule -->
+
+<!-- zero:rule pr.review-before-merge since=0.94.184 section=3 -->
+**Review antes de mergear.** Nada se mergea a `main` hasta que el head commit de su pull request
+tenga un code review registrado, o un skip con su motivo. Donde se pide el sign-off de una persona,
+ese sign-off va sobre el mismo head commit, y mergear sigue siendo su propio sí explícito.
+<!-- /zero:rule -->
+
+<!-- zero:rule review.rounds-are-a-persons since=0.94.200 section=3 -->
+**Una ronda de review más allá del presupuesto la compra una persona.** El review se frena en su
+presupuesto de rondas y nombra dos caminos: una ronda más, o un skip registrado. Un asistente nunca
+pasa `--another-round` ni `--skip` por su cuenta, ni en las rondas del code review, ni en las del
+plan review, ni en una pasada a mano: pasado el presupuesto reporta la serie (las rondas, los
+findings, qué cambió cada fix) y le pregunta a la persona, en un solo mensaje, cuál de los dos
+quiere. Partir el cambio es la tercera respuesta, y muchas veces la mejor.
 <!-- /zero:rule -->
 
 ---

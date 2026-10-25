@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Process (2026-10-25) — Review before merge, and extra review rounds are a person's call
+- **Why.** Changes have reached `main` through pull requests since PR #8, and Zero 0.94.201 carries two rules for that flow that this install lacked.
+- **Rules** in `docs/working-agreements.md` §3: `pr.review-before-merge` (nothing merges to `main` until the PR head commit carries a recorded code review or a skip with its reason; merging is still its own explicit yes) and `review.rounds-are-a-persons` (past the round budget an assistant never passes `--another-round` or `--skip` itself: it reports the rounds and asks). The header comment no longer says there are no PRs.
+
 ### Fixed (2026-10-24) — Watcher optimizations review
 - **An agenda insight whose broadcast failed during the agenda pass is retried once after the floor** (`src/watcher/integrate.ts`). **Why.** A send that failed, was deferred or capped during the pass is before `agendaSettledAt` and the insight is older than the scan, and pending is drained: a quiet fleet never retried it, even after the floor or the cap reset. `agendaRetryAt` (insight → last unsuccessful attempt) makes it news once `integrate.agendaFloorMs` has passed since that attempt; a delivery or the next applied pass shown it clears the entry (no retry loop); untouched backlog still never counts. Tests: `tests/watcher/integrate-act.test.ts`.
 - **A notice pass shown an operator-message neuron marks what it writes `operatorMessage: 'true'`** (`src/watcher/notice.ts`, `mayCarryOperatorMessage` in `types.ts`). **Why.** Provenance only looked at the cited buffer items, but the prompt shows touched neurons in full: a pattern from two bots' activity written while shown an operator message got `'false'` and the fast lane quoted it. Tests: `tests/watcher/notice.test.ts`.
