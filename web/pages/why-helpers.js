@@ -78,9 +78,10 @@ function gist(why) {
 
 /**
  * The fold. `opts.botId` links the goal when the why has no cycle;
- * `opts.nowMs` anchors relative times.
+ * `opts.nowMs` anchors relative times; `opts.open` renders it unfolded (a
+ * page that keeps folds open across a redraw passes it).
  */
-export function whyPanel(why, { nowMs = Date.now(), botId } = {}) {
+export function whyPanel(why, { nowMs = Date.now(), botId, open = false } = {}) {
   if (!why?.what) return '';
   const agentId = why.cycle?.botId ?? botId;
   const rows = [row('What', esc(why.what))];
@@ -115,5 +116,5 @@ export function whyPanel(why, { nowMs = Date.now(), botId } = {}) {
     .filter(Boolean)
     .map((t) => `<div class="why-foot">${esc(t)}</div>`)
     .join('');
-  return `<details class="why"><summary>Why this?<span class="text-dim">${gist(why)}</span></summary><div class="why-body">${rows.join('')}${foot}</div></details>`;
+  return `<details class="why"${open ? ' open' : ''}><summary>Why this?<span class="text-dim">${gist(why)}</span></summary><div class="why-body">${rows.join('')}${foot}</div></details>`;
 }

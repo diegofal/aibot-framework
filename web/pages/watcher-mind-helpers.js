@@ -164,6 +164,61 @@ export function kindFilterIds(neurons, kind) {
   return ids;
 }
 
+/**
+ * The ball's highlight has one source at a time: a neuron/row selection or a
+ * legend kind, never both. Picking a kind clears the selection; selecting a
+ * neuron or a log row clears the kind. A row inside a neuron filter keeps the
+ * filter (the log stays narrowed to that neuron). Pure state transition:
+ * `{ kindFilter, selectedSeq, selectedIds, filterId }` in and out.
+ */
+export function highlightState(state, action) {
+  const s = {
+    kindFilter: state?.kindFilter ?? null,
+    selectedSeq: state?.selectedSeq ?? null,
+    selectedIds: Array.isArray(state?.selectedIds) ? [...state.selectedIds] : [],
+    filterId: state?.filterId ?? null,
+  };
+  const noRow = { selectedSeq: null, selectedIds: [] };
+  switch (action?.type) {
+    case 'kind':
+      if (!action.kind || s.kindFilter === action.kind) return { ...s, kindFilter: null };
+      return { kindFilter: action.kind, ...noRow, filterId: null };
+    case 'neuron':
+      return { kindFilter: null, ...noRow, filterId: action.id ?? null };
+    case 'row':
+      if (s.selectedSeq === action.seq) return { ...s, ...noRow };
+      return {
+        ...s,
+        kindFilter: null,
+        selectedSeq: action.seq,
+        selectedIds: Array.isArray(action.ids) ? [...action.ids] : [],
+      };
+    case 'clear':
+      return { ...s, ...noRow, filterId: null };
+    default:
+      return s;
+  }
+}
+
+/**
+ * The ids the ball lights for a `highlightState`: a selected row's neurons,
+ * else the filtered neuron, else the legend kind, else what the watcher
+ * attends to (`attention.focusNeuronIds`).
+ */
+export function highlightFor({
+  kindFilter = null,
+  selectedSeq = null,
+  selectedIds = [],
+  filterId = null,
+  neurons = [],
+  attention = null,
+} = {}) {
+  if (selectedSeq !== null && selectedSeq !== undefined) return [...(selectedIds ?? [])];
+  if (filterId) return [filterId];
+  if (kindFilter) return kindFilterIds(neurons, kindFilter);
+  return Array.isArray(attention?.focusNeuronIds) ? [...attention.focusNeuronIds] : [];
+}
+
 /** The tab strip: a button per kind with its colour dot and count. */
 export function mindTabsHtml(counts, active) {
   return `<div class="watcher-mind-tabs" role="tablist" aria-label="What the watcher holds">${MIND_TABS.map(
@@ -292,9 +347,9 @@ function broadcastRow(b, { nowMs, open }) {
       ? '<span class="text-dim">no cycle has acted on it yet</span>'
       : '';
   const text = b.insightId ? openText(b.insightId, b.text) : `<span>${esc(b.text ?? '')}</span>`;
-  const why = b.why
-    ? `<div data-open-key="${esc(b.id)}:why">${whyPanel(b.why, { nowMs, botId: b.botId })}</div>`
-    : '';
+  const whyKey = `${b.id}:why`;
+  const panel = b.why ? whyPanel(b.why, { nowMs, botId: b.botId, open: !!open?.has(whyKey) }) : '';
+  const why = panel ? `<div data-open-key="${esc(whyKey)}">${panel}</div>` : '';
   return `${text}${meta(parts)}${served ? `<div class="watcher-mind-status">${served}</div>` : ''}${why}${signalButtonsHtml(
     b.id,
     b.signal
