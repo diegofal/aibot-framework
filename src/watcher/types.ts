@@ -18,6 +18,8 @@ export const NEURON_KINDS = [
   'insight',
   'contradiction',
   'prediction',
+  /** O10: what consolidation wrote for a cluster of forgettable facts (`consolidate.ts`). */
+  'summary',
 ] as const;
 export type NeuronKind = (typeof NEURON_KINDS)[number];
 
@@ -141,7 +143,10 @@ export interface WatcherState {
   bornAt?: string;
   phase: WatcherPhase;
   lastTickAt?: string;
+  /** Live neurons per kind. */
   counts: Record<NeuronKind, number>;
+  /** O10: archived neurons (forgotten, merged or consolidated); the header shows live / archived. */
+  archived?: number;
   edges: number;
   linkStatus: LinkStatus;
   lastError?: string;
@@ -241,11 +246,23 @@ export interface WatcherConfig {
     /** A pass wakes when the salience pending since the last one adds up to this. */
     wakeSalience: number;
   };
-  graph: { archiveAfterDays: number; relatedThreshold: number; maxNeurons: number };
+  graph: {
+    /** Deprecated (O10): forgetting is by importance (`forget`); kept so live configs validate. */
+    archiveAfterDays: number;
+    relatedThreshold: number;
+    /** Hard ceiling: past it, the oldest inactive neuron is archived at once. */
+    maxNeurons: number;
+    /** O10: daily forgetting archives low-importance neurons until the live graph is this size. */
+    targetNeurons?: number;
+  };
   birth: { historyDays: number };
   log: { senseSummaryEveryMs: number };
   /** O1 fast lane (`src/watcher/fast-lane.ts`); absent = `WATCHER_DEFAULTS.fastLane`. */
   fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
+  /** O10 forgetting (`importance.ts`); absent = `WATCHER_DEFAULTS.forget`. */
+  forget?: { threshold: number; graceDays: number };
+  /** O10 nightly consolidation (`consolidate.ts`); absent = `WATCHER_DEFAULTS.consolidate`. */
+  consolidate?: { enabled: boolean; hour: number; minCluster: number; maxClusters: number };
 }
 
 /** Mirrors `WatcherConfigSchema` in `src/config.ts` (tests/watcher/types.test.ts keeps them equal). */
@@ -274,10 +291,12 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     maxTokensPerDay: 600_000,
     wakeSalience: 3.0,
   },
-  graph: { archiveAfterDays: 30, relatedThreshold: 0.82, maxNeurons: 20_000 },
+  graph: { archiveAfterDays: 30, relatedThreshold: 0.82, maxNeurons: 20_000, targetNeurons: 8000 },
   birth: { historyDays: 30 },
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
+  forget: { threshold: 0.15, graceDays: 7 },
+  consolidate: { enabled: true, hour: 4, minCluster: 6, maxClusters: 10 },
 };
 
 export function emptyCounts(): Record<NeuronKind, number> {

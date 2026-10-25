@@ -34,7 +34,7 @@ export const METRIC_IDS = [
 ] as const;
 export type MetricId = (typeof METRIC_IDS)[number];
 
-export const GUARD_IDS = ['cost', 'idle', 'conversation', 'interruptions'] as const;
+export const GUARD_IDS = ['cost', 'idle', 'conversation', 'interruptions', 'graphSize'] as const;
 export type GuardId = (typeof GUARD_IDS)[number];
 
 /** Same threshold the plan dedupes surprises at against KNOWLEDGE.json. */
@@ -42,6 +42,8 @@ export const SURPRISE_DEDUPE = 0.8;
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
 const OLD_NEURON_MS = 7 * DAY_MS;
+/** `WATCHER_DEFAULTS.graph.targetNeurons`. */
+const DEFAULT_TARGET_NEURONS = 8000;
 
 export interface MetricsCycleRow {
   cycleId: string;
@@ -79,6 +81,8 @@ export interface MetricsRecords {
   proactiveDailyCap: number;
   /** Live Claude CLI semaphore snapshot (optional). */
   semaphore?: { queuedInteractive: number; activeWatcher: number };
+  /** O10: `watcher.graph.targetNeurons`, the `graphSize` guard's limit (default 8000). */
+  targetNeurons?: number;
 }
 
 export interface WatcherMetric {
@@ -316,6 +320,18 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
         ? checks.filter((c) => c.found === true).length / checks.length
         : 0,
       canaryChecks: checks.length,
+      // O10: forgetting by importance and nightly consolidation, in the window.
+      archived: neurons.filter(
+        (n) =>
+          inWindow(n.archivedAt) &&
+          !!n.meta?.archivedReason &&
+          !n.meta?.mergedInto &&
+          !n.meta?.consolidatedInto
+      ).length,
+      returned: neurons.filter((n) => inWindow(n.meta?.returnedAt)).length,
+      consolidated: neurons.filter((n) => !!n.meta?.consolidatedInto && inWindow(n.archivedAt))
+        .length,
+      summaries: neurons.filter((n) => n.kind === 'summary' && inWindow(n.createdAt)).length,
     },
   });
 
@@ -416,6 +432,13 @@ function guards(
   const maxQuestions = Math.max(0, ...perDay.values());
   const cap = fin(records.proactiveDailyCap ?? 0);
 
+  const allNeurons = Array.isArray(records.neurons) ? records.neurons : [];
+  const liveNeurons = allNeurons.filter((n) => !n.archivedAt).length;
+  const targetNeurons = fin(
+    records.targetNeurons ?? DEFAULT_TARGET_NEURONS,
+    DEFAULT_TARGET_NEURONS
+  );
+
   return [
     {
       id: 'cost',
@@ -456,6 +479,15 @@ function guards(
       limit: cap,
       unit: 'count',
       over: cap > 0 && maxQuestions > cap,
+    },
+    {
+      id: 'graphSize',
+      label: 'Live neurons',
+      value: liveNeurons,
+      limit: targetNeurons,
+      unit: 'count',
+      over: liveNeurons > targetNeurons,
+      detail: { archived: allNeurons.length - liveNeurons },
     },
   ];
 }

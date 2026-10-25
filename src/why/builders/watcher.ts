@@ -2,7 +2,9 @@
  * Why for a watcher neuron: what it holds, who brought it (the watcher or the
  * bot it was read from), the cycle it came from when one was recorded, what it
  * is connected to, how often it fired, and where it was created (a birth
- * stage or a tick). Built from the graph and the cycle log only.
+ * stage or a tick). O10: why forgetting archived it (`meta.archivedReason`),
+ * when it came back, and what a summary consolidates. Built from the graph and
+ * the cycle log only.
  */
 import type { Edge, Neuron, NeuronKind } from '../../watcher/types';
 import { type CycleRow, cycleAttribution } from '../cycle-index';
@@ -28,6 +30,7 @@ const KIND_TEXT: Record<NeuronKind, string> = {
   insight: 'Insight',
   contradiction: 'Contradiction',
   prediction: 'Prediction',
+  summary: 'Summary',
 };
 
 const STAGE_TEXT: Record<string, string> = {
@@ -87,6 +90,25 @@ export function neuronToWhy(input: NeuronWhyInput): Why {
   });
   if (neuron.confidence) notes.push({ label: 'Confidence', text: neuron.confidence });
   if (neuron.meta?.source) notes.push({ label: 'Source', text: neuron.meta.source });
+  // O10: forgetting (`meta.archivedReason`, the importance text) and consolidation.
+  const archivedReason = neuron.meta?.archivedReason;
+  if (archivedReason && neuron.archivedAt) {
+    notes.push({ label: 'Why archived', text: archivedReason });
+  } else if (neuron.meta?.returnedAt) {
+    notes.push({
+      label: 'Returned',
+      text: `Back from the archive on ${day(neuron.meta.returnedAt)}${
+        archivedReason ? ` (it had gone: ${archivedReason})` : ''
+      }`,
+    });
+  }
+  if (neuron.kind === 'summary' && neuron.meta?.consolidated === 'true') {
+    const members = (neuron.meta.members ?? '').split(',').filter(Boolean).length;
+    notes.push({
+      label: 'Consolidated',
+      text: `From ${members} related fact${members === 1 ? '' : 's'}, while the fleet slept`,
+    });
+  }
   why.notes = notes;
   return why;
 }

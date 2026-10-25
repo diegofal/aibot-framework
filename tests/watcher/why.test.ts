@@ -105,3 +105,59 @@ describe('neuronToWhy', () => {
     expect(why.notes).toContainEqual({ label: 'Source', text: 'memory/2026-10-01.md' });
   });
 });
+
+describe('neuronToWhy, O10 forgetting and consolidation', () => {
+  test('an archived neuron says why it was archived', () => {
+    const why = neuronToWhy({
+      neuron: {
+        ...base,
+        archivedAt: '2026-10-24T04:00:00.000Z',
+        meta: { archivedReason: 'importance 0.02: never used, one bot, no consequence' },
+      },
+      edges: [],
+      neighbours: [],
+    });
+    expect(why.notes).toContainEqual({
+      label: 'Why archived',
+      text: 'importance 0.02: never used, one bot, no consequence',
+    });
+    expect(WhySchema.safeParse(why).success).toBe(true);
+  });
+
+  test('a neuron that came back from the archive says when and why it had gone', () => {
+    const why = neuronToWhy({
+      neuron: {
+        ...base,
+        meta: {
+          archivedReason: 'importance 0.02: never used, one bot, no consequence',
+          returnedAt: '2026-10-25T09:00:00.000Z',
+        },
+      },
+      edges: [],
+      neighbours: [],
+    });
+    expect(why.notes).toContainEqual({
+      label: 'Returned',
+      text: 'Back from the archive on 2026-10-25 (it had gone: importance 0.02: never used, one bot, no consequence)',
+    });
+    expect(why.notes?.some((n) => n.label === 'Why archived')).toBe(false);
+  });
+
+  test('a summary names how many facts it consolidates', () => {
+    const why = neuronToWhy({
+      neuron: {
+        ...base,
+        kind: 'summary',
+        createdBy: 'watcher',
+        meta: { consolidated: 'true', members: 'n-1,n-2,n-3' },
+      },
+      edges: [],
+      neighbours: [],
+    });
+    expect(why.what).toBe('Summary: "Acme ships on Mondays"');
+    expect(why.notes).toContainEqual({
+      label: 'Consolidated',
+      text: 'From 3 related facts, while the fleet slept',
+    });
+  });
+});

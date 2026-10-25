@@ -248,7 +248,7 @@ describe('watcher routes (phase 3)', () => {
     const week = await (await a.request('/api/watcher/metrics')).json();
     expect(week.window).toBe('7d');
     expect(week.metrics).toHaveLength(8);
-    expect(week.guards).toHaveLength(4);
+    expect(week.guards).toHaveLength(5); // O10 added graphSize
     expect(JSON.stringify(week)).not.toContain('NaN');
     const month = await (await a.request('/api/watcher/metrics?window=30d')).json();
     expect(month.window).toBe('30d');

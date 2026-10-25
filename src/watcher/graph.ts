@@ -270,7 +270,16 @@ export class Graph {
     const n = this.resolveMerged(id);
     if (!n) return undefined;
     const { archivedAt: _gone, ...rest } = n;
-    const next: Neuron = { ...rest, activations: n.activations + 1, lastActivatedAt: this.iso() };
+    const at = this.iso();
+    // O10: a neuron forgetting archived (`archivedReason`) that fires again
+    // came back: `returnedAt` is what metric 5 counts.
+    const returned = !!n.archivedAt && !!n.meta?.archivedReason;
+    const next: Neuron = {
+      ...rest,
+      activations: n.activations + 1,
+      lastActivatedAt: at,
+      ...(returned ? { meta: { ...(n.meta ?? {}), returnedAt: at } } : {}),
+    };
     this.queueActivation(next);
     if (n.archivedAt) this.emit({ type: 'neuron', neuron: next });
     this.emitActivation(next);
@@ -348,10 +357,15 @@ export class Graph {
     return next;
   }
 
-  archive(id: string): Neuron | undefined {
+  /** Archive a live neuron; `meta` is merged in the same write (O10: `archivedReason`). */
+  archive(id: string, meta?: Record<string, string>): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n || n.archivedAt) return n;
-    const next: Neuron = { ...n, archivedAt: this.iso() };
+    const next: Neuron = {
+      ...n,
+      archivedAt: this.iso(),
+      ...(meta ? { meta: { ...(n.meta ?? {}), ...meta } } : {}),
+    };
     this.writeNeuron(next);
     return next;
   }

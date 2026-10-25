@@ -23,7 +23,8 @@ export interface LlmQueryEntry {
     | 'worker'
     | 'watcher:notice'
     | 'watcher:integrate'
-    | 'watcher:introspect';
+    | 'watcher:introspect'
+    | 'watcher:consolidate';
   model: string;
   backend: string;
   temperature?: number;

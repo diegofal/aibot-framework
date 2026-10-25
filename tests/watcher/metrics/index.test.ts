@@ -383,3 +383,45 @@ describe('guards', () => {
     );
   });
 });
+
+describe('O10 forgetting and consolidation', () => {
+  test('graphSize: live neurons against watcher.graph.targetNeurons', () => {
+    const live = [neuron({ kind: 'fact' }), neuron({ kind: 'fact' }), neuron({ kind: 'topic' })];
+    const gone = neuron({ kind: 'fact', archivedAt: iso(NOW - H) });
+    const r = rec({ neurons: [...live, gone], targetNeurons: 2 });
+    expect(guard(r, 'graphSize')).toMatchObject({
+      value: 3,
+      limit: 2,
+      unit: 'count',
+      over: true,
+      detail: { archived: 1 },
+    });
+    expect(guard(rec({ neurons: live }), 'graphSize')).toMatchObject({ limit: 8000, over: false });
+  });
+
+  test('metric 5 detail: archived, returned, consolidated and summaries in the window', () => {
+    const inWin = iso(NOW - D);
+    const before = iso(NOW - 20 * D);
+    const r = rec({
+      neurons: [
+        neuron({ kind: 'fact', archivedAt: inWin, meta: { archivedReason: 'importance 0.01' } }),
+        neuron({ kind: 'fact', archivedAt: before, meta: { archivedReason: 'importance 0.01' } }),
+        // a hygiene merge is not forgetting
+        neuron({ kind: 'fact', archivedAt: inWin, meta: { mergedInto: 'n-x' } }),
+        neuron({
+          kind: 'fact',
+          archivedAt: inWin,
+          meta: { mergedInto: 'n-s', consolidatedInto: 'n-s', archivedReason: 'x' },
+        }),
+        neuron({ kind: 'fact', meta: { archivedReason: 'importance 0.02', returnedAt: inWin } }),
+        neuron({ kind: 'summary', createdAt: inWin, meta: { consolidated: 'true' } }),
+      ],
+    });
+    expect(metric(r, 'compounding').detail).toMatchObject({
+      archived: 1,
+      returned: 1,
+      consolidated: 1,
+      summaries: 1,
+    });
+  });
+});

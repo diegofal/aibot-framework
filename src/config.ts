@@ -909,9 +909,13 @@ export const WatcherConfigSchema = z
       .default({}),
     graph: z
       .object({
+        /** Deprecated (O10, 2026-10-24): forgetting is by importance (`forget`); kept so live configs validate. */
         archiveAfterDays: z.number().min(1).default(30),
         relatedThreshold: z.number().min(0).max(1).default(0.82),
+        /** Hard ceiling: past it the oldest inactive neuron is archived at once. */
         maxNeurons: z.number().int().min(10).default(20_000),
+        /** O10: daily forgetting archives low-importance neurons until the live graph is this size. */
+        targetNeurons: z.number().int().min(0).default(8000),
       })
       .default({}),
     birth: z.object({ historyDays: z.number().int().min(1).max(365).default(30) }).default({}),
@@ -926,6 +930,31 @@ export const WatcherConfigSchema = z
         enabled: z.boolean().default(true),
         minBots: z.number().int().min(2).default(2),
         maxPerDay: z.number().int().min(0).default(6),
+      })
+      .default({}),
+    /**
+     * O10 forgetting (`src/watcher/importance.ts`): daily, neurons with
+     * importance below `threshold` and older than `graceDays` are archived,
+     * lowest first, until the live graph is at `graph.targetNeurons`.
+     */
+    forget: z
+      .object({
+        threshold: z.number().min(0).max(1).default(0.15),
+        graceDays: z.number().min(0).default(7),
+      })
+      .default({}),
+    /**
+     * O10 consolidation (`src/watcher/consolidate.ts`): nightly at `hour`
+     * (local), only while no agent-loop cycle runs, one notice-tier call per
+     * cluster of ≥ `minCluster` related low-importance facts, at most
+     * `maxClusters` a night.
+     */
+    consolidate: z
+      .object({
+        enabled: z.boolean().default(true),
+        hour: z.number().int().min(0).max(23).default(4),
+        minCluster: z.number().int().min(2).default(6),
+        maxClusters: z.number().int().min(0).default(10),
       })
       .default({}),
   })

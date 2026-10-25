@@ -7,6 +7,7 @@ import {
   FLEET_PREFETCH_RESULTS,
   buildFleetMemoryPrefetch,
   createFleetMemorySearchTool,
+  visibleTo,
 } from '../../src/tools/fleet-memory-search';
 import { Graph } from '../../src/watcher/graph';
 
@@ -406,5 +407,32 @@ describe('buildFleetMemoryPrefetch: the query embedding', () => {
       logger
     );
     expect(e.calls).toEqual(['canary codeword heron project']);
+  });
+});
+
+describe('O10 summaries in fleet memory', () => {
+  const summary = (meta: Record<string, string>) =>
+    ({
+      id: 'n-00000009',
+      kind: 'summary',
+      text: 'Deploys kept failing on a stale cache',
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      createdAt: '',
+      lastActivatedAt: '',
+      activations: 0,
+      meta: { consolidated: 'true', ...meta },
+    }) as never;
+
+  test('a summary of operator-sourced facts is shown only to the operator', () => {
+    const s = summary({ operatorSourced: 'true', operatorMessage: 'true' });
+    expect(visibleTo(s, { operator: true })).toBe(true);
+    expect(visibleTo(s, { operator: false, botId: 'b1' })).toBe(false);
+  });
+
+  test('a public summary is shown to the bots it came from, not to others', () => {
+    const s = summary({ operatorMessage: 'false' });
+    expect(visibleTo(s, { operator: false, botId: 'b2' })).toBe(true);
+    expect(visibleTo(s, { operator: false, botId: 'b3' })).toBe(false);
   });
 });

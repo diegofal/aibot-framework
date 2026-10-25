@@ -153,5 +153,8 @@ export function loadMetricsRecords(deps: LoadMetricsDeps): MetricsRecords {
     ...(baselineIdleShare !== undefined ? { baselineIdleShare } : {}),
     proactiveDailyCap: resolveProactiveLimits(config.operator).dailyCap,
     ...(semaphore ? { semaphore } : {}),
+    ...(typeof cfg.graph?.targetNeurons === 'number'
+      ? { targetNeurons: cfg.graph.targetNeurons }
+      : {}),
   };
 }

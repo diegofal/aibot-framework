@@ -136,6 +136,21 @@ describe('fastLaneCandidates', () => {
       ...over,
     }) as Neuron;
 
+  test('O10: a summary is never a candidate, whatever its confidence or support', () => {
+    expect(
+      fastLaneCandidates(
+        [
+          n({
+            kind: 'summary',
+            confidence: 'high',
+            meta: { consolidated: 'true', operatorMessage: 'false' },
+          }),
+        ],
+        FAST_LANE_DEFAULTS
+      )
+    ).toEqual([]);
+  });
+
   test('a pattern two bots support is a candidate', () => {
     expect(fastLaneCandidates([n({})], FAST_LANE_DEFAULTS)).toEqual([
       { neuronId: 'n-00000001', bots: ['a', 'b'], text: 'x fails' },
