@@ -4,6 +4,8 @@ import {
   MIND_TABS,
   broadcastStatus,
   contradictionSides,
+  highlightFor,
+  highlightState,
   kindFilterIds,
   mindCounts,
   mindListHtml,
@@ -225,6 +227,8 @@ describe('mindListHtml', () => {
     expect(html).toContain('data-open-cycle="c-9"');
     expect(html).toContain('data-bot-id="scout"');
     expect(html).toContain('class="why');
+    expect(html).toContain('data-open-key="b-1:why"');
+    expect(html).not.toMatch(/<details class="why"[^>]*open/);
     expect(html).toContain('data-mind-open="n-1"');
     expect(html).toContain('data-signal-id="b-1"');
     const failed = mindListHtml(
@@ -238,6 +242,13 @@ describe('mindListHtml', () => {
       nowMs: NOW,
     });
     expect(held).toContain('deferred');
+  });
+
+  test('a broadcast Why fold stays open when its key is in the open set', () => {
+    const open = mindListHtml('broadcast', [bc()], { nowMs: NOW, open: new Set(['b-1:why']) });
+    expect(open).toMatch(/data-open-key="b-1:why"><details class="why" open>/);
+    const other = mindListHtml('broadcast', [bc()], { nowMs: NOW, open: new Set(['b-2:why']) });
+    expect(other).not.toMatch(/<details class="why"[^>]*open/);
   });
 
   test('a contradiction: both sides and Confirm / Dismiss', () => {
@@ -286,5 +297,143 @@ describe('mindListHtml', () => {
       { nowMs: NOW }
     );
     expect(html).not.toContain('<script>');
+  });
+
+  test('escapes model- and bot-written strings in every row kind', () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    const safe = (html: string) => {
+      expect(html).not.toContain('<img');
+      expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    };
+    safe(
+      mindListHtml('fact', [n('n-f', 'fact', '2026-10-24T10:00:00Z', { text: evil })], {
+        nowMs: NOW,
+      })
+    );
+    safe(
+      mindListHtml(
+        'prediction',
+        [
+          n('n-p', 'prediction', '2026-10-24T10:00:00Z', {
+            text: evil,
+            meta: { resolvedAt: '2026-10-24T11:00:00Z', happened: 'true', evidence: evil },
+          }),
+        ],
+        { nowMs: NOW }
+      )
+    );
+    safe(
+      mindListHtml(
+        'insight',
+        [
+          n('n-i', 'insight', '2026-10-24T10:00:00Z', {
+            text: evil,
+            confidence: evil,
+            support: { bots: [evil] },
+            meta: { whyNoBroadcast: evil },
+          }),
+        ],
+        { nowMs: NOW, broadcasts: [] }
+      )
+    );
+    safe(
+      mindListHtml('insight', [n('n-1', 'insight', '2026-10-24T10:00:00Z', { text: evil })], {
+        nowMs: NOW,
+        broadcasts: [bc({ botId: evil })],
+      })
+    );
+    safe(
+      mindListHtml(
+        'broadcast',
+        [bc({ text: evil, botId: evil, kind: evil, deliveredAt: undefined, deliveryError: evil })],
+        { nowMs: NOW }
+      )
+    );
+    safe(
+      mindListHtml('broadcast', [bc({ text: evil, insightId: undefined, why: { what: evil } })], {
+        nowMs: NOW,
+      })
+    );
+    safe(
+      mindListHtml(
+        'contradiction',
+        [n('n-c', 'contradiction', '2026-10-24T10:00:00Z', { text: evil })],
+        {
+          nowMs: NOW,
+          sidesOf: () => [{ id: 'n-a', text: evil }],
+        }
+      )
+    );
+  });
+});
+
+describe('highlightState', () => {
+  const none = { kindFilter: null, selectedSeq: null, selectedIds: [], filterId: null };
+
+  test('picking a legend kind clears the neuron and row selection', () => {
+    const selected = { ...none, selectedSeq: 4, selectedIds: ['n-1'], filterId: 'n-2' };
+    expect(highlightState(selected, { type: 'kind', kind: 'goal' })).toEqual({
+      ...none,
+      kindFilter: 'goal',
+    });
+  });
+
+  test('the same kind again clears it', () => {
+    expect(highlightState({ ...none, kindFilter: 'goal' }, { type: 'kind', kind: 'goal' })).toEqual(
+      none
+    );
+  });
+
+  test('selecting a neuron or a log row clears the kind filter', () => {
+    const kind = { ...none, kindFilter: 'goal' };
+    expect(highlightState(kind, { type: 'neuron', id: 'n-1' })).toEqual({
+      ...none,
+      filterId: 'n-1',
+    });
+    expect(highlightState(kind, { type: 'row', seq: 7, ids: ['n-1', 'n-2'] })).toEqual({
+      ...none,
+      selectedSeq: 7,
+      selectedIds: ['n-1', 'n-2'],
+    });
+  });
+
+  test('a row inside a neuron filter keeps the filter; the same row again deselects it', () => {
+    const filtered = { ...none, filterId: 'n-1' };
+    const row = highlightState(filtered, { type: 'row', seq: 7, ids: ['n-1', 'n-3'] });
+    expect(row).toEqual({ ...none, filterId: 'n-1', selectedSeq: 7, selectedIds: ['n-1', 'n-3'] });
+    expect(highlightState(row, { type: 'row', seq: 7, ids: ['n-1', 'n-3'] })).toEqual(filtered);
+  });
+
+  test('clear drops the selection and keeps the kind', () => {
+    expect(
+      highlightState(
+        { ...none, filterId: 'n-1', selectedSeq: 2, selectedIds: ['x'] },
+        { type: 'clear' }
+      )
+    ).toEqual(none);
+    expect(highlightState({ ...none, kindFilter: 'goal' }, { type: 'clear' })).toEqual({
+      ...none,
+      kindFilter: 'goal',
+    });
+  });
+});
+
+describe('highlightFor', () => {
+  const neurons = [n('n-1', 'goal', 'x'), n('n-2', 'goal', 'x'), n('n-3', 'fact', 'x')];
+  const attention = { focusNeuronIds: ['n-3'] };
+
+  test('a selected row lights its neurons; else a neuron filter lights that neuron', () => {
+    const sel = { selectedSeq: 1, selectedIds: ['n-2'], filterId: 'n-1' };
+    expect(highlightFor({ ...sel, neurons, attention })).toEqual(['n-2']);
+    expect(highlightFor({ filterId: 'n-1', neurons, attention })).toEqual(['n-1']);
+  });
+
+  test('a legend kind lights that kind', () => {
+    expect(highlightFor({ kindFilter: 'goal', neurons, attention })).toEqual(['n-1', 'n-2']);
+  });
+
+  test('nothing picked: what the watcher attends to', () => {
+    expect(highlightFor({ neurons, attention })).toEqual(['n-3']);
+    expect(highlightFor({ neurons })).toEqual([]);
   });
 });

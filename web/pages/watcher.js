@@ -50,7 +50,8 @@ import { metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
   MIND_PAGE_SIZE,
   contradictionSides,
-  kindFilterIds,
+  highlightFor,
+  highlightState,
   mindCounts,
   mindListHtml,
   mindRows,
@@ -66,7 +67,6 @@ import {
 import {
   attendingHtml,
   cardHeadHtml,
-  focusHighlightIds,
   howIAmHtml,
   introspectionHtml,
 } from './watcher-self-helpers.js';
@@ -275,12 +275,28 @@ function drawLegend() {
   if (host) host.innerHTML = legendHtml(page.kindFilter);
 }
 
+/**
+ * Move the ball's one highlight source (`highlightState`): a legend kind
+ * clears the neuron/row selection and a selection clears the kind.
+ */
+function setHighlight(action) {
+  const next = highlightState(page, action);
+  page.kindFilter = next.kindFilter;
+  page.selectedSeq = next.selectedSeq;
+  page.selectedIds = next.selectedIds;
+  page.filterId = next.filterId;
+  drawLegend();
+  applyFocus();
+}
+
 /** Click a legend kind: light only that kind in the ball; click it again to clear. */
 function toggleKindFilter(kind) {
-  page.kindFilter = page.kindFilter === kind ? null : kind;
-  drawLegend();
-  if (!page.kindFilter) page.ball?.highlight(page.filterId ? [page.filterId] : []);
-  applyFocus();
+  const hadSelection = page.filterId || page.selectedSeq != null;
+  setHighlight({ type: 'kind', kind });
+  if (hadSelection && !page.filterId && page.selectedSeq == null) {
+    drawLogHead();
+    drawLog();
+  }
 }
 
 /* ── O10 memory: the Summaries list (watcher-memory-helpers.js) ─── */
@@ -309,20 +325,18 @@ function drawSelf() {
   }
 }
 
-/**
- * With no row selected and no neuron filter, the ball lights the legend's kind
- * when one is picked, else what the watcher attends to.
- */
+/** Light what `highlightFor` picks: the selection, else the legend kind, else attention. */
 function applyFocus() {
-  if (page.kindFilter && page.selectedSeq == null && !page.filterId) {
-    page.ball?.highlight(kindFilterIds(page.model.neurons.values(), page.kindFilter));
-    return;
-  }
-  const ids = focusHighlightIds(page.self?.attention, {
-    selectedSeq: page.selectedSeq,
-    filterId: page.filterId,
-  });
-  if (ids) page.ball?.highlight(ids);
+  page.ball?.highlight(
+    highlightFor({
+      kindFilter: page.kindFilter,
+      selectedSeq: page.selectedSeq,
+      selectedIds: page.selectedIds,
+      filterId: page.filterId,
+      neurons: page.model.neurons.values(),
+      attention: page.self?.attention,
+    })
+  );
 }
 
 async function refreshSelf() {
@@ -586,30 +600,18 @@ async function setTiers(patch) {
 function selectRow(li) {
   const seq = Number(li.dataset.seq);
   const ids = (li.dataset.neurons || '').split(' ').filter(Boolean);
-  if (page.selectedSeq === seq) {
-    page.selectedSeq = null;
-    page.ball?.highlight(page.filterId ? [page.filterId] : []);
-    applyFocus();
-  } else {
-    page.selectedSeq = seq;
-    page.ball?.highlight(ids);
-  }
+  setHighlight({ type: 'row', seq, ids });
   drawLog();
 }
 
 function clearFilter() {
-  page.filterId = null;
-  page.selectedSeq = null;
-  page.ball?.highlight([]);
-  applyFocus();
+  setHighlight({ type: 'clear' });
   drawLogHead();
   drawLog();
 }
 
 async function openNeuron(id) {
-  page.filterId = id;
-  page.selectedSeq = null;
-  page.ball?.highlight([id]);
+  setHighlight({ type: 'neuron', id });
   drawLogHead();
   drawLog();
 
@@ -732,7 +734,7 @@ function endReplay() {
   clearTimeout(page.replay.timer);
   page.replay = null;
   page.ball?.sync();
-  page.ball?.highlight(page.filterId ? [page.filterId] : []);
+  applyFocus();
   drawReplayBar();
   drawLogHead();
   drawLog();
@@ -925,6 +927,7 @@ export async function renderWatcher(el) {
     pending: 0,
     filterId: null,
     selectedSeq: null,
+    selectedIds: [],
     replay: null,
     stopped: false,
     metrics: metrics && !metrics.error ? metrics : null,
