@@ -29,6 +29,7 @@ import {
   createWatcherModel,
   isWatcherOff,
   legendHtml,
+  legendState,
   logListHtml,
   mergeLogRows,
   mergeWatcherState,
@@ -55,6 +56,7 @@ import {
   highlightState,
   kindFilterIds,
   mindCounts,
+  mindFocusKey,
   mindListHtml,
   mindRows,
   mindTabBlurb,
@@ -262,6 +264,10 @@ function drawMind() {
   if (!list) return;
   const rows = mindRows(m.tab, { neurons, broadcasts: page.broadcasts, query: m.query });
   const edges = [...page.model.edges.values()];
+  const focusKey = list.contains(document.activeElement)
+    ? focusKeyOf(document.activeElement)
+    : null;
+  const scrollTop = list.scrollTop;
   list.innerHTML = mindListHtml(m.tab, rows, {
     nowMs: Date.now(),
     shown: m.shown,
@@ -271,6 +277,37 @@ function drawMind() {
     sidesOf: (id) =>
       contradictionSides(id, edges, (other) => page?.model.neurons.get(other)?.text ?? null),
     open: m.open,
+  });
+  list.scrollTop = scrollTop;
+  if (focusKey) {
+    const same = [...list.querySelectorAll(MIND_FOCUSABLE)].find(
+      (el) => focusKeyOf(el) === focusKey
+    );
+    same?.focus({ preventScroll: true });
+  }
+}
+
+const MIND_FOCUSABLE = 'button, summary, a[href], input, select, textarea';
+const FOCUS_ATTRS = [
+  'data-watcher-signal',
+  'data-mind-open',
+  'data-open-cycle',
+  'data-action',
+  'href',
+];
+
+/** The Mind list's stable key for a focused control (`mindFocusKey`). */
+function focusKeyOf(el) {
+  const attrs = {};
+  for (const name of FOCUS_ATTRS) {
+    const v = el.getAttribute(name);
+    if (v) attrs[name] = v;
+  }
+  return mindFocusKey({
+    row: el.closest('[data-mind-key]')?.getAttribute('data-mind-key') ?? '',
+    tag: el.tagName,
+    attrs,
+    foldKey: el.closest('[data-open-key]')?.getAttribute('data-open-key') ?? null,
   });
 }
 
@@ -307,7 +344,32 @@ function drawLegend() {
   const count = page.kindFilter
     ? kindFilterIds(page.model.neurons.values(), page.kindFilter).length
     : null;
-  host.innerHTML = legendHtml(page.kindFilter, count);
+  const state = legendState(page.kindFilter, count);
+  const buttons = host.querySelectorAll('[data-legend-kind]');
+  if (buttons.length !== state.length) {
+    host.innerHTML = legendHtml(page.kindFilter, count);
+    return;
+  }
+  // Patch in place, like the Mind tab strip, so a focused legend button keeps focus.
+  host.querySelector('.watcher-legend')?.classList.toggle('is-filtered', !!page.kindFilter);
+  for (const k of state) {
+    const btn = host.querySelector(`[data-legend-kind="${k.kind}"]`);
+    if (!btn) continue;
+    btn.classList.toggle('is-active', k.active);
+    btn.setAttribute('aria-pressed', k.active ? 'true' : 'false');
+    btn.title = k.title;
+    let b = btn.querySelector('.watcher-legend-count');
+    if (k.count == null) {
+      b?.remove();
+    } else {
+      if (!b) {
+        b = document.createElement('b');
+        b.className = 'watcher-legend-count';
+        btn.append(b);
+      }
+      if (b.textContent !== k.count) b.textContent = k.count;
+    }
+  }
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   highlightState,
   kindFilterIds,
   mindCounts,
+  mindFocusKey,
   mindListHtml,
   mindRows,
   mindTabBlurb,
@@ -521,5 +522,51 @@ describe('mindTabState', () => {
     const html = mindTabsHtml({ insight: 1234 }, 'insight');
     expect(html).toContain('<b class="watcher-mind-count">1,234</b>');
     expect(html).toMatch(/data-mind-tab="insight" aria-selected="true"/);
+  });
+});
+
+describe('mindFocusKey', () => {
+  test('row key plus the control, from its stable attributes', () => {
+    expect(mindFocusKey({ row: 'n1', tag: 'BUTTON', attrs: { 'data-mind-open': 'n1' } })).toBe(
+      'n1|open'
+    );
+    expect(
+      mindFocusKey({ row: 'n1', tag: 'button', attrs: { 'data-watcher-signal': 'down' } })
+    ).toBe('n1|signal:down');
+    expect(mindFocusKey({ row: 'b-1', tag: 'button', attrs: { 'data-open-cycle': 'c-9' } })).toBe(
+      'b-1|cycle:c-9'
+    );
+    expect(mindFocusKey({ row: 'n1', tag: 'a', attrs: { href: '#/agents/x' } })).toBe(
+      'n1|href:#/agents/x'
+    );
+  });
+
+  test('a fold summary is keyed by its open-key; the pager has no row', () => {
+    expect(mindFocusKey({ row: 'n1', tag: 'SUMMARY', foldKey: 'n1:evidence' })).toBe(
+      'n1|fold:n1:evidence'
+    );
+    expect(mindFocusKey({ tag: 'button', attrs: { 'data-action': 'watcher-mind-more' } })).toBe(
+      '|action:watcher-mind-more'
+    );
+  });
+
+  test('signal wins over the other attributes; nothing stable means no key', () => {
+    expect(
+      mindFocusKey({
+        row: 'n1',
+        tag: 'button',
+        attrs: { 'data-watcher-signal': 'up', 'data-action': 'x' },
+      })
+    ).toBe('n1|signal:up');
+    expect(mindFocusKey({ row: 'n1', tag: 'button', attrs: {} })).toBeNull();
+    expect(mindFocusKey({ row: 'n1', tag: 'summary' })).toBeNull();
+    expect(mindFocusKey(null)).toBeNull();
+  });
+
+  test('every row in the list carries its id as data-mind-key', () => {
+    const html = mindListHtml('insight', [n('n1', 'insight', '2026-10-24T11:00:00Z')], {
+      nowMs: NOW,
+    });
+    expect(html).toContain('data-mind-key="n1"');
   });
 });

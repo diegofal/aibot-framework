@@ -17,6 +17,7 @@ import {
   isWatcherOff,
   kindLabel,
   legendHtml,
+  legendState,
   logListHtml,
   logRowHtml,
   mergeLogRows,
@@ -835,6 +836,25 @@ describe('small formatters', () => {
     expect(legendHtml('goal', 1234)).toContain('<b class="watcher-legend-count">1,234</b>');
     expect(legendHtml('goal')).not.toContain('watcher-legend-count');
     expect(legendHtml(null, 3)).not.toContain('watcher-legend-count');
+  });
+});
+
+describe('legendState', () => {
+  it('one entry per kind with its pressed state, title and count (active kind only)', () => {
+    const st = legendState('goal', 1234);
+    expect(st.map((k) => k.kind)).toEqual([...NEURON_KINDS]);
+    const goal = st.find((k) => k.kind === 'goal');
+    expect(goal).toMatchObject({ active: true, count: '1,234', title: 'Show every kind' });
+    const fact = st.find((k) => k.kind === 'fact');
+    expect(fact?.active).toBe(false);
+    expect(fact?.count).toBeNull();
+    expect(fact?.title).toStartWith('Show only ');
+  });
+
+  it('zero counts; no active kind or no count means no count', () => {
+    expect(legendState('goal', 0).find((k) => k.kind === 'goal')?.count).toBe('0');
+    expect(legendState('goal').every((k) => k.count === null)).toBe(true);
+    expect(legendState(null, 3).every((k) => !k.active && k.count === null)).toBe(true);
   });
 });
 

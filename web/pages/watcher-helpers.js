@@ -465,19 +465,35 @@ export function mergeWatcherState(prev, next) {
  * `activeCount`, shows how many live neurons it lights, zero included),
  * plus the origin pair.
  */
-export function legendHtml(active = null, activeCount = null) {
+/**
+ * Each legend kind's state: pressed, its title and, for the active kind only,
+ * its formatted live count (zero included). The page patches the legend in
+ * place from this so a focused legend button survives a filter toggle.
+ */
+export function legendState(active = null, activeCount = null) {
   const count =
     active && activeCount != null && Number.isFinite(Number(activeCount))
-      ? `<b class="watcher-legend-count">${Number(activeCount).toLocaleString('en-US')}</b>`
-      : '';
-  const kinds = NEURON_KINDS.map(
-    (k) =>
-      `<button type="button" class="watcher-legend-item watcher-legend-kind${
-        k === active ? ' is-active' : ''
-      }" data-legend-kind="${k}" aria-pressed="${k === active ? 'true' : 'false'}" title="${
-        k === active ? 'Show every kind' : `Show only ${esc(kindLabel(k, 2))}`
-      }"><i style="background:${neuronColour({ kind: k })}"></i>${esc(k)}${k === active ? count : ''}</button>`
-  ).join('');
+      ? Number(activeCount).toLocaleString('en-US')
+      : null;
+  return NEURON_KINDS.map((k) => ({
+    kind: k,
+    active: k === active,
+    title: k === active ? 'Show every kind' : `Show only ${kindLabel(k, 2)}`,
+    count: k === active ? count : null,
+  }));
+}
+
+export function legendHtml(active = null, activeCount = null) {
+  const kinds = legendState(active, activeCount)
+    .map(
+      (s) =>
+        `<button type="button" class="watcher-legend-item watcher-legend-kind${
+          s.active ? ' is-active' : ''
+        }" data-legend-kind="${s.kind}" aria-pressed="${s.active ? 'true' : 'false'}" title="${esc(s.title)}"><i style="background:${neuronColour(
+          { kind: s.kind }
+        )}"></i>${esc(s.kind)}${s.count != null ? `<b class="watcher-legend-count">${s.count}</b>` : ''}</button>`
+    )
+    .join('');
   const origin = `<span class="watcher-legend-item"><i style="background:${neuronColour({
     kind: 'insight',
     createdBy: 'bot:x',

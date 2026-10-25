@@ -254,6 +254,28 @@ export function mindTabState(counts, active) {
   }));
 }
 
+/**
+ * A stable key for a focusable control in the Mind list, so a live redraw
+ * (which replaces the list's HTML) can put keyboard focus back on the same
+ * control. `row` is the row's `data-mind-key` ('' outside a row, e.g. the
+ * pager), `tag` the element's tag, `attrs` its attributes, `foldKey` the
+ * enclosing `[data-open-key]` (for a fold's summary). `null` when the control
+ * has nothing stable to match on.
+ */
+export function mindFocusKey(desc) {
+  if (!desc) return null;
+  const a = desc.attrs ?? {};
+  const tag = String(desc.tag ?? '').toLowerCase();
+  let control = null;
+  if (a['data-watcher-signal']) control = `signal:${a['data-watcher-signal']}`;
+  else if (a['data-mind-open']) control = 'open';
+  else if (a['data-open-cycle']) control = `cycle:${a['data-open-cycle']}`;
+  else if (a['data-action']) control = `action:${a['data-action']}`;
+  else if (tag === 'summary' && desc.foldKey) control = `fold:${desc.foldKey}`;
+  else if (a.href) control = `href:${a.href}`;
+  return control ? `${desc.row ?? ''}|${control}` : null;
+}
+
 /** The tab strip: a button per kind with its colour dot and count. */
 export function mindTabsHtml(counts, active) {
   const state = mindTabState(counts, active);
@@ -484,7 +506,7 @@ export function mindListHtml(
   const colour = kind === 'broadcast' ? null : neuronColour({ kind, createdBy: 'watcher' });
   const items = page.map(
     (r) =>
-      `<li class="watcher-mind-row${kind === 'broadcast' ? ' is-broadcast' : ''}" data-kind="${esc(kind)}"${
+      `<li class="watcher-mind-row${kind === 'broadcast' ? ' is-broadcast' : ''}" data-kind="${esc(kind)}" data-mind-key="${esc(r?.id ?? '')}"${
         colour ? ` style="--mind-kind:${colour}"` : ''
       }>${render(r, ctx)}</li>`
   );
