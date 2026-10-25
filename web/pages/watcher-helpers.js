@@ -50,6 +50,7 @@ export const KIND_HUES = {
 const KIND_PLURALS = {
   entity: 'entities',
   person: 'people',
+  summary: 'summaries',
 };
 
 export const LOG_PHASES = ['birth', 'sense', 'notice', 'integrate', 'broadcast', 'sleep'];

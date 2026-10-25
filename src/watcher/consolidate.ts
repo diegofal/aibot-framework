@@ -32,10 +32,16 @@
  * words with the summary (`coveredMembers`) are merged, and if fewer than
  * `minCoverage` of them (or than `minCluster`) are described it is skipped. The night
  * stops when the fleet wakes up (`isQuiet`), the budget or breaker refuses,
- * or the watcher stops. Every row is code-written. Never throws.
+ * or the watcher stops; the fleet is checked again after each call, before any
+ * write. A summary that contradicts any member (`summaryContradicts`: a
+ * negation or numbers they do not share) is rejected, and a contradicted
+ * member is never counted as covered. Preview mode (`deps.preview`, the
+ * default while `watcher.consolidate` is new) runs everything up to and
+ * including validation and logs `consolidate:preview` rows, writing nothing to
+ * the graph. Every row is code-written. Never throws.
  */
 import { parseLLMJson } from '../bot/llm-json-parser';
-import { titleTokens } from '../hygiene/text-utils';
+import { summaryContradicts, titleTokens } from '../hygiene/text-utils';
 import type { Graph } from './graph';
 import { type ImportanceContext, importanceOf } from './importance';
 import { placeWithoutEmbedding } from './layout';
@@ -43,6 +49,7 @@ import type { InstrumentedClient } from './llm';
 import type { WatcherLog } from './log';
 import {
   narrateConsolidatePass,
+  narrateConsolidatePreview,
   narrateConsolidateSkipped,
   narrateConsolidated,
 } from './narration';
@@ -85,13 +92,14 @@ const stricter = (a: ProvenanceClass, b: ProvenanceClass): ProvenanceClass =>
   STRICTNESS[a] >= STRICTNESS[b] ? a : b;
 
 /**
- * Who reads a public neuron: its distinct `support.bots`, sorted. Public
- * memory is visible to its supporting bots (`fleet_memory_search`), and a
- * summary's support is its members' union, so public facts are clustered only
- * with facts of exactly the same readers.
+ * Who reads a public neuron: its distinct `support.bots`, sorted, as a JSON
+ * array (unambiguous: joining with a separator would let a bot id containing
+ * it collide with two bots). Public memory is visible to its supporting bots
+ * (`fleet_memory_search`), and a summary's support is its members' union, so
+ * public facts are clustered only with facts of exactly the same readers.
  */
 export function readershipOf(n: Pick<Neuron, 'support'>): string {
-  return [...new Set(n.support?.bots ?? [])].sort().join(',');
+  return JSON.stringify([...new Set(n.support?.bots ?? [])].sort());
 }
 
 export interface Cluster {
@@ -114,6 +122,11 @@ export const MAX_SUMMARY_CHARS = 400;
 export const COVERAGE_MIN_TOKENS = 2;
 export const DEFAULT_MIN_COVERAGE = 0.5;
 const CONSOLIDATE_TEMPERATURE = 0.2;
+/** A `consolidate:preview` row clips each member's text to this many characters. */
+export const PREVIEW_MEMBER_CHARS = 120;
+
+const clipText = (text: string, n: number): string =>
+  text.length > n ? `${text.slice(0, n - 1)}…` : text;
 
 /** The clusters to consolidate, largest first. Pure over the graph. */
 export function findClusters(
@@ -247,12 +260,14 @@ const distinctive = (text: string): Set<string> =>
 /**
  * The members the summary describes: those sharing at least
  * `COVERAGE_MIN_TOKENS` distinctive words with it (`titleTokens`: stopwords
- * dropped; tokens under 3 chars dropped too). Archiving depends on this, never
- * on the model's prose alone.
+ * dropped; tokens under 3 chars dropped too) that it does not contradict
+ * (`summaryContradicts`: negation or disagreeing numbers). Archiving depends
+ * on this, never on the model's prose alone.
  */
 export function coveredMembers<T extends Pick<Neuron, 'text'>>(summary: string, members: T[]): T[] {
   const words = distinctive(summary);
   return members.filter((n) => {
+    if (summaryContradicts(summary, n.text)) return false;
     let shared = 0;
     for (const t of distinctive(n.text)) if (words.has(t)) shared++;
     return shared >= COVERAGE_MIN_TOKENS;
@@ -282,8 +297,13 @@ export interface ConsolidateDeps {
   /** The fleet's bots (ids and names), for the "names a bot not in support" check. */
   bots: () => Array<{ id: string; name: string }>;
   botName?: (id: string) => string;
-  /** No agent-loop cycle runs (`fleetQuiet`); checked before every call. */
+  /** No agent-loop cycle runs (`fleetQuiet`); checked before every call and again before any write. */
   isQuiet: () => boolean;
+  /**
+   * Preview mode (`watcher.consolidate.preview`): call and validate as usual,
+   * log a `consolidate:preview` row per cluster, archive and create nothing.
+   */
+  preview: boolean;
   isCancelled?: () => boolean;
   logger?: { warn: (obj: object, msg: string) => void };
 }
@@ -294,6 +314,8 @@ export interface ConsolidateOutcome {
   /** Facts folded into summaries. */
   members: number;
   skipped: number;
+  /** Preview mode: summaries that passed validation and were only logged. */
+  previewed: number;
   stopped?: 'busy' | 'cap' | 'tokens' | 'breaker' | 'cancelled' | 'error';
 }
 
@@ -310,7 +332,13 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
   const { graph, log } = deps;
   const botName = deps.botName ?? ((id: string) => id);
   const cancelled = () => deps.isCancelled?.() === true;
-  const out: ConsolidateOutcome = { clusters: 0, summaries: [], members: 0, skipped: 0 };
+  const out: ConsolidateOutcome = {
+    clusters: 0,
+    summaries: [],
+    members: 0,
+    skipped: 0,
+    previewed: 0,
+  };
   const finish = (): ConsolidateOutcome => {
     log.say(
       'sleep',
@@ -320,6 +348,7 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         summaries: out.summaries.length,
         members: out.members,
         skipped: out.skipped,
+        ...(deps.preview ? { previewed: out.previewed } : {}),
         ...(out.stopped ? { stopped: STOPPED_TEXT[out.stopped] } : {}),
       }),
       out.summaries.length ? { neuronIds: out.summaries.map((s) => s.id) } : {}
@@ -426,6 +455,13 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         skip('the model call failed');
         continue;
       }
+      // The fleet may have woken while the model wrote: nothing is written
+      // while a cycle runs, so the answer is dropped and the night stops.
+      if (!deps.isQuiet()) {
+        skip('an agent woke up while the model wrote, so nothing was written');
+        out.stopped = 'busy';
+        break;
+      }
       if (eligibleNow.length < deps.minCluster) {
         skip(
           `${changed} of the facts became important or protected while the model wrote, leaving fewer than ${deps.minCluster}`
@@ -448,6 +484,15 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         skip(unfit);
         continue;
       }
+      // Word overlap never outweighs a contradiction: a summary that says the
+      // opposite of any fact it would replace is rejected whole.
+      const contradicted = eligibleNow.filter((n) => summaryContradicts(text, n.text)).length;
+      if (contradicted) {
+        skip(
+          `the summary contradicts ${contradicted} of the ${eligibleNow.length} facts (a negation or a number they do not share)`
+        );
+        continue;
+      }
       // Only the members the summary describes are merged; if too few are
       // described, nothing is archived on the model's word.
       const members = coveredMembers(text, eligibleNow);
@@ -462,6 +507,29 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
       const invalid = validateSummary(text, members, deps.bots());
       if (invalid) {
         skip(invalid);
+        continue;
+      }
+      if (deps.preview) {
+        const merged = new Set(members.map((n) => n.id));
+        out.previewed++;
+        log.say(
+          'sleep',
+          'consolidate:preview',
+          narrateConsolidatePreview({ text, members: members.length, of: eligibleNow.length }),
+          {
+            ...cost,
+            neuronIds: eligibleNow.map((n) => n.id),
+            consolidatePreview: {
+              summary: text,
+              coverage: members.length / eligibleNow.length,
+              members: eligibleNow.map((n) => ({
+                id: n.id,
+                text: clipText(n.text, PREVIEW_MEMBER_CHARS),
+                merged: merged.has(n.id),
+              })),
+            },
+          }
+        );
         continue;
       }
       const summary = writeSummary(graph, text, members, shownProvenance, res.model);

@@ -122,6 +122,16 @@ export interface WatcherLogRow {
   whyNoBroadcast?: string;
   /** `integrate:insight`: the insight needed a broadcast or a reason (`insightNeedsBroadcast`) and got neither. */
   broadcastReasonMissing?: true;
+  /**
+   * O10, `consolidate:preview`: what a consolidation in preview mode would
+   * have written (nothing was): the summary, the share of the members it
+   * describes, and each member (text clipped) with whether it would be merged.
+   */
+  consolidatePreview?: {
+    summary: string;
+    coverage: number;
+    members: Array<{ id: string; text: string; merged: boolean }>;
+  };
 }
 
 /** O2: what woke a notice or integrate pass. */
@@ -271,6 +281,8 @@ export interface WatcherConfig {
   /** O10 nightly consolidation (`consolidate.ts`); absent = `WATCHER_DEFAULTS.consolidate`. */
   consolidate?: {
     enabled: boolean;
+    /** Call and validate, log `consolidate:preview`, write nothing; absent = true. */
+    preview?: boolean;
     hour: number;
     minCluster: number;
     maxClusters: number;
@@ -309,7 +321,14 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
   forget: { threshold: 0.15, graceDays: 7 },
-  consolidate: { enabled: true, hour: 4, minCluster: 6, maxClusters: 10, minCoverage: 0.5 },
+  consolidate: {
+    enabled: false,
+    preview: true,
+    hour: 4,
+    minCluster: 6,
+    maxClusters: 10,
+    minCoverage: 0.5,
+  },
 };
 
 export function emptyCounts(): Record<NeuronKind, number> {

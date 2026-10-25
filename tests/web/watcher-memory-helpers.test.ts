@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { stateParts } from '../../web/pages/watcher-helpers.js';
-import { memoryCountsHtml, summaryRowsHtml } from '../../web/pages/watcher-memory-helpers.js';
+import {
+  effectRedrawsThoughts,
+  memoryCountsHtml,
+  summaryRowsHtml,
+} from '../../web/pages/watcher-memory-helpers.js';
 import { PASS_SOURCES } from '../../web/pages/watcher-ops-helpers.js';
 
 const NOW = Date.parse('2026-10-24T12:00:00Z');
@@ -75,4 +79,18 @@ describe('summaryRowsHtml', () => {
 
 test('consolidation calls are pass rows ("What it saw")', () => {
   expect(PASS_SOURCES).toContain('watcher:consolidate');
+});
+
+test('archiving a summary (or an insight) redraws the lists, so it leaves the live Summaries', () => {
+  const summary = { id: 'n-s', kind: 'summary' };
+  expect(effectRedrawsThoughts({ kind: 'archive', id: 'n-s' }, summary)).toBe(true);
+  expect(effectRedrawsThoughts({ kind: 'spawn', id: 'n-s' }, summary)).toBe(true);
+  expect(effectRedrawsThoughts({ kind: 'update', id: 'n-s' }, summary)).toBe(true);
+  expect(effectRedrawsThoughts({ kind: 'archive', id: 'n-i' }, { kind: 'insight' })).toBe(true);
+  expect(effectRedrawsThoughts({ kind: 'spawn', id: 'n-f' }, { kind: 'fact' })).toBe(false);
+  expect(effectRedrawsThoughts({ kind: 'layout' }, summary)).toBe(false);
+  expect(effectRedrawsThoughts({ kind: 'archive', id: 'n-x' }, undefined)).toBe(false);
+  // after the archive the list no longer shows it
+  const archived = { ...summary, text: 'gone', archivedAt: '2026-10-24T05:00:00Z' };
+  expect(summaryRowsHtml([archived], Date.parse('2026-10-25T00:00:00Z'))).not.toContain('n-s');
 });

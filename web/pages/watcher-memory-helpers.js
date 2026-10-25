@@ -6,12 +6,16 @@
  *  - `memoryCountsHtml`: the header's live / archived counts.
  *  - `summaryRowsHtml`: the Summaries list, each `summary` neuron with the
  *    facts it consolidated in a fold (members are archived neurons the page
- *    already holds; one it does not is named by id).
+ *    already holds; one it does not is named by id). Archived summaries
+ *    are left out.
+ *  - `effectRedrawsThoughts`: whether a live event redraws Insights and
+ *    Summaries (an archive too, so an archived summary leaves the list).
  *
  * Why an archived neuron was archived is the Why panel's job
  * (`neuronToWhy` in `src/why/builders/watcher.ts`, note "Why archived").
  */
 import { esc } from '../ui/index.js';
+import { SIGNAL_NEURON_KINDS } from './watcher-metrics-helpers.js';
 
 const MAX_ROWS = 30;
 const fmt = (n) => Number(n).toLocaleString('en-US');
@@ -38,6 +42,18 @@ export function memoryCountsHtml(state) {
   return `<span class="watcher-count watcher-count-memory" title="Live neurons and the ones forgetting or consolidation archived"><b>${fmt(
     live
   )}</b> live · <b>${fmt(archived)}</b> archived</span>`;
+}
+
+const THOUGHT_KINDS = [...SIGNAL_NEURON_KINDS, 'summary'];
+
+/**
+ * True when a live effect (`applyWatcherEvent`) on this neuron changes the
+ * Insights or Summaries lists: it spawned, changed or was archived, and it is
+ * an insight-like neuron or a summary.
+ */
+export function effectRedrawsThoughts(effect, neuron) {
+  if (!effect || !['spawn', 'update', 'archive'].includes(effect.kind)) return false;
+  return THOUGHT_KINDS.includes(neuron?.kind);
 }
 
 /** Live summaries newest first; each with its facts in a fold. */

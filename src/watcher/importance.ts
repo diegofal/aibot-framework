@@ -5,7 +5,7 @@
  * | Component    | Source                                                          | Weight |
  * |--------------|-----------------------------------------------------------------|--------|
  * | use          | `activations`, decayed by `lastActivatedAt` (half-life 14 d)     | 0.25   |
- * | consequence  | supports an insight (edge or `meta.supportNeurons`, served or not), a resolved prediction, a served broadcast | 0.35 |
+ * | consequence  | supports an insight (edge or `meta.supportNeurons`, served or not; ids resolved through `mergedInto`, so a summary inherits what its members supported), a resolved prediction, a served broadcast | 0.35 |
  * | breadth      | distinct `support.bots` + `related` edges (log-scaled)           | 0.15   |
  * | surprise     | kind `surprise` / `contradiction`, or `meta.novel`               | 0.10   |
  * | operator     | 👍 = +1 (protected), 👎 = −1                                     | 0.15   |
@@ -105,7 +105,9 @@ function consequenceOf(n: Neuron, ctx: ImportanceContext): Consequence {
   if (!out.served) {
     for (const id of ctx.servedInsights) {
       const insight = ctx.graph.get(id);
-      const ids = insight?.meta?.supportNeurons?.split(',') ?? [];
+      const ids = (insight?.meta?.supportNeurons?.split(',') ?? []).map((x) =>
+        resolveMergedId(ctx.graph, x.trim())
+      );
       if (ids.includes(n.id)) {
         out.served = true;
         out.insight = true;
@@ -116,7 +118,29 @@ function consequenceOf(n: Neuron, ctx: ImportanceContext): Consequence {
   return out;
 }
 
-/** Per context: neuron id → the live insights that name it in `meta.supportNeurons`. */
+/** Most merges followed from an archived id to its keeper (as `Graph.resolveMerged`). */
+const MAX_MERGE_HOPS = 10;
+
+/**
+ * The id a support reference stands for now: an archived neuron merged or
+ * consolidated into another (`meta.mergedInto`) resolves to its keeper, so an
+ * insight citing facts that were consolidated supports the summary.
+ */
+export function resolveMergedId(graph: Pick<ImportanceGraph, 'get'>, id: string): string {
+  let cur = id;
+  for (let hops = 0; hops < MAX_MERGE_HOPS; hops++) {
+    const n = graph.get(cur);
+    const next = n?.archivedAt ? n.meta?.mergedInto : undefined;
+    if (!next || !graph.get(next)) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/**
+ * Per context: neuron id → the live insights that name it in
+ * `meta.supportNeurons`, ids resolved through merges (`resolveMergedId`).
+ */
 const insightSupportCache = new WeakMap<ImportanceContext, Map<string, string[]>>();
 
 function insightSupportOf(ctx: ImportanceContext): Map<string, string[]> {
@@ -126,7 +150,7 @@ function insightSupportOf(ctx: ImportanceContext): Map<string, string[]> {
   for (const insight of ctx.graph.list?.() ?? []) {
     if (insight.kind !== 'insight' || insight.archivedAt) continue;
     for (const id of insight.meta?.supportNeurons?.split(',') ?? []) {
-      const key = id.trim();
+      const key = id.trim() && resolveMergedId(ctx.graph, id.trim());
       if (!key) continue;
       const list = map.get(key);
       if (list) list.push(insight.id);

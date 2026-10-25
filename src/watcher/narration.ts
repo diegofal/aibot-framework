@@ -224,17 +224,31 @@ export function narrateConsolidateSkipped(input: { members: number; why: string 
   return `Left ${plural(input.members, 'related fact', 'related facts')} as they were: ${input.why}.`;
 }
 
-/** O10: the night's consolidation, in one row. */
+/** O10, preview mode: the summary consolidation would have written, and how many facts it would fold. */
+export function narrateConsolidatePreview(input: {
+  text: string;
+  members: number;
+  of: number;
+}): string {
+  return `Preview, nothing written: would consolidate ${num(input.members)} of ${plural(input.of, 'related fact', 'related facts')} into a summary: ${quoteModelText(input.text)}.`;
+}
+
+/** O10: the night's consolidation, in one row. `previewed` is set only in preview mode. */
 export function narrateConsolidatePass(input: {
   clusters: number;
   summaries: number;
   members: number;
   skipped: number;
+  previewed?: number;
   stopped?: string;
 }): string {
+  const mode = input.previewed !== undefined ? ' (preview: nothing archived or created)' : '';
   if (input.clusters === 0)
-    return 'Consolidation: no cluster of forgettable facts large enough tonight.';
+    return `Consolidation${mode}: no cluster of forgettable facts large enough tonight.`;
   const stop = input.stopped ? ` Stopped early: ${input.stopped}.` : '';
+  if (input.previewed !== undefined) {
+    return `Consolidation${mode}: ${plural(input.clusters, 'cluster', 'clusters')}, ${plural(input.previewed, 'summary', 'summaries')} previewed, ${num(input.skipped)} skipped.${stop}`;
+  }
   return `Consolidation: ${plural(input.clusters, 'cluster', 'clusters')}, ${plural(input.summaries, 'summary', 'summaries')} written from ${plural(input.members, 'fact', 'facts')}, ${num(input.skipped)} skipped.${stop}`;
 }
 

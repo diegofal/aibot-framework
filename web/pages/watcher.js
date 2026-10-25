@@ -42,13 +42,8 @@ import {
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
-import { summaryRowsHtml } from './watcher-memory-helpers.js';
-import {
-  SIGNAL_NEURON_KINDS,
-  broadcastRowsHtml,
-  insightRowsHtml,
-  metricsStripHtml,
-} from './watcher-metrics-helpers.js';
+import { effectRedrawsThoughts, summaryRowsHtml } from './watcher-memory-helpers.js';
+import { broadcastRowsHtml, insightRowsHtml, metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
   graphCleanSummary,
   logView,
@@ -436,12 +431,7 @@ function onEffect(effect) {
       return;
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
-  if (
-    (effect.kind === 'spawn' || effect.kind === 'update') &&
-    SIGNAL_NEURON_KINDS.includes(page.model.neurons.get(effect.id)?.kind)
-  ) {
-    drawInsights();
-  }
+  if (effectRedrawsThoughts(effect, page.model.neurons.get(effect.id))) drawInsights();
 }
 
 /**

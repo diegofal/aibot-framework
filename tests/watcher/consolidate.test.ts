@@ -9,8 +9,10 @@ import {
   CONSOLIDATE_PROMPT_MEMBERS,
   type ConsolidateDeps,
   chunkCluster,
+  coveredMembers,
   findClusters,
   provenanceClass,
+  readershipOf,
   runConsolidation,
   validateSummary,
 } from '../../src/watcher/consolidate';
@@ -109,6 +111,7 @@ function deps(g: Graph, client: InstrumentedClient, over: Partial<ConsolidateDep
       { id: 'b2', name: 'Scout' },
     ],
     isQuiet: () => true,
+    preview: false,
     ...over,
   } satisfies ConsolidateDeps;
 }
@@ -474,7 +477,12 @@ describe('Watcher.consolidateNow', () => {
     for (const w of live.splice(0)) await w.stop();
   });
 
-  async function make(opts: { quiet: boolean; maxPerDay?: number; hour?: number }) {
+  async function make(opts: {
+    quiet: boolean;
+    maxPerDay?: number;
+    hour?: number;
+    consolidate?: Record<string, unknown> | null;
+  }) {
     const config = {
       bots: [],
       paths: { data: join(root, 'data') },
@@ -484,12 +492,17 @@ describe('Watcher.consolidateNow', () => {
         ...WATCHER_DEFAULTS,
         enabled: true,
         notice: { ...WATCHER_DEFAULTS.notice, enabled: true, maxPerDay: opts.maxPerDay ?? 10 },
-        consolidate: {
-          enabled: true,
-          hour: opts.hour ?? new Date(t + 10 * DAY).getHours(),
-          minCluster: 6,
-          maxClusters: 10,
-        },
+        consolidate:
+          opts.consolidate === null
+            ? WATCHER_DEFAULTS.consolidate
+            : {
+                enabled: true,
+                preview: false,
+                hour: opts.hour ?? new Date(t + 10 * DAY).getHours(),
+                minCluster: 6,
+                maxClusters: 10,
+                ...opts.consolidate,
+              },
       },
     } as unknown as Config;
     let calls = 0;
@@ -552,6 +565,52 @@ describe('Watcher.consolidateNow', () => {
     const off = await make({ quiet: true, hour: other });
     expect(off.w.consolidateTick()).toBe(false);
     expect(off.calls()).toBe(0);
+  });
+
+  test('off by default: neither the tick nor consolidateNow calls the model', async () => {
+    expect(WatcherConfigSchema.parse({}).consolidate.enabled).toBe(false);
+    expect(WatcherConfigSchema.parse({}).consolidate.preview).toBe(true);
+    expect(WATCHER_DEFAULTS.consolidate?.enabled).toBe(false);
+    expect(WATCHER_DEFAULTS.consolidate?.preview).toBe(true);
+    const { w, calls } = await make({ quiet: true, consolidate: null });
+    t = new Date(t).setHours(WATCHER_DEFAULTS.consolidate?.hour ?? 4, 0, 0, 0);
+    expect(w.consolidateTick()).toBe(false);
+    expect(await w.consolidateNow()).toBeNull();
+    expect(calls()).toBe(0);
+  });
+
+  test('enabled in preview: calls and logs what it would merge, the graph is unchanged', async () => {
+    const { w, calls } = await make({ quiet: true, consolidate: { preview: true } });
+    const before = w.graph.list().map((n) => ({ id: n.id, archivedAt: n.archivedAt }));
+    const out = await w.consolidateNow();
+    expect(calls()).toBe(1);
+    expect(out?.summaries.length).toBe(0);
+    expect(out?.previewed).toBe(1);
+    expect(w.graph.list().map((n) => ({ id: n.id, archivedAt: n.archivedAt }))).toEqual(before);
+    expect(w.graph.list().some((n) => n.kind === 'summary')).toBe(false);
+    const rows = w.log.recent(50);
+    const row = rows.find((r) => r.op === 'consolidate:preview');
+    expect(row?.consolidatePreview?.summary).toBe(JSON.parse(SUMMARY).summary);
+    expect(row?.consolidatePreview?.members.length).toBe(6);
+    expect(row?.consolidatePreview?.members.every((m) => m.merged)).toBe(true);
+    expect(row?.consolidatePreview?.coverage).toBe(1);
+    expect(rows.find((r) => r.op === 'consolidate:pass')?.text).toContain('preview');
+  });
+
+  test('enabled with preview absent from an older config: preview (never merges by surprise)', async () => {
+    const { w, calls } = await make({ quiet: true, consolidate: { preview: undefined } });
+    const out = await w.consolidateNow();
+    expect(calls()).toBe(1);
+    expect(out?.summaries.length).toBe(0);
+    expect(out?.previewed).toBe(1);
+  });
+
+  test('enabled with preview false: merges as before', async () => {
+    const { w, calls } = await make({ quiet: true, consolidate: { preview: false } });
+    const out = await w.consolidateNow();
+    expect(calls()).toBe(1);
+    expect(out?.summaries.length).toBe(1);
+    expect(w.graph.list().filter((n) => n.archivedAt).length).toBe(6);
   });
 
   test('the nightly tick at the hour runs once', async () => {
@@ -734,5 +793,122 @@ describe('consolidate: config bounds, answer size, provenance, readership, cover
     expect(s.meta?.members?.split(',').sort()).toEqual(covered.map((n) => n.id).sort());
     for (const n of covered) expect(g.get(n.id)?.archivedAt).toBeDefined();
     for (const n of other) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+  });
+});
+
+describe('consolidate: round-2 fixes', () => {
+  test('preview mode: everything up to validation, rows per cluster, nothing archived or created', async () => {
+    const g = graph();
+    const covered = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    const other = [
+      fact(g, 50, { text: 'The marketing newsletter went out to subscribers on Tuesday' } as never),
+    ];
+    chain(g, [...covered, ...other]);
+    t += 10 * DAY;
+    const before = JSON.stringify(g.list());
+    const client = fakeClient(() => SUMMARY);
+    const d = deps(g, client, { preview: true });
+    const out = await runConsolidation(d);
+    expect(client.calls.length).toBe(1);
+    expect(out.summaries.length).toBe(0);
+    expect(out.members).toBe(0);
+    expect(out.previewed).toBe(1);
+    expect(JSON.stringify(g.list())).toBe(before);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:preview');
+    expect(row).toBeDefined();
+    const p = row?.consolidatePreview;
+    expect(p?.summary).toBe(JSON.parse(SUMMARY).summary);
+    expect(p?.coverage).toBeCloseTo(6 / 7);
+    expect(
+      p?.members
+        .filter((m) => m.merged)
+        .map((m) => m.id)
+        .sort()
+    ).toEqual(covered.map((n) => n.id).sort());
+    expect(p?.members.find((m) => m.id === other[0].id)?.merged).toBe(false);
+    for (const m of p?.members ?? []) expect(m.text.length).toBeLessThanOrEqual(120);
+    expect(row?.model).toBe('claude-haiku-5-5');
+    const pass = d.log.recent(10).find((r) => r.op === 'consolidate:pass');
+    expect(pass?.text).toContain('1 summary previewed');
+  });
+
+  test('readership keys never collide: a bot id with a comma is not two bots', () => {
+    expect(readershipOf({ support: { bots: ['a,b'] } } as never)).not.toBe(
+      readershipOf({ support: { bots: ['a', 'b'] } } as never)
+    );
+    expect(readershipOf({ support: { bots: ['b', 'a', 'a'] } } as never)).toBe(
+      readershipOf({ support: { bots: ['a', 'b'] } } as never)
+    );
+    const g = graph();
+    const one = Array.from({ length: 6 }, (_, i) =>
+      fact(g, i, { support: { bots: ['a,b'] } } as never)
+    );
+    const two = Array.from({ length: 6 }, (_, i) =>
+      fact(g, 20 + i, { support: { bots: ['a', 'b'] } } as never)
+    );
+    chain(g, [...one, ...two]);
+    t += 10 * DAY;
+    const clusters = findClusters(g, importance(g)(), { threshold: 0.15, minCluster: 6 });
+    expect(clusters.length).toBe(2);
+    for (const c of clusters) {
+      expect(new Set(c.members.map((n) => JSON.stringify(n.support.bots))).size).toBe(1);
+    }
+  });
+
+  test('a member the summary contradicts is not covered (negation or a different number)', () => {
+    const members = [
+      { text: 'The client will pay the overdue invoice next week' },
+      { text: 'Invoice 300 for the client is overdue' },
+    ];
+    const refused = { text: 'The client did not pay the overdue invoice last month' };
+    expect(
+      coveredMembers('The client will not pay the overdue invoice', [members[0], refused])
+    ).toEqual([refused]);
+    expect(coveredMembers('Invoice 500 for the client is overdue', members)).toEqual([members[0]]);
+  });
+
+  test('a summary that contradicts its facts ("will not pay" vs "will pay") is skipped; nothing archived', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 6 }, (_, i) =>
+      fact(g, i, {
+        text: `Client account ${i} will pay the overdue invoice for the nightly deploy pipeline next week`,
+      } as never)
+    );
+    chain(g, ns);
+    t += 10 * DAY;
+    const d = deps(
+      g,
+      fakeClient(() =>
+        JSON.stringify({ summary: 'Client accounts will not pay the overdue invoice.' })
+      )
+    );
+    const out = await runConsolidation(d);
+    expect(out.summaries.length).toBe(0);
+    expect(out.skipped).toBe(1);
+    for (const n of ns) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+    expect(g.list().some((n) => n.kind === 'summary')).toBe(false);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:skipped');
+    expect(row?.text).toContain('contradicts');
+  });
+
+  test('a fleet that wakes during the model call gets no writes: the result is dropped and logged', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    let quiet = true;
+    const client = fakeClient(() => {
+      quiet = false;
+      return SUMMARY;
+    });
+    const d = deps(g, client, { isQuiet: () => quiet });
+    const out = await runConsolidation(d);
+    expect(client.calls.length).toBe(1);
+    expect(out.stopped).toBe('busy');
+    expect(out.summaries.length).toBe(0);
+    for (const n of ns) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+    expect(g.list().some((n) => n.kind === 'summary')).toBe(false);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:skipped');
+    expect(row?.text).toContain('woke up');
   });
 });

@@ -148,7 +148,8 @@ const TARGET_NEURONS_DEFAULT = 8000;
 /** A `forget:archive` row names at most this many neurons (the lowest). */
 const FORGET_ROW_IDS = 100;
 const CONSOLIDATE_DEFAULTS = {
-  enabled: true,
+  enabled: false,
+  preview: true,
   hour: 4,
   minCluster: 6,
   maxClusters: 10,
@@ -1382,18 +1383,19 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
 
   /**
    * O10: consolidate now (`consolidate.ts`), on the notice tier (its budget,
-   * breaker and query log, caller `watcher:consolidate`). Null when the
-   * watcher sleeps, noticing is off or there is no notice client; a busy
+   * breaker and query log, caller `watcher:consolidate`), in preview unless
+   * `consolidate.preview` is false. Null when consolidation is off (the
+   * default), the watcher sleeps, noticing is off or there is no notice client; a busy
    * fleet stops it before any call. Never throws.
    */
   consolidateNow(): Promise<ConsolidateOutcome | null> {
     if (this.consolidateRun) return this.consolidateRun;
     const cfg = this.cfg();
     const client = this.tierClient('notice', 'watcher:consolidate');
-    if (!client || !cfg.notice.enabled || !this.running || this.stopping) {
+    const c = cfg.consolidate ?? CONSOLIDATE_DEFAULTS;
+    if (!c.enabled || !client || !cfg.notice.enabled || !this.running || this.stopping) {
       return Promise.resolve(null);
     }
-    const c = cfg.consolidate ?? CONSOLIDATE_DEFAULTS;
     const signal = this.stopCtrl.signal;
     const run = runConsolidation({
       graph: this.graph,
@@ -1408,6 +1410,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         (this.deps.config().bots ?? []).map((b) => ({ id: b.id, name: this.botName(b.id) })),
       botName: (id) => this.botName(id),
       isQuiet: () => this.isFleetQuiet(),
+      // An older config without the flag previews: merging is opted into.
+      preview: c.preview ?? true,
       isCancelled: () => signal.aborted,
       logger: this.logger,
     })

@@ -26,6 +26,7 @@
 
 import { isBookkeepingLine } from '../../watcher/birth';
 import type { Neuron } from '../../watcher/types';
+import { contradicts } from '../text-utils';
 import type {
   HygieneApplied,
   HygieneApplyResult,
@@ -57,46 +58,6 @@ const fromBirth = (n: Neuron) => (n.meta?.stage ?? '').startsWith('birth:');
 function botOf(n: Neuron): string | null {
   if (n.createdBy.startsWith('bot:')) return n.createdBy.slice(4);
   return n.support.bots.length === 1 ? n.support.bots[0] : null;
-}
-
-/** Negation words (en, es). `n't` forms are matched by suffix. */
-const NEGATIONS = new Set([
-  'not',
-  'no',
-  'never',
-  'without',
-  'none',
-  'nor',
-  'cannot',
-  'nunca',
-  'jamás',
-  'jamas',
-  'sin',
-  'ningún',
-  'ningun',
-  'ninguna',
-  'ninguno',
-  'tampoco',
-]);
-const WORD_RE = /[\p{L}\p{N}'’]+/gu;
-const NUMBER_RE = /\d+(?:[.,:/-]\d+)*/g;
-
-const sortedKey = (xs: string[]) => [...xs].sort().join('|');
-
-function negationsOf(text: string): string {
-  const words = (text.toLowerCase().match(WORD_RE) ?? []).filter(
-    (w) => NEGATIONS.has(w) || /n['’]t$/.test(w)
-  );
-  return sortedKey(words);
-}
-
-/**
- * Two texts that differ in a negation word or in any number/date token: one
- * says something the other does not, however many words they share. Pure.
- */
-export function contradicts(a: string, b: string): boolean {
-  if (negationsOf(a) !== negationsOf(b)) return true;
-  return sortedKey(a.match(NUMBER_RE) ?? []) !== sortedKey(b.match(NUMBER_RE) ?? []);
 }
 
 const byAge = (a: Neuron, b: Neuron) =>

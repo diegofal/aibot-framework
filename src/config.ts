@@ -952,10 +952,15 @@ export const WatcherConfigSchema = z
      * (`CONSOLIDATE_PROMPT_MEMBERS`): a larger minimum could never be met.
      * `minCoverage`: the share of the members a summary must describe (≥ 2
      * distinctive words in common) before anything is archived.
+     * Off by default until it has run in preview against the real graph:
+     * `preview` (default on) does everything up to and including the model
+     * call and validation, logs a `consolidate:preview` row per cluster, and
+     * archives and creates nothing.
      */
     consolidate: z
       .object({
-        enabled: z.boolean().default(true),
+        enabled: z.boolean().default(false),
+        preview: z.boolean().default(true),
         hour: z.number().int().min(0).max(23).default(4),
         minCluster: z.number().int().min(2).max(CONSOLIDATE_PROMPT_MEMBERS).default(6),
         maxClusters: z.number().int().min(0).default(10),

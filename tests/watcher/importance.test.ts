@@ -219,3 +219,37 @@ describe('importance', () => {
     expect(s.reason).toContain('protected');
   });
 });
+
+describe('importance after consolidation', () => {
+  test('an insight citing consolidated facts gives the summary that replaced them its consequence and protection', () => {
+    const g = graph();
+    const a = fact(g, 'the deploy cache was stale on Tuesday');
+    const b = fact(g, 'the deploy cache was stale again on Wednesday');
+    const insight = g.addNeuron({
+      kind: 'insight',
+      text: 'stale caches keep breaking deploys',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { supportNeurons: `${a.id},${b.id}` },
+    } as never);
+    const summary = g.addNeuron({
+      kind: 'summary',
+      text: 'the deploy cache kept going stale',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      activations: 1,
+    } as never);
+    g.mergeInto(summary.id, [a.id, b.id]);
+    expect(g.get(a.id)?.archivedAt).toBeDefined();
+    t += 60 * DAY;
+    const s = importanceOf(g.get(summary.id) as Neuron, ctx({ nowMs: t, graph: g }));
+    expect(s.components.consequence).toBe(1);
+    expect(s.reason).toContain('supports an insight');
+    expect(s.protected).toBeNull();
+    const served = importanceOf(
+      g.get(summary.id) as Neuron,
+      ctx({ nowMs: t, graph: g, servedInsights: new Set([insight.id]) })
+    );
+    expect(served.protected).toBe('served');
+  });
+});
