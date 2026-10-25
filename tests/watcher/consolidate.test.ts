@@ -303,6 +303,132 @@ describe('runConsolidation', () => {
   });
 });
 
+describe('runConsolidation: what the model saw, what changed meanwhile, the cap', () => {
+  test('a cluster of 55 is split into calls of at most 40; no member is archived that was not in a prompt', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 55 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const client = fakeClient(() => SUMMARY);
+    const out = await runConsolidation(deps(g, client));
+    expect(client.calls.length).toBe(2);
+    for (const c of client.calls) expect(c).not.toContain('more facts like these');
+    for (const [i, n] of ns.entries()) {
+      const m = g.get(n.id) as Neuron;
+      if (!m.archivedAt) continue;
+      expect(
+        client.calls.some((c) =>
+          c.includes(`
+- Run ${i} of the pipeline`)
+        )
+      ).toBe(true);
+    }
+    expect(out.members).toBe(55);
+    expect(out.summaries.length).toBe(2);
+  });
+
+  test('each chunk counts against maxClusters', async () => {
+    const g = graph();
+    chain(
+      g,
+      Array.from({ length: 55 }, (_, i) => fact(g, i))
+    );
+    t += 10 * DAY;
+    const client = fakeClient(() => SUMMARY);
+    const out = await runConsolidation(deps(g, client, { maxClusters: 1 }));
+    expect(client.calls.length).toBe(1);
+    expect(out.clusters).toBe(1);
+    expect(out.members).toBeLessThanOrEqual(40);
+    const live = g.list().filter((n) => n.kind === 'fact' && !n.archivedAt).length;
+    expect(live).toBe(55 - out.members);
+  });
+
+  /** Members that become protected or important while the call is pending. */
+  function changeDuringCall(g: Graph, ns: Neuron[], served: Set<string>) {
+    return () => {
+      g.patchMeta(ns[1].id, { signal: 'up' });
+      const insight = g.addNeuron({
+        kind: 'insight',
+        text: 'Deploys fail on stale caches',
+        support: { bots: ['b1'] },
+        createdBy: 'watcher',
+        meta: { supportNeurons: ns[2].id },
+      } as never);
+      served.add(insight.id);
+      g.setActivation(ns[3].id, 10_000, new Date(t).toISOString());
+      return SUMMARY;
+    };
+  }
+
+  test('a member protected or made important during the call is not merged', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 9 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const served = new Set<string>();
+    const client = fakeClient(changeDuringCall(g, ns, served));
+    const out = await runConsolidation(
+      deps(g, client, {
+        importance: () => ({ nowMs: t, graph: g, graceDays: 7, servedInsights: served }),
+      })
+    );
+    expect(out.summaries.length).toBe(1);
+    expect(out.members).toBe(6);
+    const s = g.get(out.summaries[0].id) as Neuron;
+    const kept = [ns[1], ns[2], ns[3]].map((n) => n.id);
+    for (const id of kept) {
+      expect(g.get(id)?.archivedAt).toBeUndefined();
+      expect(s.meta?.members?.split(',')).not.toContain(id);
+    }
+    expect(s.meta?.members?.split(',').length).toBe(6);
+  });
+
+  test('when fewer than minCluster remain unchanged, the summary is skipped and logged', async () => {
+    const g = graph();
+    const ns = Array.from({ length: 7 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const served = new Set<string>();
+    const client = fakeClient(changeDuringCall(g, ns, served));
+    const d = deps(g, client, {
+      importance: () => ({ nowMs: t, graph: g, graceDays: 7, servedInsights: served }),
+    });
+    const out = await runConsolidation(d);
+    expect(out.summaries.length).toBe(0);
+    expect(out.skipped).toBe(1);
+    for (const n of ns) expect(g.get(n.id)?.archivedAt).toBeUndefined();
+    expect(g.list().some((n) => n.kind === 'summary')).toBe(false);
+    const row = d.log.recent(10).find((r) => r.op === 'consolidate:skipped');
+    expect(row?.text).toBeDefined();
+  });
+
+  test('at maxNeurons, adding the summary never evicts a member: every member redirects to it', async () => {
+    const g = new Graph(join(root, 'capped'), { now: () => t, maxNeurons: 7 });
+    g.load();
+    const ns = Array.from({ length: 6 }, (_, i) => fact(g, i));
+    chain(g, ns);
+    t += 10 * DAY;
+    const topic = g.addNeuron({
+      kind: 'topic',
+      text: 'deploys',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+    });
+    expect(g.liveCount()).toBe(7);
+    const out = await runConsolidation(
+      deps(
+        g,
+        fakeClient(() => SUMMARY)
+      )
+    );
+    const s = g.get(out.summaries[0].id) as Neuron;
+    for (const n of ns) expect(g.get(n.id)?.meta?.mergedInto).toBe(s.id);
+    expect(g.activate(ns[0].id)?.id).toBe(s.id);
+    expect(g.get(topic.id)?.archivedAt).toBeUndefined();
+    expect(g.liveCount()).toBeLessThanOrEqual(7);
+  });
+});
+
 describe('Watcher.consolidateNow', () => {
   const live: Watcher[] = [];
   afterEach(async () => {

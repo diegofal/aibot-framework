@@ -14,7 +14,12 @@
  * provenance = the strictest of the members). The members are folded into it
  * with `Graph.mergeInto` (archived with `mergedInto`; their edges, topics
  * included, re-pointed onto the summary) and keep `consolidatedInto` and an
- * `archivedReason`. A summary that is empty, longer than the members' mean,
+ * `archivedReason`. A cluster larger than `CONSOLIDATE_PROMPT_MEMBERS` is split
+ * into chunks, one call each (each counts against `maxClusters`), so only facts
+ * the model saw are merged. Eligibility is checked again when the call returns:
+ * a member that became protected or important meanwhile stays live, and if
+ * fewer than `minCluster` remain the summary is skipped and logged. The cap
+ * (`maxNeurons`) is enforced after the merge, never by evicting a member. A summary that is empty, longer than the members' mean,
  * or names a bot none of them came from is skipped and logged. The night
  * stops when the fleet wakes up (`isQuiet`), the budget or breaker refuses,
  * or the watcher stops. Every row is code-written. Never throws.
@@ -53,7 +58,11 @@ export interface Cluster {
   provenance: ProvenanceClass;
 }
 
-/** Most member texts one prompt shows (the cluster is consolidated whole; the rest are named by count). */
+/**
+ * Most member texts one prompt shows. A larger cluster is split into chunks of
+ * at most this many (`chunkCluster`), each its own call: a fact the model never
+ * saw is never folded into a summary.
+ */
 export const CONSOLIDATE_PROMPT_MEMBERS = 40;
 const MAX_SUMMARY_CHARS = 400;
 const CONSOLIDATE_TEMPERATURE = 0.2;
@@ -98,6 +107,20 @@ export function findClusters(
   return out.sort(
     (a, b) => b.members.length - a.members.length || (a.members[0].id < b.members[0].id ? -1 : 1)
   );
+}
+
+/** A cluster split into balanced chunks of at most `CONSOLIDATE_PROMPT_MEMBERS`, in member order. */
+export function chunkCluster(cluster: Cluster): Cluster[] {
+  const n = cluster.members.length;
+  if (n <= CONSOLIDATE_PROMPT_MEMBERS) return [cluster];
+  const parts = Math.ceil(n / CONSOLIDATE_PROMPT_MEMBERS);
+  const out: Cluster[] = [];
+  for (let i = 0; i < parts; i++) {
+    const from = Math.floor((i * n) / parts);
+    const to = Math.floor(((i + 1) * n) / parts);
+    out.push({ members: cluster.members.slice(from, to), provenance: cluster.provenance });
+  }
+  return out;
 }
 
 export function buildConsolidatePrompt(
@@ -219,7 +242,9 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
     const clusters = findClusters(graph, deps.importance(), {
       threshold: deps.threshold,
       minCluster: deps.minCluster,
-    }).slice(0, Math.max(0, deps.maxClusters));
+    })
+      .flatMap(chunkCluster)
+      .slice(0, Math.max(0, deps.maxClusters));
     out.clusters = clusters.length;
     for (const cluster of clusters) {
       if (cancelled()) {
@@ -231,14 +256,22 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
         break;
       }
       // Members may have fired or been archived since the clusters were read.
-      const members = cluster.members
-        .map((n) => graph.get(n.id))
-        .filter((n): n is Neuron => !!n && !n.archivedAt);
-      if (members.length < deps.minCluster) {
+      const stillEligible = (): Neuron[] => {
+        const ctx = deps.importance();
+        return cluster.members
+          .map((n) => graph.get(n.id))
+          .filter((n): n is Neuron => {
+            if (!n || n.archivedAt) return false;
+            const score = importanceOf(n, ctx);
+            return !score.protected && score.score < deps.threshold;
+          });
+      };
+      const shown = stillEligible();
+      if (shown.length < deps.minCluster) {
         out.skipped++;
         continue;
       }
-      const prompt = buildConsolidatePrompt(members, botName);
+      const prompt = buildConsolidatePrompt(shown, botName);
       const res = await deps.client.chat(
         [
           { role: 'system', content: prompt.system },
@@ -263,17 +296,29 @@ export async function runConsolidation(deps: ConsolidateDeps): Promise<Consolida
             source: 'watcher:consolidate',
           }
         : { model: res.model, durationMs: res.durationMs, source: 'watcher:consolidate' };
+      // The call took a while: a member may have become support for a served
+      // insight, got a 👍, been activated into importance or been archived.
+      // Only the members that are still eligible (and were shown) are merged.
+      const shownIds = new Set(shown.map((n) => n.id));
+      const members = stillEligible().filter((n) => shownIds.has(n.id));
+      const changed = shown.length - members.length;
       const skip = (why: string) => {
         out.skipped++;
         log.say(
           'sleep',
           'consolidate:skipped',
-          narrateConsolidateSkipped({ members: members.length, why }),
-          { ...cost, neuronIds: members.map((n) => n.id) }
+          narrateConsolidateSkipped({ members: shown.length, why }),
+          { ...cost, neuronIds: shown.map((n) => n.id) }
         );
       };
       if (!res.ok) {
         skip('the model call failed');
+        continue;
+      }
+      if (members.length < deps.minCluster) {
+        skip(
+          `${changed} of the facts became important or protected while the model wrote, leaving fewer than ${deps.minCluster}`
+        );
         continue;
       }
       const parsed = parseSummary(res.text);
@@ -335,21 +380,26 @@ function writeSummary(
   const operatorMessage =
     provenance === 'operator-message' || members.some((n) => mayCarryOperatorMessage(n));
   const positions = members.map((n) => n.pos).filter((p): p is Vec3 => !!p);
-  const summary = graph.addNeuron({
-    kind: 'summary',
-    text,
-    support,
-    createdBy: 'watcher',
-    pos: placeWithoutEmbedding({ id: members[0].id, kind: 'summary' }, positions),
-    meta: {
-      consolidated: 'true',
-      members: members.map((n) => n.id).join(','),
-      source: 'consolidate',
-      model,
-      ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
-      [OPERATOR_MESSAGE]: operatorMessage ? 'true' : 'false',
+  // The cap is enforced after the merge: adding the summary first would evict
+  // the oldest live neuron, maybe a member, which `mergeInto` would then skip.
+  const summary = graph.addNeuron(
+    {
+      kind: 'summary',
+      text,
+      support,
+      createdBy: 'watcher',
+      pos: placeWithoutEmbedding({ id: members[0].id, kind: 'summary' }, positions),
+      meta: {
+        consolidated: 'true',
+        members: members.map((n) => n.id).join(','),
+        source: 'consolidate',
+        model,
+        ...(operatorSourced ? { [OPERATOR_SOURCED]: 'true' } : {}),
+        [OPERATOR_MESSAGE]: operatorMessage ? 'true' : 'false',
+      },
     },
-  });
+    { deferCap: true }
+  );
   const merged = graph.mergeInto(
     summary.id,
     members.map((n) => n.id)
@@ -360,5 +410,6 @@ function writeSummary(
       archivedReason: `consolidated into a summary (${summary.id}) of ${members.length} related facts`,
     });
   }
+  graph.enforceCap(summary.id);
   return graph.get(summary.id) ?? summary;
 }

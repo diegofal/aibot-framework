@@ -221,7 +221,11 @@ export class Graph {
     return this.rev;
   }
 
-  addNeuron(input: NewNeuron): Neuron {
+  /**
+   * `deferCap`: the caller enforces `maxNeurons` itself (`enforceCap`) once the
+   * operation is done, so the cap never evicts a neuron the operation still needs.
+   */
+  addNeuron(input: NewNeuron, opts: { deferCap?: boolean } = {}): Neuron {
     const at = this.iso();
     const neuron: Neuron = {
       id: this.newId('n-', this.neurons),
@@ -237,7 +241,7 @@ export class Graph {
       ...(input.meta ? { meta: input.meta } : {}),
     };
     this.writeNeuron(neuron);
-    this.enforceCap(neuron.id);
+    if (!opts.deferCap) this.enforceCap(neuron.id);
     return neuron;
   }
 
@@ -754,7 +758,8 @@ export class Graph {
     }
   }
 
-  private enforceCap(keep: string): void {
+  /** Archive the oldest live neurons (never `keep`) until the graph is within `maxNeurons`. */
+  enforceCap(keep: string): void {
     const max = this.opts.maxNeurons ?? DEFAULT_MAX;
     let live = this.liveCount();
     while (live > max) {
