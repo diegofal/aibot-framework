@@ -9,7 +9,6 @@ import {
   highlightState,
   kindFilterIds,
   mindCounts,
-  mindFocusKey,
   mindListHtml,
   mindRows,
   mindTabBlurb,
@@ -57,6 +56,7 @@ describe('MIND_TABS', () => {
       'Questions',
       'Topics',
       'Facts',
+      'Summaries',
       'People',
       'Goals',
     ]);
@@ -525,48 +525,45 @@ describe('mindTabState', () => {
   });
 });
 
-describe('mindFocusKey', () => {
-  test('row key plus the control, from its stable attributes', () => {
-    expect(mindFocusKey({ row: 'n1', tag: 'BUTTON', attrs: { 'data-mind-open': 'n1' } })).toBe(
-      'n1|open'
-    );
-    expect(
-      mindFocusKey({ row: 'n1', tag: 'button', attrs: { 'data-watcher-signal': 'down' } })
-    ).toBe('n1|signal:down');
-    expect(mindFocusKey({ row: 'b-1', tag: 'button', attrs: { 'data-open-cycle': 'c-9' } })).toBe(
-      'b-1|cycle:c-9'
-    );
-    expect(mindFocusKey({ row: 'n1', tag: 'a', attrs: { href: '#/agents/x' } })).toBe(
-      'n1|href:#/agents/x'
-    );
+describe('Summaries tab', () => {
+  const member = n('n-m1', 'fact', '2026-10-24T03:00:00Z', {
+    text: 'deploy 2 <failed>',
+    archivedAt: '2026-10-24T04:00:00Z',
+  });
+  const summary = n('n-s', 'summary', '2026-10-24T04:00:00Z', {
+    text: 'Deploys failed on a stale cache',
+    meta: { consolidated: 'true', members: 'n-m1,n-gone' },
+  });
+  const archived = n('n-s0', 'summary', '2026-10-23T04:00:00Z', {
+    archivedAt: '2026-10-24T05:00:00Z',
   });
 
-  test('a fold summary is keyed by its open-key; the pager has no row', () => {
-    expect(mindFocusKey({ row: 'n1', tag: 'SUMMARY', foldKey: 'n1:evidence' })).toBe(
-      'n1|fold:n1:evidence'
-    );
-    expect(mindFocusKey({ tag: 'button', attrs: { 'data-action': 'watcher-mind-more' } })).toBe(
-      '|action:watcher-mind-more'
-    );
+  test('lists live summaries only, counted like any kind', () => {
+    const neurons = [member, summary, archived];
+    expect(mindRows('summary', { neurons }).map((r) => r.id)).toEqual(['n-s']);
+    expect(mindCounts(neurons, []).summary).toBe(1);
+    expect(mindTabBlurb('summary')).toContain('Consolidated');
   });
 
-  test('signal wins over the other attributes; nothing stable means no key', () => {
-    expect(
-      mindFocusKey({
-        row: 'n1',
-        tag: 'button',
-        attrs: { 'data-watcher-signal': 'up', 'data-action': 'x' },
-      })
-    ).toBe('n1|signal:up');
-    expect(mindFocusKey({ row: 'n1', tag: 'button', attrs: {} })).toBeNull();
-    expect(mindFocusKey({ row: 'n1', tag: 'summary' })).toBeNull();
-    expect(mindFocusKey(null)).toBeNull();
-  });
-
-  test('every row in the list carries its id as data-mind-key', () => {
-    const html = mindListHtml('insight', [n('n1', 'insight', '2026-10-24T11:00:00Z')], {
+  test('a row opens the summary and keeps the facts it replaced in a fold', () => {
+    const byId = new Map([member, summary].map((x) => [x.id, x]));
+    const html = mindListHtml('summary', [summary], {
       nowMs: NOW,
+      neuronOf: (id: string) => byId.get(id) ?? null,
+      open: new Set(['n-s:members']),
     });
-    expect(html).toContain('data-mind-key="n1"');
+    expect(html).toContain('data-mind-open="n-s"');
+    expect(html).toContain('data-open-key="n-s:members"');
+    expect(html).toContain('<summary>2 facts</summary>');
+    expect(html).toMatch(/<details class="watcher-mind-fold" open>/);
+    expect(html).toContain('data-mind-open="n-m1"');
+    expect(html).toContain('deploy 2 &lt;failed&gt;');
+    // a member the page does not hold is named by id
+    expect(html).toContain('n-gone');
+    expect(html).toContain('b1, b2');
+  });
+
+  test('no summaries yet says so', () => {
+    expect(mindListHtml('summary', [], { nowMs: NOW })).toContain('No summaries yet.');
   });
 });

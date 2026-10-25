@@ -46,7 +46,6 @@ import {
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
-import { effectRedrawsThoughts, summaryRowsHtml } from './watcher-memory-helpers.js';
 import { metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
   MIND_PAGE_SIZE,
@@ -56,7 +55,6 @@ import {
   highlightState,
   kindFilterIds,
   mindCounts,
-  mindFocusKey,
   mindListHtml,
   mindRows,
   mindTabBlurb,
@@ -225,11 +223,6 @@ function shell() {
       <div class="watcher-log-head"><div class="watcher-log-title">Log</div><div id="watcher-log-filter" class="watcher-log-filter"></div><button type="button" class="btn btn-sm" data-action="watcher-pause">Pause</button></div>
       <div id="watcher-log-body" class="watcher-log-body"></div>
     </section>
-    <!-- O10 memory: Summaries (watcher-memory-helpers.js) -->
-    <section class="watcher-thoughts watcher-memory" aria-label="What the watcher consolidated">
-      <div class="watcher-thoughts-col"><div class="watcher-log-title">Summaries</div><div id="watcher-summaries"></div></div>
-    </section>
-    <!-- /O10 memory -->
     <section class="watcher-thoughts watcher-self" aria-label="The watcher's self-model">
       <div class="watcher-thoughts-col">${cardHeadHtml('how')}<div id="watcher-how"></div></div>
       <div class="watcher-thoughts-col">${cardHeadHtml('attending')}<div id="watcher-attending"></div></div>
@@ -248,7 +241,6 @@ function drawMind() {
   if (!page) return;
   clearTimeout(page.mindTimer);
   page.mindTimer = null;
-  drawSummaries();
   if (page.mindRefocus) {
     page.mindRefocus = false;
     drawLegend();
@@ -264,9 +256,6 @@ function drawMind() {
   if (!list) return;
   const rows = mindRows(m.tab, { neurons, broadcasts: page.broadcasts, query: m.query });
   const edges = [...page.model.edges.values()];
-  const focusKey = list.contains(document.activeElement)
-    ? focusKeyOf(document.activeElement)
-    : null;
   const scrollTop = list.scrollTop;
   list.innerHTML = mindListHtml(m.tab, rows, {
     nowMs: Date.now(),
@@ -277,38 +266,9 @@ function drawMind() {
     sidesOf: (id) =>
       contradictionSides(id, edges, (other) => page?.model.neurons.get(other)?.text ?? null),
     open: m.open,
+    neuronOf: (id) => page?.model.neurons.get(id) ?? null,
   });
   list.scrollTop = scrollTop;
-  if (focusKey) {
-    const same = [...list.querySelectorAll(MIND_FOCUSABLE)].find(
-      (el) => focusKeyOf(el) === focusKey
-    );
-    same?.focus({ preventScroll: true });
-  }
-}
-
-const MIND_FOCUSABLE = 'button, summary, a[href], input, select, textarea';
-const FOCUS_ATTRS = [
-  'data-watcher-signal',
-  'data-mind-open',
-  'data-open-cycle',
-  'data-action',
-  'href',
-];
-
-/** The Mind list's stable key for a focused control (`mindFocusKey`). */
-function focusKeyOf(el) {
-  const attrs = {};
-  for (const name of FOCUS_ATTRS) {
-    const v = el.getAttribute(name);
-    if (v) attrs[name] = v;
-  }
-  return mindFocusKey({
-    row: el.closest('[data-mind-key]')?.getAttribute('data-mind-key') ?? '',
-    tag: el.tagName,
-    attrs,
-    foldKey: el.closest('[data-open-key]')?.getAttribute('data-open-key') ?? null,
-  });
 }
 
 /**
@@ -395,13 +355,6 @@ function toggleKindFilter(kind) {
     drawLog();
   }
 }
-
-/* ── O10 memory: the Summaries list (watcher-memory-helpers.js) ─── */
-function drawSummaries() {
-  const host = $('#watcher-summaries');
-  if (host) host.innerHTML = summaryRowsHtml([...page.model.neurons.values()], Date.now());
-}
-/* ── /O10 memory ───────────────────────────────────────────────── */
 
 function drawSelf() {
   const self = page.self;
@@ -614,7 +567,6 @@ function onEffect(effect) {
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
   if (ballLive && refocusOnEffect(effect.kind, page.kindFilter)) page.mindRefocus = true;
   if (['spawn', 'update', 'archive', 'revive', 'edge'].includes(effect.kind)) scheduleMind();
-  if (effectRedrawsThoughts(effect, page.model.neurons.get(effect.id))) drawSummaries();
 }
 
 /**

@@ -14,6 +14,7 @@
  */
 import { esc } from '../ui/index.js';
 import { neuronColour } from './watcher-helpers.js';
+import { summaryMemberIds, summaryMembersHtml } from './watcher-memory-helpers.js';
 import { signalButtonsHtml } from './watcher-metrics-helpers.js';
 import { whyPanel } from './why-helpers.js';
 
@@ -73,6 +74,12 @@ export const MIND_TABS = [
     label: 'Facts',
     blurb:
       'Things the bots learned and keep in shared memory, mirrored here so the watcher can connect them across bots.',
+  },
+  {
+    kind: 'summary',
+    label: 'Summaries',
+    blurb:
+      'Consolidated memories: related, little-used facts the watcher folded into one summary at night, while the fleet slept. The facts it replaced are in the fold.',
   },
   {
     kind: 'person',
@@ -252,28 +259,6 @@ export function mindTabState(counts, active) {
     count: Number(counts?.[t.kind] ?? 0).toLocaleString('en-US'),
     active: t.kind === active,
   }));
-}
-
-/**
- * A stable key for a focusable control in the Mind list, so a live redraw
- * (which replaces the list's HTML) can put keyboard focus back on the same
- * control. `row` is the row's `data-mind-key` ('' outside a row, e.g. the
- * pager), `tag` the element's tag, `attrs` its attributes, `foldKey` the
- * enclosing `[data-open-key]` (for a fold's summary). `null` when the control
- * has nothing stable to match on.
- */
-export function mindFocusKey(desc) {
-  if (!desc) return null;
-  const a = desc.attrs ?? {};
-  const tag = String(desc.tag ?? '').toLowerCase();
-  let control = null;
-  if (a['data-watcher-signal']) control = `signal:${a['data-watcher-signal']}`;
-  else if (a['data-mind-open']) control = 'open';
-  else if (a['data-open-cycle']) control = `cycle:${a['data-open-cycle']}`;
-  else if (a['data-action']) control = `action:${a['data-action']}`;
-  else if (tag === 'summary' && desc.foldKey) control = `fold:${desc.foldKey}`;
-  else if (a.href) control = `href:${a.href}`;
-  return control ? `${desc.row ?? ''}|${control}` : null;
 }
 
 /** The tab strip: a button per kind with its colour dot and count. */
@@ -465,7 +450,21 @@ function plainRow(n, { nowMs }) {
   return `${openText(n.id, n.text)}${meta(parts)}`;
 }
 
+function summaryRow(n, { nowMs, open, neuronOf }) {
+  const count = summaryMemberIds(n).length;
+  const parts = [
+    bots(n).length ? esc(bots(n).join(', ')) : '',
+    `written ${timeOf(n.createdAt, nowMs)}`,
+  ];
+  const members = summaryMembersHtml(n, neuronOf ?? (() => null));
+  const facts = members
+    ? fold(`${n.id}:members`, `${count} fact${count === 1 ? '' : 's'}`, members, open)
+    : '';
+  return `${openText(n.id, n.text)}${meta(parts)}${facts}`;
+}
+
 const ROW = {
+  summary: summaryRow,
   prediction: predictionRow,
   insight: insightRow,
   broadcast: broadcastRow,
@@ -477,7 +476,8 @@ const ROW = {
  * "Showing N of M" and "Show 50 more". `broadcasts` feeds an insight's
  * broadcast status (`broadcastLimit`: the cap they were fetched with, so an
  * insight older than a capped list reads "unknown", not "not broadcast"), `sidesOf(id)` a contradiction's sides, `open` the fold
- * keys to keep open.
+ * keys to keep open, `neuronOf(id)` any neuron the page holds (a summary's
+ * archived members).
  */
 export function mindListHtml(
   kind,
@@ -490,6 +490,7 @@ export function mindListHtml(
     broadcastLimit = null,
     sidesOf = null,
     open = null,
+    neuronOf = null,
   } = {}
 ) {
   const list = Array.isArray(rows) ? rows : [];
@@ -502,11 +503,11 @@ export function mindListHtml(
   const limit = Math.max(MIND_PAGE_SIZE, Number(shown) || MIND_PAGE_SIZE);
   const page = list.slice(0, limit);
   const render = ROW[kind] ?? plainRow;
-  const ctx = { nowMs, broadcasts, broadcastLimit, sidesOf, open };
+  const ctx = { nowMs, broadcasts, broadcastLimit, sidesOf, open, neuronOf };
   const colour = kind === 'broadcast' ? null : neuronColour({ kind, createdBy: 'watcher' });
   const items = page.map(
     (r) =>
-      `<li class="watcher-mind-row${kind === 'broadcast' ? ' is-broadcast' : ''}" data-kind="${esc(kind)}" data-mind-key="${esc(r?.id ?? '')}"${
+      `<li class="watcher-mind-row${kind === 'broadcast' ? ' is-broadcast' : ''}" data-kind="${esc(kind)}"${
         colour ? ` style="--mind-kind:${colour}"` : ''
       }>${render(r, ctx)}</li>`
   );
