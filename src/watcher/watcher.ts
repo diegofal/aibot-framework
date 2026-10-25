@@ -15,7 +15,7 @@
  * questions, "## Something is wrong").
  */
 import { EventEmitter } from 'node:events';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SelfStateInput } from '../bot/agent-loop-prompts';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
@@ -55,8 +55,10 @@ import {
 import { DailyBudget, type WatcherTier } from './budget';
 import { WorkingBuffer } from './buffer';
 import { tierSwitches } from './config-file';
+import { type ConsolidateOutcome, runConsolidation } from './consolidate';
 import { FAST_LANE_DEFAULTS, FAST_LANE_TOOL_WINDOW_MS, runFastLane } from './fast-lane';
 import { Graph, type GraphChange } from './graph';
+import { type ImportanceContext, planForgetting } from './importance';
 import { type IntegrateOutcome, Integrator } from './integrate';
 import {
   INTROSPECTION_LOG_ROWS,
@@ -75,7 +77,13 @@ import {
   instrumented,
 } from './llm';
 import { WatcherLog } from './log';
-import { narrateIntrospection, narrateResumeBirth, narrateRewake, narrateSleep } from './narration';
+import {
+  narrateForgot,
+  narrateIntrospection,
+  narrateResumeBirth,
+  narrateRewake,
+  narrateSleep,
+} from './narration';
 import { type NoticeOutcome, Noticer, readNoticeLastRun, writeNoticeLastRun } from './notice';
 import { applyServed, duePredictions, resolvePredictions } from './outcomes';
 import { bufferFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
@@ -134,6 +142,53 @@ export const INTROSPECT_CHECK_MS = 60_000;
 export const WATCHER_STOP_TIMEOUT_MS = 5_000;
 /** Neuron kinds the operator can 👍/👎 (contradictions: confirm or dismiss). */
 export const SIGNAL_KINDS: readonly NeuronKind[] = ['insight', 'contradiction', 'prediction'];
+/** O10: the forgetting defaults when the config predates them. */
+const FORGET_DEFAULTS = { threshold: 0.15, graceDays: 7 };
+const TARGET_NEURONS_DEFAULT = 8000;
+/** A `forget:archive` row names at most this many neurons (the lowest). */
+const FORGET_ROW_IDS = 100;
+const CONSOLIDATE_DEFAULTS = {
+  enabled: false,
+  preview: true,
+  hour: 4,
+  minCluster: 6,
+  maxClusters: 10,
+  minCoverage: 0.5,
+};
+/** How often the nightly consolidation checks the hour and the fleet. */
+export const CONSOLIDATE_CHECK_MS = 10 * 60_000;
+
+/** `YYYY-MM-DD` in local time (consolidation runs at a local hour, once a local night). */
+function localDate(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** `<dir>/consolidate.json`: the local night consolidation last started. */
+function readConsolidateNight(dir: string): string | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, 'consolidate.json'), 'utf-8')) as {
+      night?: unknown;
+    };
+    return typeof raw.night === 'string' ? raw.night : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeConsolidateNight(
+  dir: string,
+  night: string,
+  at: string,
+  logger: Pick<Logger, 'warn'>
+): void {
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'consolidate.json'), JSON.stringify({ night, at }), 'utf-8');
+  } catch (err) {
+    logger.warn({ err }, 'Watcher: could not write consolidate.json');
+  }
+}
 
 /** `<dir>/taste.json`: the operator's signals, per neuron kind and per broadcast kind. */
 export interface WatcherTaste {
@@ -193,6 +248,11 @@ export interface WatcherDeps {
   stopTimeoutMs?: number;
   /** O1 fast lane: tool names a bot used in `[sinceMs, nowMs]` (the tool audit). */
   toolsUsed?: (botId: string, sinceMs: number, nowMs: number) => string[];
+  /**
+   * O10: true while no agent-loop cycle runs (`BotManager.getAgentLoopState`);
+   * consolidation runs only then. Absent = never quiet (never consolidates).
+   */
+  fleetQuiet?: () => boolean;
 }
 
 export class Watcher extends EventEmitter implements WatcherSelfStateSource {
@@ -251,6 +311,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private introspectRun: Promise<IntrospectionOutcome> | null = null;
   /** Aborted by `stop()`: every model call in flight (`instrumented`) is linked to it. */
   private stopCtrl = new AbortController();
+  /** O10: the night's consolidation in flight. */
+  private consolidateRun: Promise<ConsolidateOutcome | null> | null = null;
   /** O1 fast lane: the UTC day its capped row was written. */
   private readonly fastLaneState: { cappedOn?: string } = {};
 
@@ -980,6 +1042,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.outcomesRun,
       this.introspectRun,
       this.releaseRun,
+      this.consolidateRun,
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
@@ -1028,6 +1091,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       phase: this.phase,
       ...(this.sense.lastTickAt ? { lastTickAt: this.sense.lastTickAt } : {}),
       counts: this.graph.counts(),
+      archived: this.graph.size() - this.graph.liveCount(),
       edges: this.graph.edgeCount(),
       linkStatus: this.linkStatus(record),
       timers: { notice: !!this.noticeTimer, integrate: !!this.integrateTimer },
@@ -1278,20 +1342,101 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const every = this.cfg().log.senseSummaryEveryMs;
     const summary = setInterval(() => this.sense.tick(), every);
     const daily = setInterval(() => void this.maintainNow(), DAY_MS);
-    for (const t of [summary, daily]) (t as { unref?: () => void }).unref?.();
-    this.timers = [summary, daily];
+    const nightly = setInterval(() => this.consolidateTick(), CONSOLIDATE_CHECK_MS);
+    for (const t of [summary, daily, nightly]) (t as { unref?: () => void }).unref?.();
+    this.timers = [summary, daily, nightly];
   }
 
   /**
-   * Daily: archive what has not fired within `archiveAfterDays`, embed and link
-   * live neurons without a vector (`linkMissing`), recompute the layout. Never
-   * throws; skipped while birth is still running (its own link stage does it).
+   * O10: one check of the nightly consolidation (the timer calls it). Starts
+   * a run when consolidation and noticing are on, it is `consolidate.hour`
+   * local, tonight has not run yet (`consolidate.json`) and the fleet is quiet.
+   * True when it started one.
+   */
+  consolidateTick(): boolean {
+    if (!this.running || this.stopping || this.consolidateRun) return false;
+    const cfg = this.cfg();
+    const c = cfg.consolidate ?? CONSOLIDATE_DEFAULTS;
+    if (!c.enabled || !cfg.notice.enabled || !this.deps.llm?.notice) return false;
+    const at = new Date(this.now());
+    if (at.getHours() !== c.hour) return false;
+    const night = localDate(at);
+    if (readConsolidateNight(this.dir) === night) return false;
+    if (!this.isFleetQuiet()) return false;
+    writeConsolidateNight(this.dir, night, at.toISOString(), this.logger);
+    void this.consolidateNow();
+    return true;
+  }
+
+  /** Resolves when the consolidation in flight (if any) has finished. */
+  consolidationIdle(): Promise<unknown> {
+    return this.consolidateRun ?? Promise.resolve();
+  }
+
+  private isFleetQuiet(): boolean {
+    try {
+      return this.deps.fleetQuiet?.() === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * O10: consolidate now (`consolidate.ts`), on the notice tier (its budget,
+   * breaker and query log, caller `watcher:consolidate`), in preview unless
+   * `consolidate.preview` is false. Null when consolidation is off (the
+   * default), the watcher sleeps, noticing is off or there is no notice client; a busy
+   * fleet stops it before any call. Never throws.
+   */
+  consolidateNow(): Promise<ConsolidateOutcome | null> {
+    if (this.consolidateRun) return this.consolidateRun;
+    const cfg = this.cfg();
+    const client = this.tierClient('notice', 'watcher:consolidate');
+    const c = cfg.consolidate ?? CONSOLIDATE_DEFAULTS;
+    if (!c.enabled || !client || !cfg.notice.enabled || !this.running || this.stopping) {
+      return Promise.resolve(null);
+    }
+    const signal = this.stopCtrl.signal;
+    const run = runConsolidation({
+      graph: this.graph,
+      log: this.log,
+      client,
+      importance: () => this.importanceContext(),
+      threshold: (cfg.forget ?? FORGET_DEFAULTS).threshold,
+      minCluster: c.minCluster,
+      maxClusters: c.maxClusters,
+      minCoverage: c.minCoverage ?? CONSOLIDATE_DEFAULTS.minCoverage,
+      bots: () =>
+        (this.deps.config().bots ?? []).map((b) => ({ id: b.id, name: this.botName(b.id) })),
+      botName: (id) => this.botName(id),
+      isQuiet: () => this.isFleetQuiet(),
+      // An older config without the flag previews: merging is opted into.
+      preview: c.preview ?? true,
+      isCancelled: () => signal.aborted,
+      logger: this.logger,
+    })
+      .catch((err) => {
+        this.logger.warn({ err }, 'Watcher: consolidation failed');
+        return null;
+      })
+      .finally(() => {
+        if (this.consolidateRun === run) this.consolidateRun = null;
+      });
+    this.consolidateRun = run;
+    return run;
+  }
+
+  /**
+   * Daily: forget by importance (`forgetNow`, O10; it replaced the
+   * `archiveAfterDays` age rule), embed and link live neurons without a vector
+   * (`linkMissing`), recompute the layout. Never throws; the backfill is
+   * skipped while birth is still running (its own link stage does it).
    * A run that `stop()` cancelled during the backfill neither relays out nor
    * persists positions.
    */
   async maintainNow(): Promise<void> {
     try {
-      this.graph.archiveInactive(this.cfg().graph.archiveAfterDays * DAY_MS);
+      this.forgetNow();
       let linked: LinkResult | undefined;
       if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
         const deps = this.birthDeps();
@@ -1303,6 +1448,58 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     } catch (err) {
       this.logger.warn({ err }, 'Watcher: daily maintenance failed');
     }
+  }
+
+  /** O10: what importance reads besides the neuron (the graph, the grace, the served broadcasts). */
+  importanceContext(): ImportanceContext {
+    const servedInsights = new Set<string>();
+    try {
+      for (const b of this.broadcaster.list()) if (b.servedByCycle) servedInsights.add(b.insightId);
+    } catch {
+      // no broadcasts readable: nothing is protected by one
+    }
+    return {
+      nowMs: this.now(),
+      graph: this.graph,
+      graceDays: (this.cfg().forget ?? FORGET_DEFAULTS).graceDays,
+      servedInsights,
+    };
+  }
+
+  /**
+   * O10 forgetting: archive live neurons below `forget.threshold`, older than
+   * the grace and not protected, lowest importance first, until the live graph
+   * is at `graph.targetNeurons` (`planForgetting`). Each keeps its score text
+   * in `meta.archivedReason`; one `forget:archive` row per batch. Returns how
+   * many it archived.
+   */
+  forgetNow(): number {
+    const cfg = this.cfg();
+    const forget = cfg.forget ?? FORGET_DEFAULTS;
+    const target = cfg.graph.targetNeurons ?? TARGET_NEURONS_DEFAULT;
+    const plan = planForgetting(this.graph.list(), this.importanceContext(), {
+      threshold: forget.threshold,
+      target,
+    });
+    if (plan.archive.length === 0) return 0;
+    for (const { neuron, score } of plan.archive) {
+      this.graph.archive(neuron.id, {
+        archivedReason: score.reason,
+        archivedImportance: score.score.toFixed(2),
+      });
+    }
+    this.log.say(
+      'sleep',
+      'forget:archive',
+      narrateForgot({
+        archived: plan.archive.length,
+        lowest: plan.archive.slice(0, 3).map((a) => a.score.score),
+        live: this.graph.liveCount(),
+        target,
+      }),
+      { neuronIds: plan.archive.slice(0, FORGET_ROW_IDS).map((a) => a.neuron.id) }
+    );
+    return plan.archive.length;
   }
 
   private linkStatus(record: BirthRecord | null): LinkStatus {
@@ -1425,6 +1622,20 @@ export interface FleetWatcherSource {
     botId: string
   ): { cycleId: string; plan?: string; goalId?: string; goalTitle?: string } | undefined;
   setWatcherSelfState?(source: WatcherSelfStateSource | undefined): void;
+  /** O10: whether an agent-loop cycle runs now (`BotManager.getAgentLoopState`). */
+  getAgentLoopState?(): { running: boolean; sleeping: boolean; draining?: boolean };
+}
+
+/**
+ * O10: the fleet is quiet when no agent-loop cycle executes (every loop
+ * sleeping between cycles, or the loop not started) and it is not draining.
+ * Unknown state is not quiet.
+ */
+export function fleetQuietFrom(
+  state: { running?: boolean; sleeping?: boolean; draining?: boolean } | undefined
+): boolean {
+  if (!state || typeof state.running !== 'boolean') return false;
+  return !state.running && state.draining !== true;
 }
 
 /** A question broadcast reaches the operator with this prefix, through the bot it concerns. */
@@ -1624,6 +1835,9 @@ export function createFleetWatcher(
     },
     ...(manager.getRunningCycle
       ? { runningCycle: (botId: string) => manager.getRunningCycle?.(botId) }
+      : {}),
+    ...(manager.getAgentLoopState
+      ? { fleetQuiet: () => fleetQuietFrom(manager.getAgentLoopState?.()) }
       : {}),
   });
   try {

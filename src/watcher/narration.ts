@@ -166,6 +166,7 @@ const KIND_LABELS: Record<NeuronKind, [string, string]> = {
   insight: ['insight', 'insights'],
   contradiction: ['contradiction', 'contradictions'],
   prediction: ['prediction', 'predictions'],
+  summary: ['summary', 'summaries'],
 };
 
 export function narrateBorn(input: {
@@ -195,6 +196,60 @@ export function narrateUnreadable(what: string, reason: string): string {
 
 export function narrateResync(input: { bots: number; goals: number; people: number }): string {
   return `Caught up on what changed while I slept: ${plural(input.bots, 'new bot', 'new bots')}, ${plural(input.goals, 'new goal', 'new goals')}, ${num(input.people)} new ${input.people === 1 ? 'person' : 'people'}.`;
+}
+
+/** O10: one row per forgetting batch (`Watcher.maintainNow`). */
+export function narrateForgot(input: {
+  archived: number;
+  lowest: number[];
+  live: number;
+  target: number;
+}): string {
+  const lowest = input.lowest.map((x) => x.toFixed(2)).join(', ');
+  return `Forgot ${plural(input.archived, 'neuron', 'neurons')} of low importance (lowest ${lowest}); ${num(input.live)} live now, target ${num(input.target)}.`;
+}
+
+/** O10: a cluster of facts consolidated into one summary (`consolidate.ts`). */
+export function narrateConsolidated(input: {
+  text: string;
+  members: number;
+  bots: string[];
+}): string {
+  const from = input.bots.length ? ` (from ${andList(input.bots)})` : '';
+  return `Consolidated ${plural(input.members, 'fact', 'facts')} into a summary${from}: ${quoteModelText(input.text)}.`;
+}
+
+/** O10: why a cluster kept its facts. */
+export function narrateConsolidateSkipped(input: { members: number; why: string }): string {
+  return `Left ${plural(input.members, 'related fact', 'related facts')} as they were: ${input.why}.`;
+}
+
+/** O10, preview mode: the summary consolidation would have written, and how many facts it would fold. */
+export function narrateConsolidatePreview(input: {
+  text: string;
+  members: number;
+  of: number;
+}): string {
+  return `Preview, nothing written: would consolidate ${num(input.members)} of ${plural(input.of, 'related fact', 'related facts')} into a summary: ${quoteModelText(input.text)}.`;
+}
+
+/** O10: the night's consolidation, in one row. `previewed` is set only in preview mode. */
+export function narrateConsolidatePass(input: {
+  clusters: number;
+  summaries: number;
+  members: number;
+  skipped: number;
+  previewed?: number;
+  stopped?: string;
+}): string {
+  const mode = input.previewed !== undefined ? ' (preview: nothing archived or created)' : '';
+  if (input.clusters === 0)
+    return `Consolidation${mode}: no cluster of forgettable facts large enough tonight.`;
+  const stop = input.stopped ? ` Stopped early: ${input.stopped}.` : '';
+  if (input.previewed !== undefined) {
+    return `Consolidation${mode}: ${plural(input.clusters, 'cluster', 'clusters')}, ${plural(input.previewed, 'summary', 'summaries')} previewed, ${num(input.skipped)} skipped.${stop}`;
+  }
+  return `Consolidation: ${plural(input.clusters, 'cluster', 'clusters')}, ${plural(input.summaries, 'summary', 'summaries')} written from ${plural(input.members, 'fact', 'facts')}, ${num(input.skipped)} skipped.${stop}`;
 }
 
 export function narrateSleep(input: { neurons: number }): string {

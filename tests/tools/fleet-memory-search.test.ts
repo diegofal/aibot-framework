@@ -7,6 +7,7 @@ import {
   FLEET_PREFETCH_RESULTS,
   buildFleetMemoryPrefetch,
   createFleetMemorySearchTool,
+  visibleTo,
 } from '../../src/tools/fleet-memory-search';
 import { Graph } from '../../src/watcher/graph';
 
@@ -406,5 +407,41 @@ describe('buildFleetMemoryPrefetch: the query embedding', () => {
       logger
     );
     expect(e.calls).toEqual(['canary codeword heron project']);
+  });
+});
+
+describe('O10 summaries in fleet memory', () => {
+  const summary = (meta: Record<string, string>) =>
+    ({
+      id: 'n-00000009',
+      kind: 'summary',
+      text: 'Deploys kept failing on a stale cache',
+      support: { bots: ['b1', 'b2'] },
+      createdBy: 'watcher',
+      createdAt: '',
+      lastActivatedAt: '',
+      activations: 0,
+      meta: { consolidated: 'true', ...meta },
+    }) as never;
+
+  test('a summary of operator-sourced facts is shown only to the operator', () => {
+    const s = summary({ operatorSourced: 'true', operatorMessage: 'true' });
+    expect(visibleTo(s, { operator: true })).toBe(true);
+    expect(visibleTo(s, { operator: false, botId: 'b1' })).toBe(false);
+  });
+
+  // Changed on purpose: this used to show a public summary supported by b1 and
+  // b2 as if that were any merge of b1's and b2's facts, which let b2 read b1's
+  // material through it. Consolidation now clusters public facts only by
+  // identical `support.bots` (`readershipOf` in src/watcher/consolidate.ts), so
+  // a public summary's support is exactly its members' readers.
+  test('a public summary is shown to exactly the bots that read every member, not to others', () => {
+    const shared = summary({ operatorMessage: 'false' });
+    expect(visibleTo(shared, { operator: false, botId: 'b1' })).toBe(true);
+    expect(visibleTo(shared, { operator: false, botId: 'b2' })).toBe(true);
+    expect(visibleTo(shared, { operator: false, botId: 'b3' })).toBe(false);
+    const own = { ...(summary({ operatorMessage: 'false' }) as object), support: { bots: ['b1'] } };
+    expect(visibleTo(own as never, { operator: false, botId: 'b1' })).toBe(true);
+    expect(visibleTo(own as never, { operator: false, botId: 'b2' })).toBe(false);
   });
 });

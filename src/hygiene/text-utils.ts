@@ -1,5 +1,6 @@
 /**
- * Pure text helpers shared by the hygiene routines. No I/O.
+ * Pure text helpers shared by the hygiene routines (and the watcher's
+ * consolidation: `titleTokens`, `summaryContradicts`). No I/O.
  */
 
 const STOPWORDS = new Set([
@@ -192,4 +193,61 @@ export function tokenCoverage(answer: string | null | undefined, target: string)
   let hit = 0;
   for (const w of want) if (said.has(w)) hit++;
   return hit / want.size;
+}
+
+/** Negation words (en, es). `n't` forms are matched by suffix. */
+const NEGATIONS = new Set([
+  'not',
+  'no',
+  'never',
+  'without',
+  'none',
+  'nor',
+  'cannot',
+  'nunca',
+  'jamás',
+  'jamas',
+  'sin',
+  'ningún',
+  'ningun',
+  'ninguna',
+  'ninguno',
+  'tampoco',
+]);
+const WORD_RE = /[\p{L}\p{N}'’]+/gu;
+const NUMBER_RE = /\d+(?:[.,:/-]\d+)*/g;
+
+const sortedKey = (xs: string[]) => [...xs].sort().join('|');
+
+function negationsOf(text: string): string {
+  const words = (text.toLowerCase().match(WORD_RE) ?? []).filter(
+    (w) => NEGATIONS.has(w) || /n['’]t$/.test(w)
+  );
+  return sortedKey(words);
+}
+
+/**
+ * Two texts that differ in a negation word or in any number/date token: one
+ * says something the other does not, however many words they share. Pure.
+ */
+export function contradicts(a: string, b: string): boolean {
+  if (negationsOf(a) !== negationsOf(b)) return true;
+  return sortedKey(a.match(NUMBER_RE) ?? []) !== sortedKey(b.match(NUMBER_RE) ?? []);
+}
+
+/**
+ * A summary that says something its source fact does not: a different
+ * negation (the fact's "will pay" against the summary's "will not pay"), or
+ * numbers that disagree (the summary names a number the fact lacks while the
+ * fact has one the summary leaves out). Asymmetric on purpose: a summary may
+ * drop a fact's numbers (that is what summarising does), and may name the
+ * fact's number among others, but never replace it. Pure.
+ */
+export function summaryContradicts(summary: string, fact: string): boolean {
+  if (negationsOf(summary) !== negationsOf(fact)) return true;
+  const inSummary = new Set(summary.match(NUMBER_RE) ?? []);
+  const inFact = new Set(fact.match(NUMBER_RE) ?? []);
+  const added = [...inSummary].some((x) => !inFact.has(x));
+  const dropped = [...inFact].some((x) => !inSummary.has(x));
+  return added && dropped;
 }

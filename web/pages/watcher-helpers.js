@@ -12,6 +12,7 @@
  * and replay agree.
  */
 import { emptyState, esc } from '../ui/index.js';
+import { memoryCountsHtml } from './watcher-memory-helpers.js';
 import { embeddingStatusHtml, isPassRow, passFoldHtml } from './watcher-ops-helpers.js';
 import { whyPanel } from './why-helpers.js';
 
@@ -27,6 +28,7 @@ export const NEURON_KINDS = [
   'insight',
   'contradiction',
   'prediction',
+  'summary',
 ];
 
 /** Hue (degrees) per kind; the origin (watcher vs bot) is carried by saturation and lightness. */
@@ -42,11 +44,13 @@ export const KIND_HUES = {
   surprise: 330,
   prediction: 300,
   topic: 265,
+  summary: 100,
 };
 
 const KIND_PLURALS = {
   entity: 'entities',
   person: 'people',
+  summary: 'summaries',
 };
 
 export const LOG_PHASES = ['birth', 'sense', 'notice', 'integrate', 'broadcast', 'sleep'];
@@ -319,6 +323,9 @@ export function stateParts(state, nowMs = Date.now(), { busy = false, embedding 
         kindLabel(k, n)
       )}</span>`;
     });
+  // O10: live / archived (watcher-memory-helpers.js).
+  const memory = memoryCountsHtml(s);
+  if (memory) chips.push(memory);
   const edges = Number(s.edges);
   if (Number.isFinite(edges)) {
     chips.push(

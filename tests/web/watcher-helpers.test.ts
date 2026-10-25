@@ -739,6 +739,7 @@ describe('small formatters', () => {
     expect(kindLabel('fact', 1)).toBe('fact');
     expect(kindLabel('fact', 2)).toBe('facts');
     expect(kindLabel('person', 3)).toBe('people');
+    expect(kindLabel('summary', 2)).toBe('summaries');
     expect(kindLabel('entity', 0)).toBe('entities');
   });
 

@@ -42,12 +42,8 @@ import {
   watcherDisabledHtml,
   watcherErrorHtml,
 } from './watcher-helpers.js';
-import {
-  SIGNAL_NEURON_KINDS,
-  broadcastRowsHtml,
-  insightRowsHtml,
-  metricsStripHtml,
-} from './watcher-metrics-helpers.js';
+import { effectRedrawsThoughts, summaryRowsHtml } from './watcher-memory-helpers.js';
+import { broadcastRowsHtml, insightRowsHtml, metricsStripHtml } from './watcher-metrics-helpers.js';
 import {
   graphCleanSummary,
   logView,
@@ -202,6 +198,11 @@ function shell() {
       <div class="watcher-thoughts-col"><div class="watcher-log-title">Insights</div><div id="watcher-insights"></div></div>
       <div class="watcher-thoughts-col"><div class="watcher-log-title">Broadcasts</div><div id="watcher-broadcasts"></div></div>
     </section>
+    <!-- O10 memory: Summaries (watcher-memory-helpers.js) -->
+    <section class="watcher-thoughts watcher-memory" aria-label="What the watcher consolidated">
+      <div class="watcher-thoughts-col"><div class="watcher-log-title">Summaries</div><div id="watcher-summaries"></div></div>
+    </section>
+    <!-- /O10 memory -->
     <section class="watcher-thoughts watcher-self" aria-label="The watcher's self-model">
       <div class="watcher-thoughts-col"><div class="watcher-log-title">How I am</div><div id="watcher-how"></div></div>
       <div class="watcher-thoughts-col"><div class="watcher-log-title">Attending to</div><div id="watcher-attending"></div></div>
@@ -218,7 +219,15 @@ function drawMetrics() {
 function drawInsights() {
   const host = $('#watcher-insights');
   if (host) host.innerHTML = insightRowsHtml([...page.model.neurons.values()], Date.now());
+  drawSummaries();
 }
+
+/* ── O10 memory: the Summaries list (watcher-memory-helpers.js) ─── */
+function drawSummaries() {
+  const host = $('#watcher-summaries');
+  if (host) host.innerHTML = summaryRowsHtml([...page.model.neurons.values()], Date.now());
+}
+/* ── /O10 memory ───────────────────────────────────────────────── */
 
 function drawBroadcasts() {
   const host = $('#watcher-broadcasts');
@@ -422,12 +431,7 @@ function onEffect(effect) {
       return;
   }
   if (effect.kind === 'spawn' || effect.kind === 'edge') drawState();
-  if (
-    (effect.kind === 'spawn' || effect.kind === 'update') &&
-    SIGNAL_NEURON_KINDS.includes(page.model.neurons.get(effect.id)?.kind)
-  ) {
-    drawInsights();
-  }
+  if (effectRedrawsThoughts(effect, page.model.neurons.get(effect.id))) drawInsights();
 }
 
 /**
