@@ -1660,6 +1660,56 @@ describe('Watcher: embedding what birth could not', () => {
     await reloaded.watcher.stop();
   });
 
+  test('a maintenance run a stop() left hanging is never shared with the next start', async () => {
+    let mode: 'down' | 'hang' = 'down';
+    let calls = 0;
+    let probed = false;
+    // every batch embed left hanging (the batch runs `concurrency` at a time)
+    const hanging: ((v: number[]) => void)[] = [];
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        if (mode === 'down') return Promise.reject(new Error('ollama down'));
+        // the probe answers; the batch embeds that follow never do
+        if (!probed) {
+          probed = true;
+          return Promise.resolve([1, 0, 0]);
+        }
+        return new Promise<number[]>((r) => {
+          hanging.push(r);
+        });
+      },
+    });
+    const bounded = <T>(p: Promise<T>) =>
+      Promise.race([p, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000))]);
+    await watcher.start();
+    await watcher.idle();
+    mode = 'hang';
+    const seen = calls;
+    const stale = watcher.maintainNow();
+    expect(await until(() => calls > seen && hanging.length > 0)).toBe(true);
+    await watcher.stop();
+    // the embed calls outlive stop(); the same watcher starts again
+    mode = 'down';
+    expect(await bounded(watcher.start())).not.toBe('hung');
+    // a cancelled run is not "in flight": the route would answer 409 forever
+    const inFlightAfterRestart = watcher.maintenanceInFlight();
+    const fresh = watcher.maintainNow();
+    const sharedStale = fresh === stale;
+    const freshOutcome = await bounded(fresh);
+    const idleOutcome = await bounded(watcher.idle());
+    // let the stale calls settle whatever happened, so nothing leaks past the test
+    for (const r of hanging) r([1, 0, 0]);
+    await bounded(stale);
+    expect(sharedStale).toBe(false);
+    expect(inFlightAfterRestart).toBe(false);
+    expect(freshOutcome).not.toBe('hung');
+    expect(idleOutcome).not.toBe('hung');
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    await watcher.stop();
+  });
+
   async function until(check: () => boolean, ms = 1000): Promise<boolean> {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
