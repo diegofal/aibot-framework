@@ -80,6 +80,10 @@ export const LOCKED_EXAMPLES: readonly string[] = Object.freeze([
   'watcher.autonomy.proposals.enabled',
   'watcher.autonomy.proposals.maxPending',
   'watcher.autonomy.proposals.approvalTtlHours',
+  'watcher.autonomy.selfStudy',
+  'watcher.autonomy.selfStudy.enabled',
+  'watcher.autonomy.selfStudy.everyHours',
+  'watcher.autonomy.selfStudy.firstRunDelayMinutes',
   // whole blocks and odd shapes
   'watcher',
   'watcher.notice',

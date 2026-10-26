@@ -44,6 +44,14 @@ import { readToolEntries } from '../stats/readers/tool-audit';
 import { isTenantBot } from '../tenant/tenant-scoping';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
+  SELF_STUDY_CHECK_MS,
+  SelfStudy,
+  type SelfStudyAutonomy,
+  type SelfStudyReaders,
+  type SelfStudyRunResult,
+  type SelfStudyStatus,
+} from './autonomy/self-study';
+import {
   type BirthDeps,
   type LinkResult,
   beginBirth,
@@ -303,6 +311,8 @@ export interface WatcherDeps {
   killSwitch?: () => KillState;
   /** C1: the running watcher's kill poll (default `KILL_POLL_MS`). */
   killPollMs?: number;
+  /** Rung 2: the self-study's record readers (tests). Default: the records on disk. */
+  selfStudyReaders?: SelfStudyReaders;
 }
 
 /** The monthly ceiling of a watcher config (`watcher.autonomy.monthlyCeilingUsd`, else the default). */
@@ -383,6 +393,10 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private readonly fastLaneState: { cappedOn?: string } = {};
   /** C1: when the hard kill was first seen on (cleared when it is seen off). */
   private killedSince: string | undefined;
+  /** Rung 2: the proposal queue the self-study submits into (`attachAutonomy`). */
+  private autonomy: SelfStudyAutonomy | undefined;
+  /** Rung 2: the weekly fleet cost audit (`autonomy/self-study.ts`). */
+  private readonly selfStudy: SelfStudy;
   /** C1: the stop the kill started, in flight. */
   private killStop: Promise<WatcherState> | null = null;
 
@@ -497,6 +511,49 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       now: this.now,
       ...(deps.random ? { random: deps.random } : {}),
     });
+    this.selfStudy = new SelfStudy({
+      watcherDir: this.dir,
+      config: () => this.deps.config(),
+      client: () => this.tierClient('notice', 'watcher:self-study'),
+      autonomy: () => this.autonomy,
+      log: this.log,
+      running: () => this.running && !this.stopping,
+      killed: () => this.readKill().killed,
+      signal: () => this.stopCtrl.signal,
+      startedAtMs: () => (this.startedAt ? Date.parse(this.startedAt) : undefined),
+      ...(deps.selfStudyReaders ? { readers: deps.selfStudyReaders } : {}),
+      now: this.now,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * Rung 2: the autonomy API (`createAutonomy`, built after the watcher in
+   * `src/index.ts`) the self-study submits its proposals into. Without it the
+   * self-study never runs.
+   */
+  attachAutonomy(api: SelfStudyAutonomy | undefined): void {
+    this.autonomy = api;
+  }
+
+  /** Rung 2: run the self-study now (`POST /api/watcher/self-study`). Never throws. */
+  selfStudyNow(): Promise<SelfStudyRunResult> {
+    return this.selfStudy.run('manual');
+  }
+
+  /** Rung 2: `GET /api/watcher/self-study`. */
+  selfStudyStatus(): SelfStudyStatus {
+    return this.selfStudy.status();
+  }
+
+  /** Rung 2: the timer's check (exposed for tests). True when it started a run. */
+  selfStudyTick(): boolean {
+    return this.selfStudy.tick();
+  }
+
+  /** Resolves when the self-study in flight (if any) has finished. */
+  selfStudyIdle(): Promise<unknown> {
+    return this.selfStudy.current() ?? Promise.resolve();
   }
 
   /**
@@ -1242,6 +1299,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.introspectRun,
       this.releaseRun,
       this.consolidateRun,
+      this.selfStudy.current(),
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
@@ -1543,13 +1601,17 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const summary = setInterval(() => this.sense.tick(), every);
     const daily = setInterval(() => void this.maintainNow(), DAY_MS);
     const nightly = setInterval(() => this.consolidateTick(), CONSOLIDATE_CHECK_MS);
+    // Rung 2: the weekly self-study (checks every 10 min whether one is due).
+    const selfStudy = setInterval(() => this.selfStudyTick(), SELF_STUDY_CHECK_MS);
     // C1: the kill poll lives with the run (cleared by `stop` and `abandonStart`).
     const kill = setInterval(
       () => void this.checkKillSwitch(),
       this.deps.killPollMs ?? KILL_POLL_MS
     );
-    for (const t of [summary, daily, nightly, kill]) (t as { unref?: () => void }).unref?.();
-    this.timers = [summary, daily, nightly, kill];
+    for (const t of [summary, daily, nightly, selfStudy, kill]) {
+      (t as { unref?: () => void }).unref?.();
+    }
+    this.timers = [summary, daily, nightly, selfStudy, kill];
   }
 
   /**

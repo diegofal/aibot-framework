@@ -377,6 +377,8 @@ async function main() {
       },
     });
     const autonomyTimers = startAutonomyTimers(autonomy, { logger });
+    // Rung 2: the watcher's weekly self-study submits its proposals into this queue.
+    watcher?.attachAutonomy(autonomy);
 
     // Start web server if enabled
     if (config.web.enabled) {

@@ -10744,3 +10744,22 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
   }
 }
 /* ── end watcher autonomy rung 0 ── */
+/* ── watcher autonomy rung 2: self-study card ── */
+.watcher-self-when {
+  font-size: var(--fs-sm);
+  margin-bottom: var(--s1);
+}
+.watcher-self-notes {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  max-height: 22em;
+  overflow: auto;
+  margin: var(--s2) 0 0;
+  padding: var(--s2) var(--s3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}

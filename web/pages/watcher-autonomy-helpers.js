@@ -166,9 +166,10 @@ const timeOf = (iso) => {
 };
 
 /**
- * Pending (oldest first: the first to expire), queued (oldest first) and
- * decided (rejected / expired, newest first). `rejected-locked` is never
- * shown (C2); an approved proposal lives on as its change record.
+ * Pending (oldest first: the first to expire) and decided (rejected /
+ * expired, newest first). `rejected-locked` is never shown (C2), and the
+ * server never sends queued proposals (they wait for a slot unseen); an
+ * approved proposal lives on as its change record.
  */
 export function orderProposals(proposals) {
   const list = Array.isArray(proposals) ? proposals.filter((p) => p && typeof p === 'object') : [];
@@ -176,7 +177,6 @@ export function orderProposals(proposals) {
   const oldest = (a, b) => timeOf(a.pendingAt ?? a.createdAt) - timeOf(b.pendingAt ?? b.createdAt);
   return {
     pending: by('pending').sort(oldest),
-    queued: by('queued').sort((a, b) => timeOf(a.createdAt) - timeOf(b.createdAt)),
     decided: list
       .filter((p) => p.status === 'rejected' || p.status === 'expired')
       .sort((a, b) => timeOf(b.decidedAt ?? b.expiresAt) - timeOf(a.decidedAt ?? a.expiresAt)),
@@ -217,6 +217,21 @@ function errorHtml(ui, id) {
 
 const approveKey = (p) => `approve:${p.id}:${p.contentHash}`;
 const revertKey = (c) => `revert:${c.id}`;
+const acceptKey = (c) => `accept:${c.id}`;
+
+/** JSON with sorted keys; `undefined` and `null` are the same missing value (the ledger's `sameValue`). */
+function canonical(v) {
+  if (v === undefined || v === null) return 'null';
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (typeof v === 'object') {
+    return `{${Object.keys(v)
+      .filter((k) => v[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
 
 function pendingCardHtml(p, { nowMs, ui }) {
   const busy = ui?.busy === p.id ? ' disabled' : '';
@@ -252,15 +267,22 @@ function pendingCardHtml(p, { nowMs, ui }) {
     ${field('Expected', esc(predictionText(p.predicted)))}
     ${field('Guard', esc(guardText(p.guard)))}
     ${field('Undo', esc(p.rollback ?? ''))}
+    ${lastApprovalHtml(p, ui)}
     ${errorHtml(ui, p.id)}
     <div class="watcher-auto-actions">${buttons}</div>
   </li>`;
 }
 
-function queuedRowHtml(p) {
-  return `<li class="watcher-auto-row"><strong>${esc(p.title ?? p.id)}</strong> <span class="watcher-auto-kind">${esc(
-    KIND_WORDS[p.kind] ?? p.kind ?? ''
-  )}</span>${changesListHtml(p.changes)}</li>`;
+/**
+ * Why the last approval did not apply, stored with the pending proposal (it
+ * survives a reload). A fresh click's in-page error says the same, so it
+ * replaces it.
+ */
+function lastApprovalHtml(p, ui) {
+  if (!p.note || ui?.errors?.[p.id]) return '';
+  return `<div class="watcher-auto-error" role="alert">Your last approval did not apply: ${esc(
+    p.note
+  )}</div>`;
 }
 
 const CHANGE_STATUS = {
@@ -271,6 +293,7 @@ const CHANGE_STATUS = {
   reverted: 'Reverted by you',
   'rolled-back': 'Rolled back by its guard',
   'revert-failed': 'Needs you',
+  accepted: 'Accepted by you as found',
 };
 
 /** Recorded, not finished: the ledger settles it from the live values at the next check. */
@@ -287,13 +310,28 @@ function pairsHtml(before, after) {
   return rows.length ? `<ul class="watcher-auto-changes">${rows.join('')}</ul>` : '';
 }
 
-/** What a settlement found live, when it was neither the old nor the new value. */
-function foundHtml(found) {
+/** Values by path under a label: what is live now on a needs-you change, what was kept on an accepted one. */
+function foundHtml(found, label) {
   if (!Array.isArray(found) || found.length === 0) return '';
   const rows = found.map(
     (f) => `<li><code>${esc(f?.path ?? '?')}</code>: ${esc(formatValue(f?.value))}</li>`
   );
-  return `<div class="watcher-auto-sub">Live now</div><ul class="watcher-auto-changes">${rows.join('')}</ul>`;
+  return `<div class="watcher-auto-sub">${esc(label)}</div><ul class="watcher-auto-changes">${rows.join('')}</ul>`;
+}
+
+/**
+ * A needs-you change whose live values are not all its new ones can only be
+ * accepted as it is (Revert refuses: it never writes over someone else's
+ * edit). `live` is what the list read now; `found`, what a settlement saw.
+ */
+export function canAcceptChange(c) {
+  if (c?.status !== 'revert-failed') return false;
+  const values = Array.isArray(c.live) ? c.live : c.found;
+  if (!Array.isArray(values) || values.length === 0) return false;
+  const after = new Map((Array.isArray(c.after) ? c.after : []).map((a) => [a?.path, a?.value]));
+  return values.some(
+    (v) => !after.has(v?.path) || canonical(v?.value) !== canonical(after.get(v?.path))
+  );
 }
 
 function changeRowHtml(c, { nowMs, ui, titleOf }) {
@@ -306,6 +344,7 @@ function changeRowHtml(c, { nowMs, ui, titleOf }) {
         : '';
   const busy = ui?.busy === c.id ? ' disabled' : '';
   const armed = isArmed(ui?.armed, revertKey(c), nowMs);
+  const acceptArmed = isArmed(ui?.armed, acceptKey(c), nowMs);
   const guardLeftH = Math.ceil((timeOf(c.guardUntil) - nowMs) / 3_600_000);
   const when = SETTLING.has(c.status)
     ? `${c.status === 'applying' ? 'being applied' : 'being undone'} · it settles at the next check`
@@ -315,21 +354,34 @@ function changeRowHtml(c, { nowMs, ui, titleOf }) {
         }`
       : `ended ${relTime(c.endedAt, nowMs)}`;
   // A failed revert or rollback, or live values the ledger did not expect
-  // (revert-failed), wait for the operator: only Revert (or a hand edit) can
-  // settle them. A settling change has no button: the next check finishes it.
+  // (revert-failed), wait for the operator: Revert while the new values are
+  // live (a failed rollback is also retried by its guard), Accept current
+  // values when they are not. A settling change has no button: the next
+  // check finishes it.
+  const accept = canAcceptChange(c)
+    ? `<button type="button" class="btn btn-sm${
+        acceptArmed ? ' btn-danger' : ''
+      }" data-action="autonomy-accept" data-change-id="${esc(c.id)}" data-focus-key="accept:${esc(
+        c.id
+      )}"${busy}>${acceptArmed ? 'Click again to accept' : 'Accept current values'}</button>`
+    : '';
   const revert =
     c.status === 'applied' || c.status === 'revert-failed'
       ? `<div class="watcher-auto-actions"><button type="button" class="btn btn-sm${
           armed ? ' btn-danger' : ''
         }" data-action="autonomy-revert" data-change-id="${esc(c.id)}" data-focus-key="revert:${esc(
           c.id
-        )}"${busy}>${armed ? 'Click again to revert' : 'Revert'}</button></div>`
+        )}"${busy}>${armed ? 'Click again to revert' : 'Revert'}</button>${accept}</div>`
       : '';
+  const values =
+    c.status === 'accepted'
+      ? foundHtml(c.found, 'Kept as it was live')
+      : foundHtml(Array.isArray(c.live) ? c.live : c.found, 'Live now');
   return `<li class="watcher-auto-row" data-change-row="${esc(c.id)}"><span class="watcher-auto-status ${tone}">${esc(
     status
-  )}</span> <strong>${esc(titleOf(c.proposalId) ?? c.proposalId ?? '')}</strong> <span class="text-dim">${esc(
+  )}</span> <strong>${esc(c.title ?? titleOf(c.proposalId) ?? c.proposalId ?? '')}</strong> <span class="text-dim">${esc(
     when
-  )}</span>${pairsHtml(c.before, c.after)}${foundHtml(c.found)}${
+  )}</span>${pairsHtml(c.before, c.after)}${values}${
     c.endReason ? `<div class="watcher-auto-reason">${esc(c.endReason)}</div>` : ''
   }${errorHtml(ui, c.id)}${revert}</li>`;
 }
@@ -355,7 +407,7 @@ export const PROPOSALS_HEAD = {
  */
 export function proposalsPanelHtml(resp, { nowMs = Date.now(), ui = {} } = {}) {
   if (!resp || typeof resp !== 'object' || resp.enabled !== true) return '';
-  const { pending, queued, decided } = orderProposals(resp.proposals);
+  const { pending, decided } = orderProposals(resp.proposals);
   const titles = new Map(
     (Array.isArray(resp.proposals) ? resp.proposals : []).map((p) => [p?.id, p?.title])
   );
@@ -375,21 +427,15 @@ export function proposalsPanelHtml(resp, { nowMs = Date.now(), ui = {} } = {}) {
   ]
     .sort((a, b) => b.at - a.at)
     .map((h) => h.html);
-  const max = Number(resp.maxPending);
   const pendingHtml = pending.length
     ? `<ul class="watcher-auto-list">${pending.map((p) => pendingCardHtml(p, { nowMs, ui })).join('')}</ul>`
     : '<p class="watcher-auto-empty text-dim">Nothing to review.</p>';
-  const queuedHtml = queued.length
-    ? `<div class="watcher-auto-sub">Waiting for a review slot (${pending.length}${
-        Number.isFinite(max) ? ` of ${max}` : ''
-      } pending)</div><ul class="watcher-auto-list">${queued.map(queuedRowHtml).join('')}</ul>`
-    : '';
   const historyHtml = history.length
     ? `<div class="watcher-auto-sub">History</div><ul class="watcher-auto-list">${history.join('')}</ul>`
     : '';
   return `<div class="watcher-card-head"><div class="watcher-log-title">${esc(
     PROPOSALS_HEAD.title
-  )}</div><div class="watcher-card-sub">${esc(PROPOSALS_HEAD.sub)}</div></div>${pendingHtml}${queuedHtml}${historyHtml}`;
+  )}</div><div class="watcher-card-sub">${esc(PROPOSALS_HEAD.sub)}</div></div>${pendingHtml}${historyHtml}`;
 }
 
 /**
@@ -401,4 +447,84 @@ export function shouldRedrawProposals(prevHtml, nextHtml, { typing = false, forc
   if (force) return prevHtml !== nextHtml || prevHtml == null;
   if (typing) return false;
   return prevHtml !== nextHtml;
+}
+
+/* ── Self-study (autonomy rung 2) ────────────────────────────────── */
+
+/** The two-step key of "Run now". */
+export const SELF_STUDY_KEY = 'self-study:run';
+
+export const SELF_STUDY_HEAD = {
+  title: 'Self-study',
+  sub: 'Once a week the watcher reads a cost digest code computes from the fleet records (no tools, no web) and may propose up to 3 changes above. These are its notes, written by code.',
+};
+
+/** A `self-study:*` log row (the card and the proposals refetch on it). */
+export function isSelfStudyRow(row) {
+  const op = row?.op ?? row?.type;
+  return typeof op === 'string' && op.startsWith('self-study:');
+}
+
+/** "in 3 h", "in 2 d", "due now". */
+export function inText(iso, nowMs = Date.now()) {
+  const t = Date.parse(iso ?? '');
+  if (!Number.isFinite(t)) return '';
+  const left = t - nowMs;
+  if (left <= 60_000) return 'due now';
+  if (left < 3_600_000) return `in ${Math.round(left / 60_000)} min`;
+  if (left < 48 * 3_600_000) return `in ${Math.round(left / 3_600_000)} h`;
+  return `in ${Math.round(left / 86_400_000)} d`;
+}
+
+const OUTCOME_WORDS = { done: 'done', skipped: 'skipped', failed: 'failed' };
+
+/** One line about the last outcome, in words. */
+export function selfStudyOutcomeText(outcome) {
+  if (!outcome || typeof outcome !== 'object') return '';
+  const status = OUTCOME_WORDS[outcome.status] ?? String(outcome.status ?? '');
+  const n = (a) => (Array.isArray(a) ? a.length : 0);
+  if (outcome.status !== 'done') {
+    return `${status}${outcome.reason ? `: ${outcome.reason}` : ''}`;
+  }
+  const parts = [`${n(outcome.proposed)} proposed`];
+  if (n(outcome.rejected)) parts.push(`${n(outcome.rejected)} refused by the lock`);
+  if (n(outcome.dropped)) parts.push(`${n(outcome.dropped)} dropped by code`);
+  const cost = Number(outcome.costUsd);
+  return `${status}: ${parts.join(', ')}${Number.isFinite(cost) ? ` · cost ${money(cost)}` : ''}`;
+}
+
+/**
+ * The Self-study card: '' unless `status.enabled` (both switches on).
+ * `ui`: `{ armed, busy, error }`. "Run now" is two-step (`armClick` on
+ * `SELF_STUDY_KEY`), disabled while a run is in flight.
+ */
+export function selfStudyCardHtml(status, { nowMs = Date.now(), ui = {} } = {}) {
+  if (!status || typeof status !== 'object' || status.enabled !== true) return '';
+  const running = status.running === true || ui.busy === true;
+  const armed = !running && isArmed(ui.armed, SELF_STUDY_KEY, nowMs);
+  const last = status.lastRunAt
+    ? `last run ${relTime(status.lastRunAt, nowMs)}`
+    : 'it has not run yet';
+  const next = running
+    ? 'running now'
+    : status.nextRunAt
+      ? `next ${inText(status.nextRunAt, nowMs)}`
+      : '';
+  const outcome = selfStudyOutcomeText(status.lastOutcome);
+  const notes =
+    typeof status.notes === 'string' && status.notes.trim()
+      ? `<pre class="watcher-self-notes">${esc(status.notes)}</pre>`
+      : '<p class="watcher-auto-empty text-dim">No notes yet.</p>';
+  const error = ui.error
+    ? `<div class="watcher-auto-error" role="alert">${esc(ui.error)}</div>`
+    : '';
+  return `<div class="watcher-card-head"><div class="watcher-log-title">${esc(
+    SELF_STUDY_HEAD.title
+  )}</div><div class="watcher-card-sub">${esc(SELF_STUDY_HEAD.sub)}</div></div><div class="watcher-self-when text-dim">${esc(
+    [last, next].filter(Boolean).join(' · ')
+  )}</div>${outcome ? `<div class="watcher-auto-reason">Last outcome: ${esc(outcome)}</div>` : ''}${notes}${error}<div class="watcher-auto-actions"><button type="button" class="btn btn-sm${
+    armed ? ' btn-danger' : ''
+  }" data-action="self-study-run" data-focus-key="${SELF_STUDY_KEY}"${running ? ' disabled' : ''}>${
+    running ? 'Running…' : armed ? 'Click again to run' : 'Run now'
+  }</button></div>`;
 }

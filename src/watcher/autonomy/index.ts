@@ -9,10 +9,14 @@
  * first (`ChangeLedger.recover`, write-ahead: nothing is ever compensated).
  *
  * `submit` is code-only: no route submits a proposal (rung 0 has no producer
- * besides tests). `approve` / `reject` / `revert` take `actor: 'operator'`,
- * which only the admin dashboard routes pass (`src/web/routes/watcher.ts`).
- * Every call that changes state runs one at a time (a single queue), so an
- * approval and a guard rollback never interleave.
+ * besides tests). `approve` / `reject` / `revert` / `accept` take `actor:
+ * 'operator'`, which only the admin dashboard routes pass
+ * (`src/web/routes/watcher.ts`). Every call that changes state runs one at a
+ * time (a single queue), so an approval and a guard rollback never
+ * interleave. `list` writes nothing and never waits on that queue (it backs
+ * `GET /proposals` and every Needs You poll): it shows expiry and a lost
+ * approval as they read now (`ProposalStore.view`), and the tick or the next
+ * decision stores them.
  */
 import type { Config } from '../../config';
 import { resolveStatsDirs } from '../../stats/paths';
@@ -65,13 +69,19 @@ export interface CreateAutonomyOptions {
 export interface AutonomyApi {
   /** `watcher.autonomy.proposals.enabled`, live. */
   enabled(): boolean;
-  /** `GET /api/watcher/proposals`: reviewable and decided proposals (never queued or rejected-locked) and changes. */
+  /**
+   * `GET /api/watcher/proposals`: reviewable and decided proposals (never
+   * queued or rejected-locked) and changes. Read-only. Every change carries
+   * its proposal's title; a `revert-failed` one also the values `live` now.
+   */
   list(): ProposalsResponse;
   /** Code-only. Refused while proposals are off. */
   submit(input: unknown): Promise<SubmitResult>;
   approve(id: string, opts: { contentHash: string; actor: 'operator' }): Promise<DecisionResult>;
   reject(id: string, opts: { actor: 'operator'; note?: string }): Promise<DecisionResult>;
   revert(changeId: string, opts: { actor: 'operator' }): Promise<LedgerResult>;
+  /** The operator accepts the live values of a `revert-failed` change that are not its new ones (`ChangeLedger.accept`). */
+  accept(changeId: string, opts: { actor: 'operator' }): Promise<LedgerResult>;
   /** Settling of intermediate change records, expiry, promotion, guard checks. Never throws. */
   tick(nowMs?: number): Promise<void>;
   /** Resolves once the construction-time recovery of intermediate change records is done. */
@@ -142,7 +152,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
       const s = proposalSettings(config);
       if (!s.enabled)
         return { enabled: false, proposals: [], changes: [], maxPending: s.maxPending };
-      const all = store.all();
+      const all = store.view(now());
       const pending = all.filter((p) => p.status === 'pending');
       const decided = all
         .filter(
@@ -160,7 +170,14 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
         ...byApplied.filter(open),
         ...byApplied.filter((c) => !open(c)).slice(0, LIST_HISTORY_LIMIT),
       ]);
-      const changes = byApplied.filter((c) => kept.has(c));
+      const titles = new Map(all.map((p) => [p.id, p.title]));
+      const changes = byApplied
+        .filter((c) => kept.has(c))
+        .map((c) => {
+          const title = c.title ?? titles.get(c.proposalId);
+          const live = c.status === 'revert-failed' ? ledger.liveValues(c) : undefined;
+          return { ...c, ...(title ? { title } : {}), ...(live ? { live } : {}) };
+        });
       return {
         enabled: true,
         proposals: [...pending, ...decided],
@@ -175,6 +192,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
     approve: (id, o) => exclusive(() => store.approve(id, o)),
     reject: (id, o) => exclusive(() => store.reject(id, o)),
     revert: (id, o) => exclusive(() => ledger.revert(id, o)),
+    accept: (id, o) => exclusive(() => ledger.accept(id, o)),
     tick: (nowMs) =>
       exclusive(async () => {
         const at = nowMs ?? now();

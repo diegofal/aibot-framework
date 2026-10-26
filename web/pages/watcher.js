@@ -20,6 +20,8 @@
  * The panel also mounts on the watcher-off screen (the ledger works without
  * the watcher); while the kill banner shows, the state is re-read every
  * `KILL_POLL_MS` so clearing the switch re-enables Start without a reload.
+ * Rung 2: the Self-study card under it (`/api/watcher/self-study`: last and
+ * next run, the notes code wrote, a two-step "Run now").
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
@@ -27,12 +29,15 @@ import { closeSheet, confirmDialog, openSheet, showToast, skeleton } from '../ui
 import { api, escapeHtml, getAuthToken } from './shared.js';
 import {
   KILL_POLL_MS,
+  SELF_STUDY_KEY,
   armClick,
   isAutonomyRow,
+  isSelfStudyRow,
   killBannerHtml,
   monthSpendHtml,
   needsKillPoll,
   proposalsPanelHtml,
+  selfStudyCardHtml,
   shouldRedrawProposals,
   startBlockedByKill,
   watcherOffHtml,
@@ -129,6 +134,8 @@ export function destroyWatcher() {
   clearTimeout(page.mindTimer);
   clearTimeout(page.autonomy?.refetch);
   clearTimeout(page.autonomy?.disarm);
+  clearTimeout(page.selfStudy?.refetch);
+  clearTimeout(page.selfStudy?.disarm);
   page = null;
 }
 
@@ -384,6 +391,74 @@ function approveProposal(button) {
   );
 }
 
+/* ── Self-study (autonomy rung 2) ────────────────────────────────── */
+
+/** The Self-study card; rebuilt only when its markup changed, the focused button keeps the focus. */
+function drawSelfStudy() {
+  const host = $('#watcher-self-study');
+  if (!host) return;
+  const s = page.selfStudy;
+  const html = selfStudyCardHtml(s.status, { nowMs: Date.now(), ui: s.ui });
+  if (html === s.html) return;
+  const focusKey = host.contains(document.activeElement)
+    ? (document.activeElement?.dataset?.focusKey ?? null)
+    : null;
+  host.innerHTML = html;
+  host.hidden = !html;
+  s.html = html;
+  const again = focusKey ? host.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`) : null;
+  if (again && !again.disabled) again.focus();
+}
+
+async function refreshSelfStudy() {
+  const mine = page;
+  const res = await api('/api/watcher/self-study').catch(() => null);
+  if (page !== mine || !page) return;
+  page.selfStudy.refetch = null;
+  // `enabled: false` (the watcher off: 404 `{ enabled: false }`) hides the card.
+  if (res && typeof res.enabled === 'boolean') page.selfStudy.status = res;
+  drawSelfStudy();
+}
+
+function scheduleSelfStudyRefetch() {
+  if (!page || page.selfStudy.refetch) return;
+  page.selfStudy.refetch = setTimeout(() => void refreshSelfStudy(), PROPOSALS_REFETCH_DEBOUNCE_MS);
+}
+
+/** "Run now": first click arms, a second within `ARM_MS` runs one (409 shows inline). */
+async function runSelfStudy() {
+  const s = page.selfStudy;
+  if (s.ui.busy) return;
+  const out = armClick(s.ui.armed, SELF_STUDY_KEY, Date.now());
+  s.ui.armed = out.armed;
+  clearTimeout(s.disarm);
+  s.disarm = out.armed
+    ? setTimeout(
+        () => {
+          if (!page) return;
+          page.selfStudy.ui.armed = null;
+          drawSelfStudy();
+        },
+        Math.max(0, out.armed.until - Date.now()) + 50
+      )
+    : null;
+  if (!out.fire) return drawSelfStudy();
+  const mine = page;
+  s.ui.busy = true;
+  s.ui.error = null;
+  drawSelfStudy();
+  const res = await api('/api/watcher/self-study', { method: 'POST' }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (page !== mine || !page) return;
+  s.ui.busy = false;
+  if (!res || res.error) s.ui.error = res?.error || 'No answer';
+  else showToast('Self-study done: its notes are below.');
+  if (res?.status) s.status = res.status;
+  drawSelfStudy();
+  await Promise.all([refreshSelfStudy(), refreshProposals()]);
+}
+
 function revertChange(button) {
   const id = button?.dataset.changeId;
   if (!id || !armedFire(`revert:${id}`)) return;
@@ -392,6 +467,18 @@ function revertChange(button) {
     `/api/watcher/changes/${encodeURIComponent(id)}/revert`,
     null,
     'Reverted: the values are back.'
+  );
+}
+
+/** "Accept current values": two-step like Revert; ends a needs-you change as it is, writing nothing. */
+function acceptChange(button) {
+  const id = button?.dataset.changeId;
+  if (!id || !armedFire(`accept:${id}`)) return;
+  return autonomyAct(
+    id,
+    `/api/watcher/changes/${encodeURIComponent(id)}/accept`,
+    null,
+    'Accepted: the live values stay as they are.'
   );
 }
 
@@ -474,6 +561,7 @@ function shell() {
       <div class="watcher-replay" id="watcher-replay" hidden><span data-replay-label></span><button type="button" class="btn btn-sm" data-action="watcher-replay-stop">Stop replay</button></div>
     </section>
     <section class="watcher-autonomy" id="watcher-proposals" aria-label="Proposals" hidden></section>
+    <section class="watcher-autonomy" id="watcher-self-study" aria-label="Self-study" hidden></section>
     <section class="watcher-mind" aria-label="What the watcher holds">
       <div class="watcher-mind-head"><div class="watcher-log-title">Mind</div><div class="watcher-card-sub">Everything in the ball, readable: pick a kind, search, click a row to light it in the ball and see where it came from.</div></div>
       <div id="watcher-mind-tabs"></div>
@@ -833,6 +921,10 @@ function onEffect(effect) {
       break;
     case 'log':
       if (isAutonomyRow(effect.row)) scheduleProposalsRefetch();
+      if (isSelfStudyRow(effect.row)) {
+        scheduleSelfStudyRefetch();
+        scheduleProposalsRefetch();
+      }
       if (page.paused) {
         page.pending++;
         drawLogHead();
@@ -1137,12 +1229,16 @@ function wire(el, signal) {
           return approveProposal(e.target.closest('[data-action]'));
         case 'autonomy-revert':
           return revertChange(e.target.closest('[data-action]'));
+        case 'autonomy-accept':
+          return acceptChange(e.target.closest('[data-action]'));
         case 'autonomy-reject':
           return openReject(e.target.closest('[data-action]').dataset.proposalId);
         case 'autonomy-reject-send':
           return sendReject(e.target.closest('[data-action]').dataset.proposalId);
         case 'autonomy-reject-cancel':
           return cancelReject(e.target.closest('[data-action]').dataset.proposalId);
+        case 'self-study-run':
+          return runSelfStudy();
         default:
           break;
       }
@@ -1322,6 +1418,13 @@ export async function renderWatcher(el) {
     kindFilter: null,
     autonomy: newAutonomy(),
     killPoll: null,
+    selfStudy: {
+      status: null,
+      html: null,
+      refetch: null,
+      disarm: null,
+      ui: { armed: null, busy: false, error: null },
+    },
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -1335,6 +1438,7 @@ export async function renderWatcher(el) {
   drawSelf();
   void refreshEmbedding();
   void refreshProposals();
+  void refreshSelfStudy();
   wire(el, page.listeners.signal);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();
@@ -1349,6 +1453,7 @@ export async function renderWatcher(el) {
     drawState();
     if (!page.paused) drawLog();
     drawProposals();
+    drawSelfStudy();
   }, CLOCK_MS);
 
   await mountTheBall();

@@ -989,6 +989,21 @@ export const WatcherConfigSchema = z
             approvalTtlHours: z.number().min(1).max(168).default(72),
           })
           .default({}),
+        /**
+         * Autonomy rung 2 (`src/watcher/autonomy/self-study.ts`): the weekly
+         * fleet cost audit. Off by default; runs only with `proposals.enabled`
+         * too. One notice-tier call per run over a digest code computes from
+         * records (no tools, no network). The first run waits
+         * `firstRunDelayMinutes` after the watcher starts; then every
+         * `everyHours`.
+         */
+        selfStudy: z
+          .object({
+            enabled: z.boolean().default(false),
+            everyHours: z.number().min(24).max(720).default(168),
+            firstRunDelayMinutes: z.number().min(0).max(1440).default(30),
+          })
+          .default({}),
       })
       .default({}),
   })

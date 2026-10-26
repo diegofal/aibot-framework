@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCKED_EXAMPLES } from '../../../src/watcher/autonomy/locked';
 import {
+  PROPOSAL_LIMITS,
   ProposalStore,
   parseProposal,
   proposalHash,
@@ -501,5 +502,66 @@ describe('write-ahead: proposals over settling changes', () => {
     expect(store.get(r.proposal.id)?.status).toBe('approved');
     expect(store.get(r.proposal.id)?.changeId).toBe('c-0000abcd');
     expect(applied()).toBe(0);
+  });
+});
+
+describe('review round 3: proposals', () => {
+  it('an oversized change path is malformed: refused and never stored', () => {
+    const long = proposalInput({
+      changes: [{ path: `watcher.${'x'.repeat(PROPOSAL_LIMITS.pathChars)}`, from: 0.4, to: 0.5 }],
+    });
+    const r = parseProposal(long, ctx());
+    expect(r).toMatchObject({ ok: false, locked: false });
+    if (!r.ok && !r.locked) expect(r.error).toContain('changes[0].path');
+    const { store } = makeStore();
+    expect(store.submit(long).ok).toBe(false);
+    expect(store.all()).toEqual([]);
+  });
+
+  it('view writes nothing: an expired pending one shows expired, and the next refresh stores it', () => {
+    const { store } = makeStore({ maxPending: 3 });
+    const a = store.submit(proposalInput({ title: 'A' }));
+    if (!a.ok) throw new Error('setup');
+    t += 72 * HOUR;
+    const file = proposalsFile(dir);
+    const before = readFileSync(file, 'utf-8');
+    const viewed = store.view();
+    expect(viewed.find((p) => p.id === a.proposal.id)?.status).toBe('expired');
+    expect(readFileSync(file, 'utf-8')).toBe(before);
+    store.refresh();
+    expect(readProposals(dir).find((p) => p.id === a.proposal.id)?.status).toBe('expired');
+  });
+
+  it('view shows a pending proposal whose change is recorded as approved, without writing', () => {
+    const changes: ChangeRecord[] = [];
+    const config = testConfig(join(dir, 'data'));
+    const store = new ProposalStore({
+      watcherDir: dir,
+      now: () => t,
+      settings: () => ({ maxPending: 3, approvalTtlHours: 72 }),
+      lockContext: () => ({ config }),
+      apply: async () => ({ ok: false, error: 'unused' }),
+      changeFor: (id) => changes.find((c) => c.proposalId === id),
+    });
+    const r = store.submit(proposalInput());
+    if (!r.ok) throw new Error('setup');
+    changes.push({
+      id: 'c-0000abcd',
+      proposalId: r.proposal.id,
+      before: [],
+      after: [],
+      guard: r.proposal.guard,
+      appliedAt: new Date(t).toISOString(),
+      guardUntil: new Date(t + 72 * HOUR).toISOString(),
+      status: 'applied',
+    });
+    const before = readFileSync(proposalsFile(dir), 'utf-8');
+    const shown = store.view().find((p) => p.id === r.proposal.id);
+    expect(shown).toMatchObject({
+      status: 'approved',
+      changeId: 'c-0000abcd',
+      decidedBy: 'operator',
+    });
+    expect(readFileSync(proposalsFile(dir), 'utf-8')).toBe(before);
   });
 });
