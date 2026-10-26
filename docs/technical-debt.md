@@ -335,3 +335,11 @@ Each entry is a `###` heading with this table and these paragraphs:
 ### Watcher prediction judge: follow-ups from PR #21 (2026-10-25)
 
 - Cycle evidence lines carry plan text for completed cycles (the judge could read intent as outcome); overflow summaries drop per-target detail of unshown successes; the bots a prediction concerns are found by name matching in its text, because predictions store no structured bot association (integrate emits text + neuronIds). Declined on the PR with reasons; revisit if resolved predictions show misjudgments. The judge's evidence for web_fetch failures has no HTTP status code (`failed (blocked)`), so predictions about specific codes resolve `unknown`.
+
+### Watcher: rename during an in-flight embed (2026-10-26, PR #24)
+
+- **What.** If `Graph.setText` renames a neuron while that neuron's embed is in flight, the late vector (made from the old text) can be stored after the drop. Rare: resync renames only at start. **Fix when needed:** compare the text the vector was made from with the neuron's current text before storing it. **Decided:** declined on PR #24 round 3.
+
+### Watcher self-study: notes and digest accuracy (2026-10-26, PR #26)
+
+- **What.** Five advisories accepted as debt on PR #26 (Fable round 1, 0 bugs): a throw mid-way through the submit loop leaves proposals the store already accepted out of the run's outcome and NOTES.md (the queue stays right); the watcher's per-tier spend covers the last 7 whole UTC days while `byCaller` and the bot figures cover the rolling window, so the digest's watcher numbers disagree (the first live run flagged it itself: $0.80/day headline vs $8.43 by caller); extra keys in the model's JSON are spread into the store input (the rung 0 parser still validates every field it uses); a refused or errored call that then throws in `afterCall` is reported as "failed after the model answered". **Trigger.** A proposal whose rationale rests on the watcher's own spend, or the operator reading NOTES.md as the record of what was proposed. **Cost.** An hour: one window for every digest figure, an outcome assembled from the store's results, an allowlist of keys copied from the model's answer.
