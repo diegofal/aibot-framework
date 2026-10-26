@@ -132,6 +132,17 @@ describe('watcher routes', () => {
     expect((await post(a, '/api/watcher/start')).status).toBe(404);
   });
 
+  it('start answers 409 while the hard kill is on and names where to clear it', async () => {
+    const { config, watcher } = setup(true, {
+      killSwitch: () => ({ killed: true, source: 'file' }),
+    });
+    const res = await post(app(config, watcher), '/api/watcher/start');
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toMatchObject({ enabled: true, running: false, killed: { source: 'file' } });
+    expect(body.error).toContain('watcher-kill file');
+  });
+
   it('admin in multi-tenant passes', async () => {
     const { config, watcher } = setup();
     const res = await app(config, watcher, '__admin__').request('/api/watcher');

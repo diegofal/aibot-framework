@@ -19,6 +19,13 @@
  *   POST /introspect       ask the watcher what it is doing now: 200 { status: scored, record },
  *                          409 unavailable (asleep / no notice model), 429 refused (budget,
  *                          breaker), 502 failed
+ *   GET  /proposals        ProposalsResponse (autonomy rung 0); { enabled: false, … } when off
+ *   POST /proposals/:id/approve  { contentHash } → 200 { proposal, change }, 409 { error }
+ *                          (hash mismatch, expired, not pending, changed since, apply failed)
+ *   POST /proposals/:id/reject   { note? } → 200 { proposal }
+ *   POST /changes/:id/revert     → 200 { change }, 409 when the live value moved
+ *                          (all three 404 { enabled: false } with proposals off; actor is
+ *                          always the operator: only an admin reaches these routes)
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -28,6 +35,7 @@ import { Hono } from 'hono';
 import type { Config } from '../../config';
 import type { Logger } from '../../logger';
 import { getTenantId, isAdminOrSingleTenant } from '../../tenant/tenant-scoping';
+import type { AutonomyApi } from '../../watcher/autonomy';
 import type { Broadcast } from '../../watcher/broadcast';
 import {
   applyWatcherConfigPatch,
@@ -68,6 +76,12 @@ export interface WatcherRouteDeps {
    * persists into it; absent → the change is live only (`persisted: false`).
    */
   configPath?: string;
+  /**
+   * Autonomy rung 0 (`src/watcher/autonomy/`): the approval queue and change
+   * ledger. Absent, or `watcher.autonomy.proposals.enabled` off → `GET
+   * /proposals` is `{ enabled: false }` and the POSTs 404.
+   */
+  autonomy?: AutonomyApi;
 }
 
 export function watcherRoutes(deps: WatcherRouteDeps): Hono {
@@ -126,7 +140,23 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
   app.post('/start', async (c) => {
     const w = live();
     if (!w) return c.json(off, 404);
-    return c.json({ enabled: true, ...(await w.start()) });
+    const state = await w.start();
+    // The hard kill (C1) refuses a start; the route never writes the env or the sentinel.
+    if (state.killed) {
+      const where =
+        state.killed.source === 'env'
+          ? 'the AIBOT_WATCHER_KILL environment variable'
+          : 'the watcher-kill file in the data folder';
+      return c.json(
+        {
+          enabled: true,
+          ...state,
+          error: `Hard kill is on (${where}). Clear it, then start again.`,
+        },
+        409
+      );
+    }
+    return c.json({ enabled: true, ...state });
   });
 
   app.post('/stop', async (c) => {
@@ -272,6 +302,57 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     }
     const neuron = w.signalNeuron(id, signal);
     return neuron ? c.json({ neuron }) : c.json(notFound, 404);
+  });
+
+  // ── Autonomy rung 0: the approval queue and the change ledger ──────────
+  // Independent of the watcher running: an applied change stays revertable
+  // while the watcher sleeps. Every decision is the operator's (`actor`), and
+  // these routes inherit the admin-or-single-tenant rule above (C3).
+  const autonomy = (): AutonomyApi | undefined =>
+    deps.autonomy?.enabled() ? deps.autonomy : undefined;
+  const autonomyOff = { enabled: false, error: 'Watcher proposals are off' };
+
+  app.get('/proposals', (c) => {
+    const a = autonomy();
+    if (a) return c.json(a.list());
+    const maxPending = cfg().autonomy?.proposals?.maxPending ?? 3;
+    return c.json({ enabled: false, proposals: [], changes: [], maxPending });
+  });
+
+  app.post('/proposals/:id/approve', async (c) => {
+    const a = autonomy();
+    if (!a) return c.json(autonomyOff, 404);
+    const body = (await c.req.json().catch(() => null)) as { contentHash?: unknown } | null;
+    if (typeof body?.contentHash !== 'string' || !body.contentHash) {
+      return c.json(
+        { error: 'contentHash is required: the hash of the proposal you reviewed' },
+        400
+      );
+    }
+    const r = await a.approve(c.req.param('id'), {
+      contentHash: body.contentHash,
+      actor: 'operator',
+    });
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+    return c.json({ proposal: r.proposal, change: r.change });
+  });
+
+  app.post('/proposals/:id/reject', async (c) => {
+    const a = autonomy();
+    if (!a) return c.json(autonomyOff, 404);
+    const body = (await c.req.json().catch(() => null)) as { note?: unknown } | null;
+    const note = typeof body?.note === 'string' ? body.note : undefined;
+    const r = await a.reject(c.req.param('id'), { actor: 'operator', note });
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+    return c.json({ proposal: r.proposal });
+  });
+
+  app.post('/changes/:id/revert', async (c) => {
+    const a = autonomy();
+    if (!a) return c.json(autonomyOff, 404);
+    const r = await a.revert(c.req.param('id'), { actor: 'operator' });
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+    return c.json({ change: r.change });
   });
 
   return app;

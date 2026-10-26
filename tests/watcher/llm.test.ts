@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LlmQueryEntry } from '../../src/bot/llm-query-log';
@@ -12,6 +12,7 @@ import {
 } from '../../src/core/llm-client';
 import type { ChatMessage } from '../../src/ollama';
 import { DailyBudget } from '../../src/watcher/budget';
+import { type KillState, WATCHER_KILL_ENV } from '../../src/watcher/kill';
 import {
   WATCHER_QUERY_BOT_ID,
   type WatcherTierClient,
@@ -290,5 +291,163 @@ describe('instrumented: concurrent calls never exceed the cap', () => {
     expect((await first).ok).toBe(true);
     expect(await second).toEqual({ ok: false, reason: 'cap' });
     expect(calls).toBe(1);
+  });
+});
+
+describe('instrumented: hard kill (C1) and monthly ceiling (C6)', () => {
+  const messages: ChatMessage[] = [{ role: 'user', content: 'hi' }];
+  const killed: KillState = { killed: true, source: 'file' };
+
+  test('killed: no call, no reservation, no query log, no pass record', async () => {
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'x' }));
+    const entries: LlmQueryEntry[] = [];
+    const b = budget(1);
+    let reserves = 0;
+    const counting = {
+      dir: b.dir,
+      reserve: (tier: 'notice' | 'integrate') => {
+        reserves++;
+        return b.reserve(tier);
+      },
+      record: b.record.bind(b),
+    };
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      {
+        tier: 'notice',
+        caller: 'watcher:notice',
+        budget: counting,
+        queryLog: { append: (e) => entries.push(e) },
+        kill: () => killed,
+      }
+    );
+    expect(await call.chat(messages)).toEqual({ ok: false, reason: 'killed' });
+    expect(calls).toHaveLength(0);
+    expect(reserves).toBe(0); // checked BEFORE the budget
+    expect(entries).toHaveLength(0);
+    expect(b.used('notice').calls).toBe(0);
+    expect(readdirSync(dir).some((n) => n === 'passes')).toBe(false);
+  });
+
+  test('the switch is read per call: clearing it lets the next call through', async () => {
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    let state: KillState = killed;
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      { tier: 'notice', caller: 'watcher:notice', budget: budget(), kill: () => state }
+    );
+    expect((await call.chat(messages)).ok).toBe(false);
+    state = { killed: false };
+    expect((await call.chat(messages)).ok).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  test('onRefused hears every refusal before a call, killed included', async () => {
+    const { client } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    const heard: string[] = [];
+    const refuse = (kill: KillState, max: number) =>
+      instrumented(
+        { client, model: 'm', backend: 'claude-cli' },
+        {
+          tier: 'notice',
+          caller: 'watcher:notice',
+          budget: budget(max),
+          kill: () => kill,
+          onRefused: (r) => {
+            heard.push(r);
+            throw new Error('a throwing listener never fails the call');
+          },
+        }
+      ).chat(messages);
+    expect((await refuse(killed, 5)).ok).toBe(false);
+    expect((await refuse({ killed: false }, 0)).ok).toBe(false);
+    expect((await refuse({ killed: false }, 5)).ok).toBe(true);
+    expect(heard).toEqual(['killed', 'cap']);
+  });
+
+  test('a kill reader that throws is not a kill', async () => {
+    const { client } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      {
+        tier: 'notice',
+        caller: 'watcher:notice',
+        budget: budget(),
+        kill: () => {
+          throw new Error('boom');
+        },
+      }
+    );
+    expect((await call.chat(messages)).ok).toBe(true);
+  });
+
+  test('by default the environment kills', async () => {
+    const before = process.env[WATCHER_KILL_ENV];
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    try {
+      process.env[WATCHER_KILL_ENV] = '1';
+      const call = instrumented(
+        { client, model: 'm', backend: 'claude-cli' },
+        { tier: 'notice', caller: 'watcher:notice', budget: budget() }
+      );
+      expect(await call.chat(messages)).toEqual({ ok: false, reason: 'killed' });
+      expect(calls).toHaveLength(0);
+    } finally {
+      if (before === undefined) delete process.env[WATCHER_KILL_ENV];
+      else process.env[WATCHER_KILL_ENV] = before;
+    }
+  });
+
+  test('by default the sentinel next to the watcher dir kills (<data>/watcher-kill)', async () => {
+    const data = join(dir, 'data');
+    const watcherDir = join(data, 'watcher');
+    mkdirSync(watcherDir, { recursive: true });
+    const b = new DailyBudget({
+      dir: watcherDir,
+      now: () => t,
+      limits: () => ({ notice: { maxPerDay: 5 }, integrate: { maxPerDay: 5, maxTokensPerDay: 1 } }),
+    });
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      { tier: 'notice', caller: 'watcher:notice', budget: b }
+    );
+    expect((await call.chat(messages)).ok).toBe(true);
+    writeFileSync(join(data, 'watcher-kill'), '');
+    expect(await call.chat(messages)).toEqual({ ok: false, reason: 'killed' });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('an explicit sentinel path is honoured', async () => {
+    const sentinel = join(dir, 'elsewhere-kill');
+    writeFileSync(sentinel, '');
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      {
+        tier: 'notice',
+        caller: 'watcher:notice',
+        budget: budget(),
+        killSentinelPath: sentinel,
+      }
+    );
+    expect(await call.chat(messages)).toEqual({ ok: false, reason: 'killed' });
+    expect(calls).toHaveLength(0);
+  });
+
+  test('the monthly ceiling refuses the call before it is made', async () => {
+    const { client, calls } = fakeClient('claude-cli', async () => ({ text: 'ok' }));
+    const b = new DailyBudget({
+      dir,
+      now: () => t,
+      limits: () => ({ notice: { maxPerDay: 5 }, integrate: { maxPerDay: 5, maxTokensPerDay: 1 } }),
+      monthlyCeilingUsd: () => 0,
+    });
+    const call = instrumented(
+      { client, model: 'm', backend: 'claude-cli' },
+      { tier: 'notice', caller: 'watcher:notice', budget: b, kill: () => ({ killed: false }) }
+    );
+    expect(await call.chat(messages)).toEqual({ ok: false, reason: 'ceiling' });
+    expect(calls).toHaveLength(0);
   });
 });

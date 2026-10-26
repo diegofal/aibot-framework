@@ -47,6 +47,8 @@ interface Setup {
   maxPerDay?: number;
   maxTokensPerDay?: number;
   open?: boolean;
+  killed?: boolean;
+  ceilingUsd?: number;
   cfg?: Partial<WatcherConfig['integrate']>;
   deps?: Record<string, unknown>;
 }
@@ -102,6 +104,7 @@ function setup(opts: Setup = {}) {
       },
     }),
     isCircuitOpen: () => opts.open === true,
+    monthlyCeilingUsd: () => opts.ceilingUsd,
   });
   const prompts: string[] = [];
   const client = {
@@ -121,6 +124,7 @@ function setup(opts: Setup = {}) {
       budget,
       queryLog: { append: (e) => entries.push(e) },
       now,
+      kill: () => (opts.killed ? { killed: true, source: 'env' } : { killed: false }),
     }
   );
   const config: WatcherConfig = {
@@ -547,6 +551,15 @@ describe('Integrator.run', () => {
     expect((await s.integrator.run()).status).toBe('capped');
     expect(s.prompts).toHaveLength(0);
     expect(s.rows.filter((r) => r.op === 'integrate:capped')).toHaveLength(1);
+  });
+
+  test('the hard kill and the monthly ceiling stop it without a daily-cap row', async () => {
+    for (const o of [{ killed: true }, { ceilingUsd: 0 }]) {
+      const s = setup(o);
+      expect((await ran(s)).status).toBe('capped');
+      expect(s.prompts).toHaveLength(0);
+      expect(s.rows.some((r) => r.op === 'integrate:capped')).toBe(false);
+    }
   });
 
   test('the token cap stops it too', async () => {

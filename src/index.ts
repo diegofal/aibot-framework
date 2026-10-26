@@ -16,6 +16,9 @@ import { MemoryManager } from './memory/manager';
 import { resolveWorkerPool, shutdownRuntime, startRuntime } from './runtime-lifecycle';
 import { SessionManager } from './session';
 import { migrateSoulRootToPerBot } from './soul';
+import { createAutonomy, startAutonomyTimers } from './watcher/autonomy';
+import { WatcherLog } from './watcher/log';
+import { watcherDir, watcherLogDir } from './watcher/paths';
 import { createFleetWatcher } from './watcher/watcher';
 import { startWebServer } from './web/server';
 import type { WorkerPoolApi } from './workers/types';
@@ -360,6 +363,21 @@ async function main() {
     // web server so birth streams to /ws/watcher (docs/plans/watcher-implementation-plan.md).
     const watcher = createFleetWatcher(config, logger, manager);
 
+    // Autonomy rung 0 (docs/plans/watcher-autonomy-plan.md): the approval queue and
+    // change ledger. Built even with the watcher off, so changes already applied stay
+    // guarded (the hourly tick rolls back one whose guard metric regressed).
+    const autonomyDir = watcherDir(config);
+    const autonomy = createAutonomy({
+      watcherDir: autonomyDir,
+      config,
+      configPath: './config/config.json',
+      log: watcher?.log ?? new WatcherLog(watcherLogDir(autonomyDir), { logger }),
+      onApplied: (change) => {
+        if (change.after.some((v) => v.path.startsWith('watcher.'))) watcher?.applyConfig();
+      },
+    });
+    const autonomyTimers = startAutonomyTimers(autonomy, { logger });
+
     // Start web server if enabled
     if (config.web.enabled) {
       startWebServer({
@@ -372,6 +390,7 @@ async function main() {
         cronService,
         claudeAccounts,
         watcher,
+        autonomy,
       });
     }
 
@@ -401,6 +420,7 @@ async function main() {
         logger,
         ...(watcher ? { stopWatcher: () => watcher.stop() } : {}),
       });
+      autonomyTimers.stop();
       cronService.stop();
       sessionManager.dispose();
       memoryManager?.dispose();

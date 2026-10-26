@@ -21,7 +21,7 @@
 import { parseLLMJson } from '../bot/llm-json-parser';
 import type { Broadcast, Broadcaster } from './broadcast';
 import type { Graph } from './graph';
-import type { InstrumentedClient, WatcherCallResult } from './llm';
+import type { InstrumentedClient, WatcherCallResult, WatcherRefusal } from './llm';
 import type { WatcherLog } from './log';
 import { narratePredictionResolved, narratePredictionUnknown } from './narration';
 import type { Neuron } from './types';
@@ -400,7 +400,7 @@ export type JudgeResult =
   /** A ground-truth reader threw: no call made; judge again on a later pass. */
   | { kind: 'unreadable'; readers: string[] }
   /** The budget or the breaker refused: stop the pass. */
-  | { kind: 'stop'; reason: 'cap' | 'tokens' | 'breaker' };
+  | { kind: 'stop'; reason: WatcherRefusal };
 
 const RESOLVE_SYSTEM = [
   'You check whether a prediction about a fleet of AI agents came true.',
@@ -511,7 +511,7 @@ export interface ResolveDeps extends JudgeDeps {
 
 export async function resolvePredictions(
   deps: ResolveDeps
-): Promise<{ resolved: number; stopped?: 'cap' | 'tokens' | 'breaker' }> {
+): Promise<{ resolved: number; stopped?: WatcherRefusal }> {
   const due = duePredictions(deps.graph, deps.now()).slice(0, deps.max ?? RESOLVE_MAX_PER_PASS);
   let resolved = 0;
   for (const p of due) {

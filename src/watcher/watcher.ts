@@ -13,6 +13,13 @@
  * pass row carries its `trigger`. O3: `stakes()` (`stakes.ts`) turns
  * interoception into policy for both (wake lines, sleeping tiers, held
  * questions, "## Something is wrong").
+ *
+ * Autonomy rung 0 (`docs/plans/watcher-autonomy-plan.md`): the hard kill (C1,
+ * `kill.ts`) refuses `start()`, is polled every `KILL_POLL_MS` while running
+ * (turning on stops the watcher through `stop()`; clearing it never restarts
+ * it) and is read by `instrumented()` before every call; the monthly ceiling
+ * (C6, `DailyBudget`) refuses every tier once reached. `state()` carries
+ * `killed` and `month`.
  */
 import { EventEmitter } from 'node:events';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -53,7 +60,7 @@ import {
   Broadcaster,
   writeWatcherGoal,
 } from './broadcast';
-import { DailyBudget, type WatcherTier } from './budget';
+import { DailyBudget, type WatcherTier, narrateCeilingReached } from './budget';
 import { WorkingBuffer } from './buffer';
 import { tierSwitches } from './config-file';
 import { type ConsolidateOutcome, runConsolidation } from './consolidate';
@@ -71,8 +78,16 @@ import {
   runIntrospection,
 } from './introspection';
 import {
+  type KillState,
+  killSentinelPath,
+  narrateKillRefusedStart,
+  narrateKillStopped,
+  readKillSwitch,
+} from './kill';
+import {
   type InstrumentOptions,
   type InstrumentedClient,
+  type WatcherRefusal,
   type WatcherTierClient,
   createWatcherClients,
   instrumented,
@@ -142,6 +157,8 @@ export const INTEGRATE_CHECK_MS = 60_000;
 export const OUTCOMES_EVERY_MS = 10 * 60_000;
 /** How often the introspection sampler asks whether a sample is due. */
 export const INTROSPECT_CHECK_MS = 60_000;
+/** C1: how often a running watcher reads the hard kill (`checkKillSwitch`). */
+export const KILL_POLL_MS = 5_000;
 /**
  * How long `stop()` waits for birth and in-flight passes after aborting their
  * model calls, before it compacts and persists anyway (shutdown must fit the
@@ -263,6 +280,18 @@ export interface WatcherDeps {
    * consolidation runs only then. Absent = never quiet (never consolidates).
    */
   fleetQuiet?: () => boolean;
+  /**
+   * C1: the hard kill (tests). Default: `readKillSwitch` over the environment
+   * and `killSentinelPath(config)` (`<paths.data>/watcher-kill`), read live.
+   */
+  killSwitch?: () => KillState;
+  /** C1: the running watcher's kill poll (default `KILL_POLL_MS`). */
+  killPollMs?: number;
+}
+
+/** The monthly ceiling of a watcher config (`watcher.autonomy.monthlyCeilingUsd`, else the default). */
+function monthlyCeilingOf(cfg: WatcherConfig): number | undefined {
+  return cfg.autonomy?.monthlyCeilingUsd ?? WATCHER_DEFAULTS.autonomy?.monthlyCeilingUsd;
 }
 
 export class Watcher extends EventEmitter implements WatcherSelfStateSource {
@@ -327,6 +356,10 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private consolidateRun: Promise<ConsolidateOutcome | null> | null = null;
   /** O1 fast lane: the UTC day its capped row was written. */
   private readonly fastLaneState: { cappedOn?: string } = {};
+  /** C1: when the hard kill was first seen on (cleared when it is seen off). */
+  private killedSince: string | undefined;
+  /** C1: the stop the kill started, in flight. */
+  private killStop: Promise<WatcherState> | null = null;
 
   constructor(private readonly deps: WatcherDeps) {
     super();
@@ -375,6 +408,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       dir: this.dir,
       now: this.now,
       limits: () => this.cfg(),
+      monthlyCeilingUsd: () => monthlyCeilingOf(this.cfg()),
       isCircuitOpen: (tier) => {
         const backend = deps.llm?.[tier]?.backend;
         try {
@@ -468,8 +502,126 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       ...(this.deps.queryLog ? { queryLog: this.deps.queryLog } : {}),
       ...(this.deps.breaker ? { breaker: this.deps.breaker } : {}),
       signal: () => this.stopCtrl.signal,
+      kill: () => this.readKill(),
+      onRefused: (reason) => this.onCallRefused(reason),
     };
     return instrumented(client, opts);
+  }
+
+  // ── C1 hard kill, C6 monthly ceiling ──
+
+  /** The hard kill now. Never throws (a reader that throws is not a kill, like `readKillSwitch`). */
+  private readKill(): KillState {
+    try {
+      return (
+        this.deps.killSwitch?.() ??
+        readKillSwitch({ sentinelPath: killSentinelPath(this.deps.config()) })
+      );
+    } catch {
+      return { killed: false };
+    }
+  }
+
+  /** The kill as `state().killed` shows it; `since` is when it was first seen on. */
+  private killedNow(): WatcherState['killed'] {
+    const kill = this.readKill();
+    if (!kill.killed) {
+      this.killedSince = undefined;
+      return undefined;
+    }
+    this.killedSince ??= new Date(this.now()).toISOString();
+    return { source: kill.source, since: this.killedSince };
+  }
+
+  private sentinelPath(): string {
+    try {
+      return killSentinelPath(this.deps.config());
+    } catch {
+      return 'watcher-kill';
+    }
+  }
+
+  /**
+   * C1, the poll (every `KILL_POLL_MS` while running) and the reaction to a
+   * call refused as killed: when the kill is on and the watcher runs, one row
+   * says what killed it and it stops through `stop()` (calls in flight
+   * aborted, bounded). True while killed. Clearing the kill never restarts
+   * the watcher: the operator starts it. Never throws.
+   */
+  async checkKillSwitch(): Promise<boolean> {
+    const killed = this.killedNow();
+    if (!killed) return false;
+    if (this.running && !this.stopping && !this.killStop) {
+      try {
+        this.log.say(
+          'sleep',
+          'kill:stopped',
+          narrateKillStopped(killed.source, this.sentinelPath())
+        );
+      } catch {
+        // the row is best-effort; the stop is not
+      }
+      this.killStop = this.stop().finally(() => {
+        this.killStop = null;
+      });
+    }
+    if (this.killStop) await this.killStop.catch(() => undefined);
+    return true;
+  }
+
+  /** A start while killed: one row, the state published. True when refused. Never throws. */
+  private refuseKilledStart(): boolean {
+    const killed = this.killedNow();
+    if (!killed) return false;
+    try {
+      this.log.say(
+        'sleep',
+        'kill:refused',
+        narrateKillRefusedStart(killed.source, this.sentinelPath())
+      );
+    } catch {
+      // the row is best-effort; the refusal is not
+    }
+    this.publish('watcher:state', this.state());
+    return true;
+  }
+
+  /**
+   * A call `instrumented` refused before making it. Killed: react now rather
+   * than at the next poll, off the call (it runs inside a pass). Ceiling: one
+   * row a day (`firstCapToday('ceiling')`). Other refusals are their caller's.
+   */
+  private onCallRefused(reason: WatcherRefusal): void {
+    if (reason === 'killed') {
+      void Promise.resolve().then(() => this.checkKillSwitch());
+      return;
+    }
+    if (reason !== 'ceiling' || !this.budget.firstCapToday('ceiling')) return;
+    this.log.say(
+      this.phase,
+      'budget:ceiling',
+      narrateCeilingReached({
+        costUsd: this.budget.monthToDate(),
+        ceilingUsd: this.budget.monthlyCeilingUsd() ?? 0,
+      })
+    );
+    this.publish('watcher:state', this.state());
+  }
+
+  /** `killed` and `month` for `state()`; a month reader that throws leaves `month` out. */
+  private controlState(): Pick<WatcherState, 'killed' | 'month'> {
+    const out: Pick<WatcherState, 'killed' | 'month'> = {};
+    const killed = this.killedNow();
+    if (killed) out.killed = killed;
+    try {
+      const ceilingUsd = this.budget.monthlyCeilingUsd();
+      if (ceilingUsd !== undefined) {
+        out.month = { costUsd: Math.round(this.budget.monthToDate() * 1e6) / 1e6, ceilingUsd };
+      }
+    } catch {
+      // the month is display only
+    }
+    return out;
   }
 
   /**
@@ -923,12 +1075,15 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    */
   async start(): Promise<WatcherState> {
     if (this.running) return this.state();
+    // C1: killed, nothing starts (checked again after the wait below).
+    if (this.refuseKilledStart()) return this.state();
     // A birth or resync that a stop (or a failed start) abandoned is already
     // cancelled through its own run signal and drops every write once its
     // in-flight embedding settles. Give it the stop bound to wind down, never
     // longer: an embedding that never answers must not hang the next start.
     await this.waitBounded(this.background);
     if (this.running) return this.state();
+    if (this.refuseKilledStart()) return this.state();
     this.running = true;
     this.startedAt = new Date(this.now()).toISOString();
     this.stopping = false;
@@ -1115,6 +1270,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       ...(this.integrator?.state().attendingAt
         ? { attendingAt: this.integrator.state().attendingAt }
         : {}),
+      ...this.controlState(),
     };
   }
 
@@ -1356,8 +1512,13 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const summary = setInterval(() => this.sense.tick(), every);
     const daily = setInterval(() => void this.maintainNow(), DAY_MS);
     const nightly = setInterval(() => this.consolidateTick(), CONSOLIDATE_CHECK_MS);
-    for (const t of [summary, daily, nightly]) (t as { unref?: () => void }).unref?.();
-    this.timers = [summary, daily, nightly];
+    // C1: the kill poll lives with the run (cleared by `stop` and `abandonStart`).
+    const kill = setInterval(
+      () => void this.checkKillSwitch(),
+      this.deps.killPollMs ?? KILL_POLL_MS
+    );
+    for (const t of [summary, daily, nightly, kill]) (t as { unref?: () => void }).unref?.();
+    this.timers = [summary, daily, nightly, kill];
   }
 
   /**

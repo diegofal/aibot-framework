@@ -969,6 +969,28 @@ export const WatcherConfigSchema = z
         minCoverage: z.number().min(0).max(1).default(0.5),
       })
       .default({}),
+    /**
+     * Autonomy rung 0 (`docs/plans/watcher-autonomy-plan.md`): the operator's
+     * controls. `monthlyCeilingUsd`: every watcher LLM call is refused once the
+     * USD-equivalent spent this UTC month (summed from the budget files)
+     * reaches it; 0 refuses every call. `proposals`: the approval queue
+     * (`src/watcher/autonomy/`), off by default; at most `maxPending` (≤ 3) are
+     * shown for review at once, an approval is bound to the proposal's content
+     * hash and a pending proposal expires after `approvalTtlHours`. Written
+     * only by the operator: nothing under `watcher.autonomy` is proposable.
+     */
+    autonomy: z
+      .object({
+        monthlyCeilingUsd: z.number().min(0).default(90),
+        proposals: z
+          .object({
+            enabled: z.boolean().default(false),
+            maxPending: z.number().int().min(1).max(3).default(3),
+            approvalTtlHours: z.number().min(1).max(168).default(72),
+          })
+          .default({}),
+      })
+      .default({}),
   })
   .default({});
 

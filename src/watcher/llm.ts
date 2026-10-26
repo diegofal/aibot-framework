@@ -14,7 +14,15 @@
  * Every call that reached the model (answered or failed, not aborted) is kept
  * as a pass record (`pass-records.ts`: prompt and response, redacted) and the
  * result carries its `recordId`; by default next to the budget files.
+ *
+ * Autonomy rung 0: the hard kill (C1, `kill.ts`) is read here before every
+ * call, before the budget is even asked: killed, the call returns
+ * `{ ok: false, reason: 'killed' }` and nothing leaves the process. The
+ * budget's monthly ceiling (C6, `budget.ts`) refuses as `'ceiling'`. This is
+ * the single choke point: no other watcher module may import a model client
+ * (`tests/watcher/autonomy/choke-point.test.ts`).
  */
+import { dirname, join } from 'node:path';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import { usageExtras } from '../bot/llm-query-log';
 import type { Config } from '../config';
@@ -28,7 +36,8 @@ import {
 } from '../core/llm-client';
 import type { Logger } from '../logger';
 import type { ChatMessage, OllamaClient } from '../ollama';
-import type { BudgetDecision, DailyBudget, WatcherTier } from './budget';
+import type { BudgetRefusal, DailyBudget, WatcherTier } from './budget';
+import { type KillState, WATCHER_KILL_FILE, readKillSwitch } from './kill';
 import { PassRecords, passesDir, redactPassPrompt } from './pass-records';
 import { WATCHER_BOT_ID } from './sense';
 import { WATCHER_DEFAULTS, type WatcherConfig } from './types';
@@ -83,6 +92,9 @@ export function createWatcherClients(
 
 export type WatcherCaller = Extract<LlmQueryEntry['caller'], `watcher:${string}`>;
 
+/** Why a call was refused before it was made: the budget's reasons, or the hard kill. */
+export type WatcherRefusal = BudgetRefusal | 'killed';
+
 export type WatcherCallResult =
   | {
       ok: true;
@@ -96,7 +108,7 @@ export type WatcherCallResult =
       /** The pass record of this call (`GET /api/watcher/passes/:id`), when one was written. */
       recordId?: string;
     }
-  | { ok: false; reason: Exclude<BudgetDecision, { ok: true }>['reason'] }
+  | { ok: false; reason: WatcherRefusal }
   | {
       ok: false;
       reason: 'error';
@@ -134,6 +146,18 @@ export interface InstrumentOptions {
    * the budget files (`DailyBudget.dir`, the watcher dir); `null` keeps nothing.
    */
   records?: Pick<PassRecords, 'write'> | null;
+  /**
+   * The hard kill (C1), read before every call. Default: `readKillSwitch` over
+   * the environment and the sentinel at `killSentinelPath`, or (without one)
+   * at `<parent of the budget dir>/watcher-kill` — the budget dir is the
+   * watcher dir `<data>/watcher`, so that is `<data>/watcher-kill`; without a
+   * budget dir, the environment only. A reader that throws is not a kill.
+   */
+  kill?: () => KillState;
+  /** The sentinel the default kill reader checks (`killSentinelPath(config)`). */
+  killSentinelPath?: string;
+  /** Told of every call refused before it was made (killed, ceiling, cap, …); best-effort. */
+  onRefused?: (reason: WatcherRefusal) => void;
 }
 
 /** The `error` of a call the watcher's stop aborted. */
@@ -148,9 +172,38 @@ function defaultRecords(opts: InstrumentOptions): Pick<PassRecords, 'write'> | n
     : null;
 }
 
+/** The kill reader of a call: the injected one, else env + the sentinel (see `InstrumentOptions.kill`). */
+function defaultKill(opts: InstrumentOptions): () => KillState {
+  if (opts.kill) return opts.kill;
+  const dir = (opts.budget as { dir?: unknown }).dir;
+  const sentinelPath =
+    opts.killSentinelPath ??
+    (typeof dir === 'string' && dir ? join(dirname(dir), WATCHER_KILL_FILE) : undefined);
+  return () =>
+    sentinelPath
+      ? readKillSwitch({ sentinelPath })
+      : readKillSwitch({ sentinelPath: '', exists: () => false });
+}
+
 export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): InstrumentedClient {
   const now = opts.now ?? Date.now;
   const records = defaultRecords(opts);
+  const readKill = defaultKill(opts);
+  const isKilled = (): boolean => {
+    try {
+      return readKill().killed;
+    } catch {
+      return false; // like an unreadable sentinel: not a kill
+    }
+  };
+  const refuse = (reason: WatcherRefusal): { ok: false; reason: WatcherRefusal } => {
+    try {
+      opts.onRefused?.(reason);
+    } catch {
+      // the listener is best-effort
+    }
+    return { ok: false, reason };
+  };
   const keep = (
     messages: ChatMessage[],
     rec: {
@@ -202,6 +255,8 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
     model: tier.model,
     backend: tier.backend,
     async chat(messages, callOpts = {}) {
+      // C1: first, before the budget is asked; killed, nothing leaves the process.
+      if (isKilled()) return refuse('killed');
       const stop = opts.signal?.();
       if (stop?.aborted) {
         return {
@@ -213,7 +268,7 @@ export function instrumented(tier: WatcherTierClient, opts: InstrumentOptions): 
         };
       }
       const decision = opts.budget.reserve(opts.tier);
-      if (!decision.ok) return { ok: false, reason: decision.reason };
+      if (!decision.ok) return refuse(decision.reason);
       const started = Date.now();
       // One controller per call, linked to the stop signal and the caller's own.
       const ctrl = new AbortController();

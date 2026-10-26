@@ -4,6 +4,7 @@
  * prompt can see is decided in one place (`notice.ts`), after tier 0 already
  * reduced non-operator text to topic words.
  */
+import { createHash } from 'node:crypto';
 import type { Attention } from './self-model';
 import type { Neuron, NeuronKind } from './types';
 
@@ -249,6 +250,39 @@ function predictionRow(p: IntegratePredictionRow): string {
 
 function section(title: string, lines: string[], empty = '(none)'): string {
   return [`## ${title}`, ...(lines.length ? lines : [empty])].join('\n');
+}
+
+const ISO_TIME_RE = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?/g;
+const BUFFER_ID_RE = /\[b-[^\]\s]+\]/g;
+const SALIENCE_RE = /salience -?\d+(?:\.\d+)?/g;
+const NUMBER_RE = /-?\d+(?:\.\d+)?/g;
+/** Sections whose numbers are readings that drift by the minute ("How I am"), or figures behind a stakes rule. */
+const DRIFTING_NUMBER_SECTIONS = new Set(['## How I am', '## Something is wrong']);
+
+/**
+ * S1 (`docs/plans/watcher-autonomy-plan.md`): a sha256 of an integrate
+ * prompt without what changes when its content does not: timestamps, buffer
+ * item ids (`[b-…]`: a new occurrence of the same event; integrate never cites
+ * them), salience figures, the attention phase line, and the numbers in "How
+ * I am" and "Something is wrong". Two prompts with the same key ask the model
+ * the same question. Pure.
+ */
+export function integratePromptKey(prompt: { system: string; user: string }): string {
+  const sections = prompt.user.split(/\n\n(?=## )/).map((s) => {
+    const title = s.split('\n', 1)[0] ?? '';
+    let t = s
+      .replace(ISO_TIME_RE, '<time>')
+      .replace(BUFFER_ID_RE, '[b]')
+      .replace(SALIENCE_RE, 'salience')
+      .replace(/^- phase: .*$/m, '- phase');
+    if (DRIFTING_NUMBER_SECTIONS.has(title)) t = t.replace(NUMBER_RE, '#');
+    return t;
+  });
+  return createHash('sha256')
+    .update(prompt.system)
+    .update('\u0000')
+    .update(sections.join('\n\n'))
+    .digest('hex');
 }
 
 /** System and user text for one integrate pass. */

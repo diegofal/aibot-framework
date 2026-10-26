@@ -118,6 +118,8 @@ export type WebServerDeps = {
   claudeAccounts?: ClaudeAccountService;
   /** The fleet watcher; present only when `watcher.enabled` (src/watcher/watcher.ts). */
   watcher?: import('../watcher/watcher').Watcher;
+  /** Autonomy rung 0: the approval queue and change ledger (`src/watcher/autonomy/`). */
+  autonomy?: import('../watcher/autonomy').AutonomyApi;
 };
 
 export function startWebServer(deps: WebServerDeps): void {
@@ -246,6 +248,7 @@ export function startWebServer(deps: WebServerDeps): void {
       logger,
       configPath: deps.configPath,
       watcher: () => deps.watcher,
+      ...(deps.autonomy ? { autonomy: deps.autonomy } : {}),
       readCycles,
       semaphore: () => {
         const s = getClaudeCliStats();
@@ -381,7 +384,11 @@ export function startWebServer(deps: WebServerDeps): void {
     needsYouRoutes({
       config,
       logger,
-      sources: needsYouSourcesFromBotManager(deps.botManager),
+      sources: {
+        ...needsYouSourcesFromBotManager(deps.botManager),
+        // The route keeps only pending proposals, and only for admin or single-tenant callers.
+        ...(deps.autonomy ? { watcherProposals: () => deps.autonomy?.list().proposals ?? [] } : {}),
+      },
       actions: needsYouActionsFromBotManager(deps.botManager),
       readCycles,
     })

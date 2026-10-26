@@ -97,6 +97,11 @@
         </div>
 
         <div class="card">
+          <h2>Operator controls (autonomy rung 0)</h2>
+          <p>Plan: <code>docs/plans/watcher-autonomy-plan.md</code>. The operator's control is an invariant enforced in code. <strong>Hard kill</strong> (<code>src/watcher/kill.ts</code>): <code>AIBOT_WATCHER_KILL=1</code> or a <code>&lt;paths.data&gt;/watcher-kill</code> file refuses every model call inside <code>instrumented()</code>, the single choke point (a contract test forbids any other watcher module from importing an LLM client), stops a running watcher and refuses <code>start()</code> (the route answers 409). <strong>Monthly ceiling</strong>: <code>watcher.autonomy.monthlyCeilingUsd</code> (90), summed from the budget files. <strong>Proposals</strong> (<code>src/watcher/autonomy/</code>, off by default): data over an allowlist of bounded tunables (<code>locked.ts</code>); anything else is <code>rejected-locked</code> at parse; at most 3 pending; approval only from the admin dashboard, bound to the content hash, 72 h expiry; every applied change keeps its before-values (<code>self/changes.jsonl</code>), can be reverted, and is rolled back by the hourly tick when its guard metric regresses. Page: kill banner, month spend, Proposals panel; Needs You lists pending proposals for admins.</p>
+        </div>
+
+        <div class="card">
           <h2>State on disk (<code>&lt;paths.data&gt;/watcher/</code>)</h2>
           <pre><code>neurons.jsonl  edges.jsonl  embeddings.jsonl  graph.json   # append-only, compacted
 log/YYYY-MM-DD.jsonl                                       # first-person log, written by code
