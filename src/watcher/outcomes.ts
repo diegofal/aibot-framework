@@ -185,26 +185,54 @@ const words = (s: string) =>
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()} `;
 
-/** The bots a prediction names (id or name as whole words); none named = every bot. Pure. */
-export function predictionBots(text: string, bots: GroundTruthBot[]): GroundTruthBot[] {
+/** The bots a text names (id, name or alias as whole words); possibly none. Pure. */
+export function namedBots(text: string, bots: GroundTruthBot[]): GroundTruthBot[] {
   const hay = words(text);
-  const named = bots.filter((b) =>
+  return bots.filter((b) =>
     [b.id, b.name, ...(b.aliases ?? [])].some((needle) => {
       const w = needle ? words(needle) : '  ';
       return w.trim().length > 0 && hay.includes(w);
     })
   );
+}
+
+/** The bots a prediction names (id or name as whole words); none named = every bot. Pure. */
+export function predictionBots(text: string, bots: GroundTruthBot[]): GroundTruthBot[] {
+  const named = namedBots(text, bots);
   return named.length ? named : bots;
 }
 
 const clip = (s: string) => (s.length > LINE_TEXT_MAX ? `${s.slice(0, LINE_TEXT_MAX - 1)}…` : s);
 
+type TruthLine = {
+  at: number;
+  text: string;
+  kind: 'cycle' | 'tool';
+  tool?: string;
+  failed: boolean;
+};
+
+/** `k` items spread evenly over `items` (in time order), first and last included. */
+function spread<T>(items: T[], k: number): T[] {
+  if (k <= 0) return [];
+  if (items.length <= k) return items;
+  if (k === 1) return [items[items.length - 1] as T];
+  const out: T[] = [];
+  for (let i = 0; i < k; i++) out.push(items[Math.round((i * (items.length - 1)) / (k - 1))] as T);
+  return out;
+}
+
 /**
  * The tool calls and cycles of `bots` within `[fromMs, toMs]`, one line each,
- * in time order, at most `GROUND_TRUTH_MAX_LINES` (cycles kept first; the tool
- * calls that do not fit are counted per tool in a last line). `rows` counts
- * every row in the window, shown or not; `perBot` how many each bot had.
- * A reader that throws counts as nothing recorded. Pure over the readers.
+ * in time order. Each record counts at its own instant: a tool call at `ts`, a
+ * cycle at `endedAt` with its status; a cycle that started in the window and
+ * had not ended by `toMs` is "started, not finished by the deadline", with no
+ * result (nothing after the deadline leaks in). At most
+ * `GROUND_TRUTH_MAX_LINES`: over it, failures (failed tool calls, error
+ * cycles) are kept first, then cycles, then the other tool calls, each class
+ * spread evenly over the window, and a last line counts what was not shown.
+ * `rows` counts every record in the window, shown or not; `perBot` how many
+ * each bot had. A reader that throws counts as nothing recorded. Pure over the readers.
  */
 export function groundTruthLines(
   bots: GroundTruthBot[],
@@ -216,8 +244,7 @@ export function groundTruthLines(
     const ms = Date.parse(iso ?? '');
     return Number.isFinite(ms) && ms >= fromMs && ms <= toMs;
   };
-  const cycleLines: Array<{ at: number; text: string }> = [];
-  const toolLines: Array<{ at: number; text: string; tool: string; ok: boolean }> = [];
+  const all: TruthLine[] = [];
   const perBot = new Map<string, number>();
   for (const b of bots) {
     const name = b.name || b.id;
@@ -235,49 +262,77 @@ export function groundTruthLines(
       cycles = [];
     }
     for (const c of cycles) {
-      const at = c.endedAt ?? c.startedAt;
-      if (!inWindow(c.startedAt) && !inWindow(c.endedAt)) continue;
-      n++;
-      const what = c.planSummary || c.focus || '';
-      const goal = c.goalTitle ? ` [goal: ${c.goalTitle}]` : '';
-      cycleLines.push({
-        at: Date.parse(at),
-        text: clip(`${at} ${name} cycle ${c.status ?? 'unknown'}${what ? `: ${what}` : ''}${goal}`),
-      });
+      if (inWindow(c.endedAt)) {
+        n++;
+        const what = c.planSummary || c.focus || '';
+        const goal = c.goalTitle ? ` [goal: ${c.goalTitle}]` : '';
+        const status = c.status ?? 'unknown';
+        all.push({
+          at: Date.parse(c.endedAt as string),
+          kind: 'cycle',
+          failed: status === 'error',
+          text: clip(`${c.endedAt} ${name} cycle ${status}${what ? `: ${what}` : ''}${goal}`),
+        });
+      } else if (inWindow(c.startedAt)) {
+        // Still running at the deadline: what it did after is not evidence.
+        n++;
+        all.push({
+          at: Date.parse(c.startedAt),
+          kind: 'cycle',
+          failed: false,
+          text: `${c.startedAt} ${name} cycle started, not finished by the deadline`,
+        });
+      }
     }
     for (const e of tools) {
       if (!inWindow(e.ts)) continue;
       n++;
       const how = e.success ? 'ok' : `failed${e.failureKind ? ` (${e.failureKind})` : ''}`;
-      toolLines.push({
+      all.push({
         at: Date.parse(e.ts),
+        kind: 'tool',
         tool: e.tool,
-        ok: e.success,
+        failed: !e.success,
         text: clip(`${e.ts} ${name} tool ${e.tool} ${how}${e.target ? ` → ${e.target}` : ''}`),
       });
     }
     perBot.set(b.id, n);
   }
-  const rows = cycleLines.length + toolLines.length;
-  const keptCycles = cycleLines.slice(0, GROUND_TRUTH_MAX_LINES);
-  const room = GROUND_TRUTH_MAX_LINES - keptCycles.length;
-  const byTime = [...toolLines].sort((a, b) => a.at - b.at);
-  const fits = byTime.length <= room ? byTime : byTime.slice(0, Math.max(0, room - 1));
-  const rest = byTime.slice(fits.length);
-  const lines = [...keptCycles, ...fits].sort((a, b) => a.at - b.at).map((l) => l.text);
-  if (rest.length) {
-    const counts = new Map<string, { n: number; failed: number }>();
-    for (const r of rest) {
-      const c = counts.get(r.tool) ?? { n: 0, failed: 0 };
-      c.n++;
-      if (!r.ok) c.failed++;
-      counts.set(r.tool, c);
-    }
-    const parts = [...counts.entries()]
-      .sort((a, b) => b[1].n - a[1].n)
-      .map(([tool, c]) => `${tool} ×${c.n}${c.failed ? ` (${c.failed} failed)` : ''}`);
-    lines.push(`… ${rest.length} more tool calls not shown: ${parts.join(', ')}`);
+  const rows = all.length;
+  const byTime = [...all].sort((a, b) => a.at - b.at);
+  if (rows <= GROUND_TRUTH_MAX_LINES) return { lines: byTime.map((l) => l.text), rows, perBot };
+  // Over the cap: one line goes to the count of what is not shown.
+  let room = GROUND_TRUTH_MAX_LINES - 1;
+  const kept = new Set<TruthLine>();
+  const classes = [
+    byTime.filter((l) => l.failed),
+    byTime.filter((l) => !l.failed && l.kind === 'cycle'),
+    byTime.filter((l) => !l.failed && l.kind === 'tool'),
+  ];
+  for (const cls of classes) {
+    for (const l of spread(cls, room)) kept.add(l);
+    room = GROUND_TRUTH_MAX_LINES - 1 - kept.size;
   }
+  const lines = byTime.filter((l) => kept.has(l)).map((l) => l.text);
+  const rest = byTime.filter((l) => !kept.has(l));
+  const cyclesLeft = rest.filter((l) => l.kind === 'cycle');
+  const counts = new Map<string, { n: number; failed: number }>();
+  for (const r of rest) {
+    if (r.kind !== 'tool') continue;
+    const c = counts.get(r.tool as string) ?? { n: 0, failed: 0 };
+    c.n++;
+    if (r.failed) c.failed++;
+    counts.set(r.tool as string, c);
+  }
+  const parts = [
+    ...(cyclesLeft.length
+      ? [`${cyclesLeft.length} cycle${cyclesLeft.length === 1 ? '' : 's'}`]
+      : []),
+    ...[...counts.entries()]
+      .sort((a, b) => b[1].n - a[1].n)
+      .map(([tool, c]) => `${tool} ×${c.n}${c.failed ? ` (${c.failed} failed)` : ''}`),
+  ];
+  lines.push(`… ${rest.length} more records in the window not shown: ${parts.join(', ')}`);
   return { lines, rows, perBot };
 }
 
@@ -360,12 +415,10 @@ export async function judgePrediction(p: Neuron, deps: JudgeDeps): Promise<Judge
     const named = bots.length > 0 && bots.length < all.length;
     const truth = groundTruthLines(bots, from, to, deps.groundTruth);
     const names = bots.map((b) => b.name || b.id);
-    // A watcher row about a named bot is something recorded about it.
+    // A watcher row naming a predicted bot is something recorded about it,
+    // however many other bots it also names.
     const mentioned = named
-      ? events.some((e) => {
-          const hit = predictionBots(e, all);
-          return hit.length < all.length && hit.some((b) => bots.includes(b));
-        })
+      ? events.some((e) => namedBots(e, all).some((b) => bots.includes(b)))
       : events.length > 0;
     if (truth.rows === 0 && !mentioned) {
       return {

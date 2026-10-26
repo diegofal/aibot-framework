@@ -374,7 +374,9 @@ describe('the judge reads the ground truth (review 2026-10-25)', () => {
     expect(text).not.toContain('too_early');
     expect(text).not.toContain('too_late');
     expect(text).toContain('Jarvis-Factory cycle completed: draft the task brief');
-    expect(out.lines[out.lines.length - 1]).toMatch(/more tool calls not shown: .*web_fetch ×\d+/);
+    expect(out.lines[out.lines.length - 1]).toMatch(
+      /^… \d+ more records in the window not shown: .*web_fetch ×\d+/
+    );
   });
 
   test('live: "Jarvis-Factory makes no GitHub API calls … before the operator approves", a clean window → happened', async () => {
@@ -524,5 +526,141 @@ describe('the judge reads the ground truth (review 2026-10-25)', () => {
     expect(meta.outcome).toBe('did_not_happen');
     expect(meta.happened).toBe('false');
     expect(Number(meta.brier)).toBeCloseTo(0.64, 10);
+  });
+});
+
+describe('the judge evidence: fair, honest and within the deadline (review 2026-10-25, 2)', () => {
+  const BOTS = [
+    { id: 'jarvis-factory', name: 'Jarvis-Factory' },
+    { id: 'job-seeker', name: 'Job Seeker' },
+    { id: 'scout', name: 'Scout' },
+  ];
+  const from = () => t - 24 * 3_600_000;
+  const at = (minutes: number) => iso(from() + minutes * 60_000);
+  const deps = (tools: GroundTruthTool[], cycles: GroundTruthCycle[] = []) => ({
+    bots: () => BOTS,
+    tools: () => tools,
+    cycles: () => cycles,
+  });
+  const one = [BOTS[0] as { id: string; name: string }];
+
+  test('a watcher row naming the predicted bot and every other bot still counts as evidence', async () => {
+    const graph = new Graph(join(dir, 'g'), { now: () => t - 24 * 3_600_000 });
+    graph.load();
+    const log = new WatcherLog(join(dir, 'log'), { now: () => t });
+    const prompts: string[] = [];
+    const client = {
+      model: 'claude-haiku-5-5',
+      backend: 'claude-cli' as const,
+      chat: async (messages: Array<{ content: string }>) => {
+        prompts.push(messages.map((m) => m.content).join('\n'));
+        return ok('{"outcome": "did_not_happen", "evidence": "the fleet went quiet"}');
+      },
+    };
+    const p = graph.addNeuron({
+      kind: 'prediction',
+      text: 'Scout finishes the map',
+      support: { bots: ['scout'] },
+      createdBy: 'watcher',
+      meta: { dueAt: iso(t - 1000), probability: '0.6', horizonHours: '24' },
+    });
+    await resolvePredictions({
+      graph,
+      client,
+      log,
+      now: () => t,
+      events: () => ['Jarvis-Factory, Job Seeker and Scout all went idle'],
+      groundTruth: deps([]),
+      logger: quiet,
+    });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Jarvis-Factory, Job Seeker and Scout all went idle');
+    expect(graph.get(p.id)?.meta?.outcome).toBe('did_not_happen');
+  });
+
+  test('over the cap: a last line counts the records not shown; failures are kept; the rest spans the window', () => {
+    const tools = Array.from(
+      { length: 100 },
+      (_, i) => ({ ts: at(i + 1), tool: 'file_read', success: true }) as GroundTruthTool
+    );
+    tools.push({
+      ts: at(3),
+      tool: 'web_fetch',
+      success: false,
+      failureKind: 'blocked',
+      target: 'early.example/x',
+    });
+    tools.push({ ts: at(50), tool: 'web_fetch', success: false, target: 'middle.example/y' });
+    const cycles: GroundTruthCycle[] = [
+      { startedAt: at(1), endedAt: at(2), status: 'error', planSummary: 'early crash' },
+    ];
+    const out = groundTruthLines(one, from(), t, deps(tools, cycles));
+    expect(out.rows).toBe(103);
+    expect(out.lines).toHaveLength(60);
+    const last = out.lines[out.lines.length - 1] ?? '';
+    expect(last).toMatch(/^… 44 more records in the window not shown/);
+    const shown = out.lines.slice(0, -1).join('\n');
+    // failures are never the ones dropped
+    expect(shown).toContain('early.example/x');
+    expect(shown).toContain('middle.example/y');
+    expect(shown).toContain('cycle error: early crash');
+    // the kept ok calls span the window, not only its start
+    expect(shown).toContain(`${at(1)} Jarvis-Factory tool file_read ok`);
+    expect(shown).toContain(`${at(100)} Jarvis-Factory tool file_read ok`);
+    // still in time order
+    const stamps = out.lines.slice(0, -1).map((l) => l.slice(0, 24));
+    expect([...stamps].sort()).toEqual(stamps);
+  });
+
+  test('at or under the cap: every record, no count line', () => {
+    const tools = Array.from(
+      { length: 60 },
+      (_, i) => ({ ts: at(i + 1), tool: 'file_read', success: true }) as GroundTruthTool
+    );
+    const out = groundTruthLines(one, from(), t, deps(tools));
+    expect(out.lines).toHaveLength(60);
+    expect(out.lines.join('\n')).not.toContain('not shown');
+  });
+
+  test('a cycle that ended after the deadline shows as started, unfinished, without its result', () => {
+    const cycles: GroundTruthCycle[] = [
+      {
+        startedAt: iso(t - 60_000),
+        endedAt: iso(t + 60_000),
+        status: 'completed',
+        planSummary: 'push the PR to GitHub',
+      },
+      { startedAt: iso(t - 120_000), status: 'completed', planSummary: 'still going' },
+      { startedAt: at(10), endedAt: at(11), status: 'completed', planSummary: 'in time' },
+      // ended before the prediction was made
+      { startedAt: iso(from() - 120_000), endedAt: iso(from() - 60_000), status: 'error' },
+    ];
+    const out = groundTruthLines(one, from(), t, deps([], cycles));
+    const text = out.lines.join('\n');
+    expect(out.rows).toBe(3);
+    expect(text).toContain(`${at(11)} Jarvis-Factory cycle completed: in time`);
+    expect(text).toContain(
+      `${iso(t - 60_000)} Jarvis-Factory cycle started, not finished by the deadline`
+    );
+    expect(text).toContain(
+      `${iso(t - 120_000)} Jarvis-Factory cycle started, not finished by the deadline`
+    );
+    expect(text).not.toContain('push the PR to GitHub');
+    expect(text).not.toContain('still going');
+    expect(text).not.toContain(iso(t + 60_000));
+    expect(text).not.toContain('error');
+  });
+
+  test('a cycle that started before the prediction and ended inside the window is shown with its result', () => {
+    const cycles: GroundTruthCycle[] = [
+      {
+        startedAt: iso(from() - 60_000),
+        endedAt: at(5),
+        status: 'completed',
+        planSummary: 'carried over',
+      },
+    ];
+    const out = groundTruthLines(one, from(), t, deps([], cycles));
+    expect(out.lines).toEqual([`${at(5)} Jarvis-Factory cycle completed: carried over`]);
   });
 });
