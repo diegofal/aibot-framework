@@ -687,6 +687,48 @@ describe('Watcher integration (phase 3)', () => {
     expect(s.watcher.broadcaster.list()[0].servedByCycle).toBe('c-9');
     await s.watcher.stop();
   });
+
+  test('the outcomes pass judges a due prediction against the tool audit and the cycle log', async () => {
+    const { client, prompts } = integrateClient(() =>
+      JSON.stringify({ outcome: 'happened', evidence: 'a blocked web_fetch' })
+    );
+    const asked: string[] = [];
+    const failedAt = new Date(t + 60_000).toISOString();
+    const m = make(
+      {
+        llm: { notice: { client, model: 'claude-haiku-5-5', backend: 'claude-cli' } },
+        toolCalls: (botId, since, now) => {
+          asked.push(`${botId}:${since}:${now}`);
+          return [
+            {
+              ts: failedAt,
+              tool: 'web_fetch',
+              success: false,
+              failureKind: 'blocked',
+              target: 'wiley.com/jobs',
+            },
+          ];
+        },
+        readCycles: () => [],
+      },
+      { ...integrateOn, ...noticeOn }
+    );
+    await m.watcher.start();
+    await m.watcher.idle();
+    const p = m.watcher.graph.addNeuron({
+      kind: 'prediction',
+      text: 'Jarvis logs one more web_fetch failure',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      meta: { dueAt: new Date(t + 3_600_000).toISOString(), probability: '0.7' },
+    });
+    t += 2 * 3_600_000;
+    await m.watcher.outcomesNow();
+    expect(asked).toEqual([`b1:${Date.parse(p.createdAt)}:${Date.parse(p.meta?.dueAt ?? '')}`]);
+    expect(prompts.at(-1)).toContain('Jarvis tool web_fetch failed (blocked) → wiley.com/jobs');
+    expect(m.watcher.graph.get(p.id)?.meta?.outcome).toBe('happened');
+    await m.watcher.stop();
+  });
 });
 
 describe('createFleetWatcher broadcasts wiring (phase 3)', () => {

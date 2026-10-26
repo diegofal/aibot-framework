@@ -253,3 +253,33 @@ describe('importance after consolidation', () => {
     expect(served.protected).toBe('served');
   });
 });
+
+describe('planForgetting (review 2026-10-25: below the target too)', () => {
+  test('below the target: every unprotected neuron under the threshold, capped at maxPerRun, lowest first', () => {
+    const g = graph();
+    const lows = [1, 2, 3, 4].map((i) => fact(g, `forgettable ${i}`));
+    fact(g, 'used', { activations: 40 } as never);
+    t += 10 * DAY;
+    const c = ctx({ nowMs: t, graph: g });
+    const all = planForgetting(g.list(), c, { threshold: 0.15, target: 1000 });
+    expect(all.archive.map((x) => x.neuron.id).sort()).toEqual(lows.map((n) => n.id).sort());
+    const capped = planForgetting(g.list(), c, { threshold: 0.15, target: 1000, maxPerRun: 2 });
+    expect(capped.archive).toHaveLength(2);
+    expect(capped.under).toBe(4);
+  });
+
+  test('above the target the excess wins over maxPerRun; never past the threshold', () => {
+    const g = graph();
+    for (let i = 0; i < 4; i++) fact(g, `forgettable ${i}`);
+    for (let i = 0; i < 3; i++) fact(g, `kept ${i}`, { activations: 40 } as never);
+    t += 10 * DAY;
+    const c = ctx({ nowMs: t, graph: g });
+    expect(
+      planForgetting(g.list(), c, { threshold: 0.15, target: 4, maxPerRun: 1 }).archive
+    ).toHaveLength(3);
+    // a target of 0 cannot reach past the threshold: only the 4 low ones go
+    expect(
+      planForgetting(g.list(), c, { threshold: 0.15, target: 0, maxPerRun: 1 }).archive
+    ).toHaveLength(4);
+  });
+});

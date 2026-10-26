@@ -140,10 +140,11 @@ export function mindRows(kind, { neurons = [], broadcasts = [], query = '' } = {
   return rows.sort(newestFirst);
 }
 
-/** `pending` until resolved, then `happened` or `missed`. */
+/** `pending` until resolved, then `happened`, `missed` or `unknown` (the judge could not settle it). */
 export function predictionOutcome(neuron) {
   const m = neuron?.meta ?? {};
   if (!m.resolvedAt) return 'pending';
+  if (m.outcome === 'unknown') return 'unknown';
   return m.happened === 'true' ? 'happened' : 'missed';
 }
 
@@ -325,10 +326,14 @@ function predictionRow(n, { nowMs, open }) {
     }
   } else {
     parts.push(
-      outcome === 'happened' ? badge('happened', 'ok') : badge('did not happen', 'danger')
+      outcome === 'happened'
+        ? badge('happened', 'ok')
+        : outcome === 'unknown'
+          ? badge('unknown', 'muted')
+          : badge('did not happen', 'danger')
     );
     const brier = Number(m.brier);
-    if (m.brier != null && Number.isFinite(brier)) {
+    if (outcome !== 'unknown' && m.brier != null && Number.isFinite(brier)) {
       parts.push(
         `<span class="watcher-mind-brier${brier > 0.25 ? ' is-bad' : ''}">Brier ${brier.toFixed(2)}</span>`
       );

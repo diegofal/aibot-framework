@@ -238,13 +238,15 @@ export interface ForgetPlan {
 
 /**
  * What forgetting archives: live, unprotected neurons with importance below
- * `threshold`, lowest first (older activation breaks ties), until the live
- * graph is at most `target` or none remain under the threshold. Pure.
+ * `threshold`, lowest first (older activation breaks ties). Whatever the size
+ * of the graph, at most `maxPerRun` of them (absent = all); above `target`,
+ * as many as it takes to get the live graph to `target` even past
+ * `maxPerRun`. Never a neuron at or above the threshold. Pure.
  */
 export function planForgetting(
   neurons: Iterable<Neuron>,
   ctx: ImportanceContext,
-  opts: { threshold: number; target: number }
+  opts: { threshold: number; target: number; maxPerRun?: number }
 ): ForgetPlan {
   const live: Neuron[] = [];
   for (const n of neurons) if (!n.archivedAt) live.push(n);
@@ -261,5 +263,10 @@ export function planForgetting(
       (a.neuron.id < b.neuron.id ? -1 : 1)
   );
   const excess = Math.max(0, live.length - Math.max(0, opts.target));
-  return { archive: candidates.slice(0, excess), live: live.length, under: candidates.length };
+  const batch = opts.maxPerRun === undefined ? candidates.length : Math.max(0, opts.maxPerRun);
+  return {
+    archive: candidates.slice(0, Math.max(batch, excess)),
+    live: live.length,
+    under: candidates.length,
+  };
 }

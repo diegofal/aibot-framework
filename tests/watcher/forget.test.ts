@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-function make(target: number) {
+function make(target: number, maxPerRun?: number) {
   const config = {
     bots: [],
     paths: { data: join(root, 'data') },
@@ -36,7 +36,11 @@ function make(target: number) {
       ...WATCHER_DEFAULTS,
       enabled: true,
       graph: { ...WATCHER_DEFAULTS.graph, targetNeurons: target },
-      forget: { threshold: 0.15, graceDays: 7 },
+      forget: {
+        threshold: 0.15,
+        graceDays: 7,
+        ...(maxPerRun !== undefined ? { maxPerRun } : {}),
+      },
     },
   } as unknown as Config;
   return new Watcher({
@@ -63,8 +67,9 @@ const fact = (g: Graph, text: string, extra: Record<string, unknown> = {}) =>
   } as never);
 
 describe('forgetting by importance (maintainNow)', () => {
+  // Above the target the target forces trimming past `maxPerRun` (here 1): until the target.
   test('archives the lowest under the threshold until the graph is at the target, and logs it', async () => {
-    const w = make(3);
+    const w = make(3, 1);
     const used = fact(w.graph, 'used a lot', { activations: 30 });
     const low = [1, 2, 3, 4].map((i) => fact(w.graph, `forgettable ${i}`));
     t += 10 * DAY;
@@ -88,13 +93,54 @@ describe('forgetting by importance (maintainNow)', () => {
     expect(row?.neuronIds?.sort()).toEqual(archived.map((n) => n.id).sort());
   });
 
-  test('under the target nothing is forgotten, however old (the age rule is gone)', async () => {
+  // Review 2026-10-25: live, 3,418 neurons under a target of 8,000 meant nothing was ever
+  // forgotten, birth's bookkeeping facts and stale low-value facts included.
+  test('below the target, every low-importance neuron past the grace goes, at most maxPerRun a run, lowest first', async () => {
+    const w = make(100, 3);
+    const used = fact(w.graph, 'used a lot', { activations: 30 });
+    const low = [1, 2, 3, 4, 5].map((i) => fact(w.graph, `forgettable ${i}`));
+    t += 10 * DAY;
+    for (let i = 0; i < 5; i++) w.graph.activate(used.id);
+    await w.maintainNow();
+    const archived = () => w.graph.list().filter((n) => n.archivedAt);
+    expect(archived().length).toBe(3);
+    for (const n of archived()) expect(low.map((l) => l.id)).toContain(n.id);
+    expect(w.graph.get(used.id)?.archivedAt).toBeUndefined();
+    const row = w.log.recent(20).find((r) => r.op === 'forget:archive');
+    expect(row?.text).toContain('Forgot 3 neurons');
+    expect(row?.neuronIds).toHaveLength(3);
+    // the next daily run takes the rest
+    await w.maintainNow();
+    expect(archived().length).toBe(5);
+    expect(w.graph.get(used.id)?.archivedAt).toBeUndefined();
+  });
+
+  test('below the target, an important neuron is kept however old', async () => {
     const w = make(100);
-    const n = fact(w.graph, 'old and unused');
+    const n = fact(w.graph, 'old but used', { activations: 30 });
     t += 90 * DAY;
+    for (let i = 0; i < 5; i++) w.graph.activate(n.id);
     await w.maintainNow();
     expect(w.graph.get(n.id)?.archivedAt).toBeUndefined();
     expect(w.log.recent(20).some((r) => r.op === 'forget:archive')).toBe(false);
+  });
+
+  test('below the target, protected and in-grace neurons are never forgotten', async () => {
+    const w = make(100);
+    const entity = w.graph.addNeuron({
+      kind: 'entity',
+      text: 'bot b1',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+    });
+    const liked = fact(w.graph, 'the operator liked this', { meta: { signal: 'up' } });
+    const old = fact(w.graph, 'old fact');
+    t += 10 * DAY;
+    const young = fact(w.graph, 'young fact');
+    await w.maintainNow();
+    for (const id of [entity.id, liked.id, young.id])
+      expect(w.graph.get(id)?.archivedAt).toBeUndefined();
+    expect(w.graph.get(old.id)?.archivedAt).toBeDefined();
   });
 
   test('the grace period and protected neurons are never forgotten', async () => {

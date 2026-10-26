@@ -6,11 +6,16 @@ import { Broadcaster } from '../../src/watcher/broadcast';
 import { Graph } from '../../src/watcher/graph';
 import type { WatcherCallResult } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
+import { computeMetrics, emptyRecords } from '../../src/watcher/metrics';
 import {
+  type GroundTruthCycle,
+  type GroundTruthTool,
   applyServed,
   brierScore,
   duePredictions,
+  groundTruthLines,
   parsePredictionResolution,
+  predictionBots,
   resolvePredictions,
   servedFromCycles,
 } from '../../src/watcher/outcomes';
@@ -99,17 +104,35 @@ describe('servedFromCycles / applyServed', () => {
 });
 
 describe('parsePredictionResolution', () => {
-  test('reads happened and evidence', () => {
+  test('old schema: reads happened and evidence (still parsed for compatibility)', () => {
     expect(
       parsePredictionResolution('{"happened": true, "evidence": "Scout said so"}', quiet)
     ).toEqual({
+      outcome: 'happened',
       happened: true,
       evidence: 'Scout said so',
     });
+    expect(parsePredictionResolution('{"happened": false}', quiet)).toEqual({
+      outcome: 'did_not_happen',
+      happened: false,
+    });
+  });
+  test('new schema: happened, did_not_happen, unknown', () => {
+    expect(
+      parsePredictionResolution('{"outcome": "happened", "evidence": "the cycles show it"}', quiet)
+    ).toEqual({ outcome: 'happened', happened: true, evidence: 'the cycles show it' });
+    expect(parsePredictionResolution('{"outcome": "did_not_happen"}', quiet)).toEqual({
+      outcome: 'did_not_happen',
+      happened: false,
+    });
+    expect(
+      parsePredictionResolution('{"outcome": "unknown", "evidence": "nothing about it"}', quiet)
+    ).toEqual({ outcome: 'unknown', evidence: 'nothing about it' });
   });
   test('null when not the contract', () => {
     expect(parsePredictionResolution('no idea', quiet)).toBeNull();
     expect(parsePredictionResolution('{"happened": "maybe"}', quiet)).toBeNull();
+    expect(parsePredictionResolution('{"outcome": "maybe"}', quiet)).toBeNull();
   });
 });
 
@@ -255,5 +278,251 @@ describe('resolvePredictions: a failed call', () => {
     expect(out.resolved).toBe(1);
     expect(s.graph.get(a.id)?.meta?.resolvedAt).toBeUndefined();
     expect(s.graph.get(b.id)?.meta?.happened).toBe('true');
+  });
+});
+
+describe('the judge reads the ground truth (review 2026-10-25)', () => {
+  const BOTS = [
+    { id: 'jarvis-factory', name: 'Jarvis-Factory' },
+    { id: 'job-seeker', name: 'Job Seeker' },
+    { id: 'scout', name: 'Scout' },
+  ];
+  type Rows = { tools?: GroundTruthTool[]; cycles?: GroundTruthCycle[] };
+  function truth(byBot: Record<string, Rows>) {
+    const asked: string[] = [];
+    return {
+      asked,
+      deps: {
+        bots: () => BOTS,
+        tools: (botId: string, from: number, to: number) => {
+          asked.push(`tools:${botId}:${from}:${to}`);
+          return byBot[botId]?.tools ?? [];
+        },
+        cycles: (botId: string, from: number, to: number) => {
+          asked.push(`cycles:${botId}:${from}:${to}`);
+          return byBot[botId]?.cycles ?? [];
+        },
+      },
+    };
+  }
+  const tool = (over: Partial<GroundTruthTool>): GroundTruthTool => ({
+    ts: iso(t - 5 * 3_600_000),
+    tool: 'file_write',
+    success: true,
+    ...over,
+  });
+  const cycle = (over: Partial<GroundTruthCycle>): GroundTruthCycle => ({
+    startedAt: iso(t - 6 * 3_600_000),
+    endedAt: iso(t - 6 * 3_600_000 + 60_000),
+    status: 'completed',
+    planSummary: 'draft the task brief',
+    goalTitle: 'Ship the factory',
+    ...over,
+  });
+  /** A prediction made 24 h ago (the graph stamps `createdAt` with `t`), due at `dueAt`. */
+  const opened = (
+    s: ReturnType<typeof setup>,
+    text: string,
+    dueAt: number,
+    probability?: string
+  ) => {
+    const now = t;
+    t = now - 24 * 3_600_000;
+    try {
+      return s.predict(text, dueAt, probability);
+    } finally {
+      t = now;
+    }
+  };
+
+  test('predictionBots: the bots a prediction names, by id or name; none named = all', () => {
+    expect(
+      predictionBots('Jarvis-Factory makes no GitHub API calls', BOTS).map((b) => b.id)
+    ).toEqual(['jarvis-factory']);
+    expect(
+      predictionBots('job-seeker logs one more web_fetch failure', BOTS).map((b) => b.id)
+    ).toEqual(['job-seeker']);
+    expect(predictionBots('the fleet gets quieter', BOTS).map((b) => b.id)).toEqual([
+      'jarvis-factory',
+      'job-seeker',
+      'scout',
+    ]);
+    // a word inside another word is not a name
+    expect(predictionBots('scouting gets harder', BOTS)).toHaveLength(3);
+  });
+
+  test('groundTruthLines: tool calls and cycles in the window, in time order, clipped with a count of the rest', () => {
+    const from = t - 24 * 3_600_000;
+    const to = t;
+    const many = Array.from({ length: 70 }, (_, i) =>
+      tool({ ts: iso(from + (i + 1) * 60_000), tool: i % 2 ? 'web_fetch' : 'file_read' })
+    );
+    const { deps } = truth({
+      'jarvis-factory': {
+        tools: [
+          ...many,
+          tool({ ts: iso(from - 1000), tool: 'too_early' }),
+          tool({ ts: iso(to + 1000), tool: 'too_late' }),
+        ],
+        cycles: [cycle({ startedAt: iso(from + 30_000), endedAt: iso(from + 40_000) })],
+      },
+    });
+    const out = groundTruthLines([BOTS[0] as { id: string; name: string }], from, to, deps);
+    expect(out.rows).toBe(71);
+    expect(out.lines.length).toBeLessThanOrEqual(60);
+    const text = out.lines.join('\n');
+    expect(text).not.toContain('too_early');
+    expect(text).not.toContain('too_late');
+    expect(text).toContain('Jarvis-Factory cycle completed: draft the task brief');
+    expect(out.lines[out.lines.length - 1]).toMatch(/more tool calls not shown: .*web_fetch ×\d+/);
+  });
+
+  test('live: "Jarvis-Factory makes no GitHub API calls … before the operator approves", a clean window → happened', async () => {
+    const s = setup(async () =>
+      ok('{"outcome": "happened", "evidence": "no GitHub call among its 2 tool calls"}')
+    );
+    const p = opened(
+      s,
+      'Jarvis-Factory makes no GitHub API calls for task t-cff5b1 before the operator approves',
+      t - 1000,
+      '0.8'
+    );
+    const { deps } = truth({
+      'jarvis-factory': {
+        tools: [
+          tool({ tool: 'file_write', target: 'tasks/t-cff5b1/01_brief.md' }),
+          tool({ tool: 'ask_permission' }),
+        ],
+        cycles: [cycle({})],
+      },
+      'job-seeker': { tools: [tool({ tool: 'web_fetch', target: 'api.github.com/repos' })] },
+    });
+    await resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => ['Jarvis-Factory asked for permission'],
+      groundTruth: deps,
+      logger: quiet,
+    });
+    const prompt = s.prompts[0] ?? '';
+    // the ground truth of the bot it names, not of the others
+    expect(prompt).toContain('Jarvis-Factory tool file_write ok → tasks/t-cff5b1/01_brief.md');
+    expect(prompt).toContain('Jarvis-Factory cycle completed: draft the task brief');
+    expect(prompt).not.toContain('api.github.com');
+    // absence is not "false": a negated prediction holds when the absence does
+    expect(prompt).not.toContain('if they do not show it happened, it did not');
+    expect(prompt).toContain('states an absence');
+    expect(prompt).toContain('"unknown"');
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('happened');
+    expect(meta.happened).toBe('true');
+    expect(Number(meta.brier)).toBeCloseTo(0.04, 10);
+  });
+
+  test('live: "job-seeker logs at least one more web_fetch failure within 24h", the tool audit shows it', async () => {
+    const s = setup(async () => ok('{"outcome": "happened", "evidence": "a blocked web_fetch"}'));
+    opened(s, 'job-seeker logs at least one more web_fetch failure within 24h', t - 1000, '0.7');
+    const { deps } = truth({
+      'job-seeker': {
+        tools: [
+          tool({
+            tool: 'web_fetch',
+            success: false,
+            failureKind: 'blocked',
+            target: 'wiley.com/jobs',
+          }),
+        ],
+      },
+      'jarvis-factory': { tools: [tool({ tool: 'web_fetch', success: false })] },
+    });
+    await resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => ['Jarvis-Factory: web_fetch failed'],
+      groundTruth: deps,
+      logger: quiet,
+    });
+    expect(s.prompts[0]).toContain('Job Seeker tool web_fetch failed (blocked) → wiley.com/jobs');
+  });
+
+  test('live: nothing about the named bot in the window → unknown without a call, excluded from Brier', async () => {
+    const s = setup(async () => ok('{"outcome": "did_not_happen"}'));
+    const p = opened(
+      s,
+      'job-seeker logs at least one more web_fetch failure within 24h',
+      t - 1000,
+      '0.7'
+    );
+    const { deps, asked } = truth({
+      'jarvis-factory': { tools: [tool({ tool: 'web_fetch', success: false })] },
+    });
+    const out = await resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => ['Jarvis-Factory: web_fetch failed (all recorded failures are its own)'],
+      groundTruth: deps,
+      logger: quiet,
+    });
+    expect(out.resolved).toBe(1);
+    expect(s.prompts).toHaveLength(0);
+    // read over the window the prediction was open
+    expect(asked).toContain(`tools:job-seeker:${Date.parse(p.createdAt)}:${t - 1000}`);
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('unknown');
+    expect(meta.resolvedAt).toBe(iso(t));
+    expect(meta.brier).toBeUndefined();
+    expect(meta.happened).toBeUndefined();
+    expect(meta.evidence).toContain('Job Seeker');
+    const row = s.rows.find((r) => r.op === 'prediction:resolved');
+    expect(row?.text).toContain('could not be settled');
+    const m = computeMetrics({ ...emptyRecords(t), neurons: s.graph.list() }, '7d');
+    const cal = m.metrics.find((x) => x.id === 'calibration');
+    expect(cal?.n).toBe(0);
+    expect(cal?.detail?.unknown).toBe(1);
+  });
+
+  test('the judge answering unknown stores unknown, with no Brier', async () => {
+    const s = setup(async () =>
+      ok('{"outcome": "unknown", "evidence": "the records do not cover it"}')
+    );
+    const p = opened(s, 'Scout finishes the map', t - 1000);
+    await resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => [],
+      groundTruth: truth({ scout: { cycles: [cycle({})] } }).deps,
+      logger: quiet,
+    });
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('unknown');
+    expect(meta.brier).toBeUndefined();
+    expect(meta.evidence).toBe('the records do not cover it');
+    expect(meta.resolvedModel).toBe('claude-haiku-5-5');
+  });
+
+  test('did_not_happen scores like happened: false', async () => {
+    const s = setup(async () => ok('{"outcome": "did_not_happen", "evidence": "no such cycle"}'));
+    const p = opened(s, 'Scout finishes the map', t - 1000, '0.8');
+    await resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => [],
+      groundTruth: truth({ scout: { cycles: [cycle({})] } }).deps,
+      logger: quiet,
+    });
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('did_not_happen');
+    expect(meta.happened).toBe('false');
+    expect(Number(meta.brier)).toBeCloseTo(0.64, 10);
   });
 });

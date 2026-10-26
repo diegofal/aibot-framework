@@ -112,7 +112,8 @@ export interface IntegratePredictionRow {
   id: string;
   text: string;
   dueAt: string;
-  resolved?: { happened: boolean; brier: number };
+  /** `unknown`: the judge could not settle it (never scored). */
+  resolved?: { happened: boolean; brier: number } | { unknown: true };
 }
 
 export interface IntegrateInsightBroadcast {
@@ -237,9 +238,12 @@ function botRow(b: IntegratePromptInput['bots'][number], cap: number | undefined
 }
 
 function predictionRow(p: IntegratePredictionRow): string {
-  const state = p.resolved
-    ? `resolved: ${p.resolved.happened ? 'happened' : 'did not happen'}, Brier ${round(p.resolved.brier)}`
-    : 'open';
+  const r = p.resolved;
+  const state = !r
+    ? 'open'
+    : 'unknown' in r
+      ? 'resolved: unknown (the records could not settle it)'
+      : `resolved: ${r.happened ? 'happened' : 'did not happen'}, Brier ${round(r.brier)}`;
   return `- [${p.id}] ${p.text} (due ${p.dueAt}) · ${state}`;
 }
 

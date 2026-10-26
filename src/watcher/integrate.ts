@@ -1503,7 +1503,12 @@ function predictionRow(n: Neuron): IntegratePredictionRow {
     text: n.text,
     dueAt: m.dueAt ?? n.createdAt,
     ...(m.resolvedAt
-      ? { resolved: { happened: m.happened === 'true', brier: Number(m.brier) || 0 } }
+      ? {
+          resolved:
+            m.outcome === 'unknown'
+              ? { unknown: true as const }
+              : { happened: m.happened === 'true', brier: Number(m.brier) || 0 },
+        }
       : {}),
   };
 }

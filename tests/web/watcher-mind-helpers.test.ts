@@ -124,6 +124,11 @@ describe('predictionOutcome / broadcastStatus', () => {
         n('n-1', 'prediction', 'x', { meta: { resolvedAt: 'y', happened: 'false' } })
       )
     ).toBe('missed');
+    expect(
+      predictionOutcome(
+        n('n-1', 'prediction', 'x', { meta: { resolvedAt: 'y', outcome: 'unknown' } })
+      )
+    ).toBe('unknown');
   });
 
   test('delivered, deferred, failed', () => {
@@ -201,6 +206,23 @@ describe('mindListHtml', () => {
     expect(html).toContain('data-open-key="n-p:evidence"');
     const open = mindListHtml('prediction', [p], { nowMs: NOW, open: new Set(['n-p:evidence']) });
     expect(open).toContain('<details class="watcher-mind-fold" open>');
+  });
+
+  test('a prediction the judge could not settle: unknown, no Brier, evidence kept', () => {
+    const p = n('n-p', 'prediction', '2026-10-23T10:00:00Z', {
+      meta: {
+        probability: '0.7',
+        dueAt: '2026-10-24T10:00:00Z',
+        resolvedAt: '2026-10-24T10:05:00Z',
+        outcome: 'unknown',
+        evidence: 'No tool calls, cycles or watcher records about Job Seeker',
+      },
+    });
+    const html = mindListHtml('prediction', [p], { nowMs: NOW });
+    expect(html).toContain('unknown');
+    expect(html).not.toContain('did not happen');
+    expect(html).not.toContain('Brier');
+    expect(html).toContain('No tool calls, cycles or watcher records about Job Seeker');
   });
 
   test('an insight: bots, confidence, broadcast status or why not, signals', () => {
