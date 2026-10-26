@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseRejudgeArgs, runRejudge } from '../../../scripts/watcher/rejudge';
+import {
+  confirmWatcherStopped,
+  graphFilesGuard,
+  parseRejudgeArgs,
+  runRejudge,
+} from '../../../scripts/watcher/rejudge';
 import { Graph } from '../../../src/watcher/graph';
 import type { WatcherCallResult } from '../../../src/watcher/llm';
 
@@ -214,5 +219,104 @@ describe('runRejudge', () => {
       limit: 2,
     });
     expect(report.rows).toHaveLength(2);
+  });
+});
+
+describe('--apply never writes over a running watcher (review 2026-10-25, 3)', () => {
+  test('parseRejudgeArgs reads --watcher-url and --token', () => {
+    expect(
+      parseRejudgeArgs(['--apply', '--watcher-url', 'http://127.0.0.1:3000', '--token', 'k'])
+    ).toEqual({ apply: true, watcherUrl: 'http://127.0.0.1:3000', token: 'k' });
+  });
+
+  test('confirmWatcherStopped: only a reported running:false passes', async () => {
+    const asked: Array<{ url: string; auth?: string }> = [];
+    const fake = (res: () => Response): typeof fetch =>
+      (async (url: string, init?: RequestInit) => {
+        asked.push({
+          url: String(url),
+          auth: (init?.headers as Record<string, string> | undefined)?.Authorization,
+        });
+        return res();
+      }) as never;
+    const json =
+      (body: unknown, status = 200) =>
+      () =>
+        new Response(JSON.stringify(body), { status });
+    expect(
+      await confirmWatcherStopped(
+        'http://h:3000/',
+        'k',
+        fake(json({ enabled: true, running: false }))
+      )
+    ).toEqual({ ok: true });
+    expect(asked[0]).toEqual({ url: 'http://h:3000/api/watcher', auth: 'Bearer k' });
+    const running = await confirmWatcherStopped('http://h', 'k', fake(json({ running: true })));
+    expect(running.ok).toBe(false);
+    expect(await confirmWatcherStopped('http://h', 'k', fake(json({ enabled: false })))).toEqual({
+      ok: true,
+    });
+    expect((await confirmWatcherStopped('http://h', 'k', fake(json({}, 401)))).ok).toBe(false);
+    expect((await confirmWatcherStopped('http://h', 'k', fake(json({ enabled: true })))).ok).toBe(
+      false
+    );
+    const down = (async () => {
+      throw new Error('ECONNREFUSED');
+    }) as never;
+    expect((await confirmWatcherStopped('http://h', 'k', down)).ok).toBe(false);
+  });
+
+  test('graph files changed between load and write: the guard names them', () => {
+    const g = join(dir, 'w');
+    mkdirSync(g, { recursive: true });
+    writeFileSync(join(g, 'neurons.jsonl'), 'a\n');
+    const guard = graphFilesGuard(g);
+    expect(guard()).toBeNull();
+    appendFileSync(join(g, 'neurons.jsonl'), 'b\n');
+    expect(guard()).toContain('neurons.jsonl');
+  });
+
+  test('a guard that refuses: nothing is written, the run says why', async () => {
+    const s = setup([() => ok('{"outcome": "happened", "evidence": "only a file_write"}')]);
+    const p = s.resolved('Jarvis-Factory makes no GitHub API calls');
+    const before = JSON.stringify(s.graph.get(p.id));
+    const report = await runRejudge({
+      graph: s.graph,
+      client: s.client,
+      events: () => [],
+      groundTruth: s.groundTruth,
+      logger: quiet,
+      now: () => t + 30 * H,
+      apply: true,
+      beforeWrite: () => 'neurons.jsonl changed since load: is the watcher running?',
+    });
+    expect(report.applied).toBe(0);
+    expect(report.aborted).toContain('neurons.jsonl changed');
+    expect(report.rows[0]?.next).toBe('happened');
+    expect(JSON.stringify(s.graph.get(p.id))).toBe(before);
+  });
+
+  test('the guard runs after every model call, before the first write', async () => {
+    const s = setup([() => ok('{"outcome": "happened"}')]);
+    const a = s.resolved('Jarvis-Factory ships the brief');
+    const b = s.resolved('Jarvis-Factory opens a PR');
+    let callsAtGuard = -1;
+    const report = await runRejudge({
+      graph: s.graph,
+      client: s.client,
+      events: () => [],
+      groundTruth: s.groundTruth,
+      logger: quiet,
+      now: () => t + 30 * H,
+      apply: true,
+      beforeWrite: () => {
+        callsAtGuard = s.prompts.length;
+        expect(s.graph.get(a.id)?.meta?.rejudgedAt).toBeUndefined();
+        return null;
+      },
+    });
+    expect(callsAtGuard).toBe(2);
+    expect(report.applied).toBe(2);
+    expect(s.graph.get(b.id)?.meta?.rejudgedAt).toBeDefined();
   });
 });

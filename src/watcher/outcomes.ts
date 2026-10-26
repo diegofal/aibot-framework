@@ -11,7 +11,10 @@
  *   (the old `{ happened }` still parses). Stored on the neuron: `resolvedAt`,
  *   `outcome`, `evidence`, `resolvedModel`, and for a settled one `happened`
  *   and `brier`; `unknown` is final and never scored. Nothing recorded about
- *   the named bots = `unknown` without a call. Budget and breaker apply (the
+ *   the named bots = `unknown` without a call. A ground-truth reader that
+ *   throws defers the prediction to the next pass (`meta.unreadablePasses`);
+ *   after `UNREADABLE_MAX_PASSES` such passes it resolves `unknown`
+ *   ("records unreadable"). Budget and breaker apply (the
  *   instrumented client); a refused call stops the pass, an unreadable answer
  *   leaves the prediction open. Never throws.
  */
@@ -27,6 +30,8 @@ import type { Neuron } from './types';
 export const RESOLVE_MAX_PER_PASS = 3;
 const MAX_EVENTS = 40;
 const EVIDENCE_MAX = 300;
+/** Passes a prediction waits on unreadable records before it resolves `unknown`. */
+export const UNREADABLE_MAX_PASSES = 3;
 
 /** The slice of a cycle row the served check reads. */
 export interface ServedCycleRow {
@@ -235,20 +240,23 @@ function spread<T>(items: T[], k: number): T[] {
  * cycles) are kept first, then cycles, then the other tool calls, each class
  * spread evenly over the window, and a last line counts what was not shown.
  * `rows` counts every record in the window, shown or not; `perBot` how many
- * each bot had. A reader that throws counts as nothing recorded. Pure over the readers.
+ * each bot had. A reader that throws counts as nothing recorded for it and is
+ * named in `unreadable` (`tools:<botId>` / `cycles:<botId>`), so the caller
+ * can tell "nothing happened" from "could not read". Pure over the readers.
  */
 export function groundTruthLines(
   bots: GroundTruthBot[],
   fromMs: number,
   toMs: number,
   deps: GroundTruthDeps
-): { lines: string[]; rows: number; perBot: Map<string, number> } {
+): { lines: string[]; rows: number; perBot: Map<string, number>; unreadable: string[] } {
   const inWindow = (iso: string | undefined) => {
     const ms = Date.parse(iso ?? '');
     return Number.isFinite(ms) && ms >= fromMs && ms <= toMs;
   };
   const all: TruthLine[] = [];
   const perBot = new Map<string, number>();
+  const unreadable: string[] = [];
   for (const b of bots) {
     const name = b.name || b.id;
     let n = 0;
@@ -258,6 +266,7 @@ export function groundTruthLines(
       tools = deps.tools?.(b.id, fromMs, toMs) ?? [];
     } catch {
       tools = [];
+      unreadable.push(`tools:${b.id}`);
     }
     try {
       // The cycle reader filters on startedAt: ask from a day earlier so a cycle that
@@ -266,6 +275,7 @@ export function groundTruthLines(
       cycles = deps.cycles?.(b.id, fromMs - CYCLE_START_LOOKBACK_MS, toMs) ?? [];
     } catch {
       cycles = [];
+      unreadable.push(`cycles:${b.id}`);
     }
     for (const c of cycles) {
       if (inWindow(c.endedAt)) {
@@ -306,7 +316,8 @@ export function groundTruthLines(
   }
   const rows = all.length;
   const byTime = [...all].sort((a, b) => a.at - b.at);
-  if (rows <= GROUND_TRUTH_MAX_LINES) return { lines: byTime.map((l) => l.text), rows, perBot };
+  if (rows <= GROUND_TRUTH_MAX_LINES)
+    return { lines: byTime.map((l) => l.text), rows, perBot, unreadable };
   // Over the cap: one line goes to the count of what is not shown.
   let room = GROUND_TRUTH_MAX_LINES - 1;
   const kept = new Set<TruthLine>();
@@ -339,7 +350,7 @@ export function groundTruthLines(
       .map(([tool, c]) => `${tool} ×${c.n}${c.failed ? ` (${c.failed} failed)` : ''}`),
   ];
   lines.push(`… ${rest.length} more records in the window not shown: ${parts.join(', ')}`);
-  return { lines, rows, perBot };
+  return { lines, rows, perBot, unreadable };
 }
 
 /**
@@ -386,6 +397,8 @@ export type JudgeResult =
     }
   /** The call failed or its answer was unreadable: leave the prediction as it is. */
   | { kind: 'skip' }
+  /** A ground-truth reader threw: no call made; judge again on a later pass. */
+  | { kind: 'unreadable'; readers: string[] }
   /** The budget or the breaker refused: stop the pass. */
   | { kind: 'stop'; reason: 'cap' | 'tokens' | 'breaker' };
 
@@ -403,7 +416,8 @@ const RESOLVE_SYSTEM = [
  * Judge one prediction over the window it was open (`createdAt` → `dueAt`).
  * With ground truth wired and nothing recorded about the bots it names — no
  * tool call, no cycle, no watcher row naming them — the answer is `unknown`
- * without a call. Never throws.
+ * without a call. A ground-truth reader that throws (the bot list included)
+ * returns `unreadable` without a call. Never throws.
  */
 export async function judgePrediction(p: Neuron, deps: JudgeDeps): Promise<JudgeResult> {
   const from = Date.parse(p.createdAt);
@@ -415,11 +429,12 @@ export async function judgePrediction(p: Neuron, deps: JudgeDeps): Promise<Judge
     try {
       all = deps.groundTruth.bots();
     } catch {
-      all = [];
+      return { kind: 'unreadable', readers: ['bots'] };
     }
     const bots = predictionBots(p.text, all);
     const named = bots.length > 0 && bots.length < all.length;
     const truth = groundTruthLines(bots, from, to, deps.groundTruth);
+    if (truth.unreadable.length) return { kind: 'unreadable', readers: truth.unreadable };
     const names = bots.map((b) => b.name || b.id);
     // A watcher row naming a predicted bot is something recorded about it,
     // however many other bots it also names.
@@ -500,12 +515,32 @@ export async function resolvePredictions(
   const due = duePredictions(deps.graph, deps.now()).slice(0, deps.max ?? RESOLVE_MAX_PER_PASS);
   let resolved = 0;
   for (const p of due) {
-    const judged = await judgePrediction(p, deps);
+    let judged = await judgePrediction(p, deps);
+    if (judged.kind === 'unreadable') {
+      const passes = (Number(p.meta?.unreadablePasses) || 0) + 1;
+      deps.logger.warn(
+        { predictionId: p.id, readers: judged.readers, pass: passes, max: UNREADABLE_MAX_PASSES },
+        passes < UNREADABLE_MAX_PASSES
+          ? 'watcher: ground truth unreadable; prediction left pending for the next pass'
+          : 'watcher: ground truth still unreadable; prediction resolved unknown'
+      );
+      if (passes < UNREADABLE_MAX_PASSES) {
+        deps.graph.patchMeta(p.id, { unreadablePasses: String(passes) }, []);
+        continue;
+      }
+      judged = {
+        kind: 'answer',
+        resolution: {
+          outcome: 'unknown',
+          evidence: `Ground-truth records unreadable for ${passes} passes (${judged.readers.join(', ')}).`,
+        },
+      };
+    }
     if (judged.kind === 'skip') continue;
     if (judged.kind === 'stop') return { resolved, stopped: judged.reason };
     const at = new Date(deps.now()).toISOString();
     const { set, remove, brier } = resolutionMeta(p, judged.resolution, at, judged.call?.model);
-    deps.graph.patchMeta(p.id, set, remove);
+    deps.graph.patchMeta(p.id, set, [...remove, 'unreadablePasses']);
     const call = judged.call;
     deps.log.say(
       'integrate',

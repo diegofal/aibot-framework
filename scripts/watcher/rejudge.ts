@@ -7,6 +7,7 @@
  * read only the watcher's own rows and scored every one `happened: false`.
  *
  *   bun scripts/watcher/rejudge.ts [--dry-run] [--apply] [--limit N] [--config <path>]
+ *                                  [--watcher-url <base> --token <api key>]
  *
  * Admin, inside the container. Dry run by default: prints old → new per
  * prediction and writes nothing. `--apply` writes the new resolution onto the
@@ -19,8 +20,15 @@
  * With `--apply`, stop the watcher first (dashboard → Watcher → Stop): the
  * running process owns the graph files and would compact its in-memory copy
  * over these writes. Start it again afterwards; `start()` reloads the graph.
+ * `--apply` refuses to write unless it can tell the watcher is stopped: with
+ * `--watcher-url` (+ `--token`) `GET <url>/api/watcher` must report
+ * `running: false` (or `enabled: false`) before anything runs; and always,
+ * after the model calls and before the first write, the graph files must
+ * have the same mtime and size as when they were loaded (`graphFilesGuard`).
+ * Writes are held until every call is done, so an abort writes nothing.
  */
-import { join } from 'node:path';
+import { statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { LlmQueryLog } from '../../src/bot/llm-query-log';
 import { loadConfig } from '../../src/config';
 import { resolveStatsDirs } from '../../src/stats/paths';
@@ -36,7 +44,7 @@ import {
   resolutionMeta,
   watcherLogLines,
 } from '../../src/watcher/outcomes';
-import { watcherDir, watcherLogDir } from '../../src/watcher/paths';
+import { graphFiles, watcherDir, watcherLogDir } from '../../src/watcher/paths';
 import type { Neuron, WatcherConfig } from '../../src/watcher/types';
 import { fleetToolCalls } from '../../src/watcher/watcher';
 import { createCliLogger, fail, parseArgs } from '../system-cli';
@@ -44,14 +52,74 @@ import { createCliLogger, fail, parseArgs } from '../system-cli';
 export interface RejudgeArgs {
   apply: boolean;
   limit?: number;
+  /** Dashboard base URL; with it, `--apply` first asks the watcher whether it runs. */
+  watcherUrl?: string;
+  token?: string;
 }
 
 export function parseRejudgeArgs(argv: string[]): RejudgeArgs {
   const args = parseArgs(argv);
   const limit = Number(args.values.get('limit'));
+  const watcherUrl = args.values.get('watcher-url');
+  const token = args.values.get('token');
   return {
     apply: args.flags.has('apply'),
     ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+    ...(watcherUrl ? { watcherUrl } : {}),
+    ...(token ? { token } : {}),
+  };
+}
+
+/**
+ * Ask the dashboard whether the watcher runs: only `running: false` (or a
+ * watcher that is not enabled) passes; an error, a non-2xx or an answer
+ * without `running` refuses. Never throws.
+ */
+export async function confirmWatcherStopped(
+  baseUrl: string,
+  token: string | undefined,
+  fetchFn: typeof fetch = fetch
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const url = `${baseUrl.replace(/\/+$/, '')}/api/watcher`;
+  try {
+    const res = await fetchFn(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) return { ok: false, reason: `GET ${url} answered ${res.status}` };
+    const body = (await res.json()) as { enabled?: boolean; running?: boolean } | null;
+    if (body?.enabled === false || body?.running === false) return { ok: true };
+    if (body?.running === true) {
+      return { ok: false, reason: 'the watcher is running: stop it first (dashboard → Watcher)' };
+    }
+    return { ok: false, reason: `GET ${url} did not say whether the watcher runs` };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `could not reach ${url}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * Snapshot the graph files' mtime and size now; the returned check names the
+ * ones that changed since (someone else wrote the graph), or null.
+ */
+export function graphFilesGuard(dir: string): () => string | null {
+  const files = Object.values(graphFiles(dir));
+  const stamp = (f: string) => {
+    try {
+      const st = statSync(f);
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return 'missing';
+    }
+  };
+  const before = new Map(files.map((f) => [f, stamp(f)]));
+  return () => {
+    const changed = files.filter((f) => stamp(f) !== before.get(f)).map((f) => basename(f));
+    return changed.length
+      ? `${changed.join(', ')} changed since the graph was loaded: is the watcher running? Nothing written.`
+      : null;
   };
 }
 
@@ -70,12 +138,19 @@ export interface RejudgeDeps extends JudgeDeps {
   now: () => number;
   apply: boolean;
   limit?: number;
+  /**
+   * With `apply`, called once after every model call and before the first
+   * write: a string aborts the writes (the reason), null lets them through.
+   */
+  beforeWrite?: () => string | null;
 }
 
 export interface RejudgeReport {
   rows: RejudgeRow[];
   applied: number;
   stopped?: 'cap' | 'tokens' | 'breaker';
+  /** `beforeWrite` refused: why. Nothing was written. */
+  aborted?: string;
 }
 
 const previousOf = (n: Neuron): PredictionOutcome => {
@@ -98,16 +173,24 @@ function rejudgeable(graph: Pick<Graph, 'list'>): Neuron[] {
     .sort((a, b) => Date.parse(a.meta?.resolvedAt ?? '') - Date.parse(b.meta?.resolvedAt ?? ''));
 }
 
-/** Judge again; write only with `apply`. A refused call (budget, breaker) stops the run. Never throws. */
+/**
+ * Judge again; write only with `apply`, and only after every call is done and
+ * `beforeWrite` let it. A refused call (budget, breaker) stops the judging;
+ * what was answered before it is still written. Never throws.
+ */
 export async function runRejudge(deps: RejudgeDeps): Promise<RejudgeReport> {
   const todo = rejudgeable(deps.graph).slice(0, deps.limit ?? Number.POSITIVE_INFINITY);
   const rows: RejudgeRow[] = [];
-  let applied = 0;
+  const writes: Array<{ id: string; set: Record<string, string>; remove: string[] }> = [];
+  let stopped: RejudgeReport['stopped'];
   for (const p of todo) {
     const previous = previousOf(p);
     const judged = await judgePrediction(p, deps);
-    if (judged.kind === 'stop') return { rows, applied, stopped: judged.reason };
-    if (judged.kind === 'skip') {
+    if (judged.kind === 'stop') {
+      stopped = judged.reason;
+      break;
+    }
+    if (judged.kind === 'skip' || judged.kind === 'unreadable') {
       rows.push({ id: p.id, text: p.text, previous, next: null, changed: false });
       continue;
     }
@@ -127,18 +210,32 @@ export async function runRejudge(deps: RejudgeDeps): Promise<RejudgeReport> {
       p.meta?.resolvedAt as string,
       judged.call?.model
     );
-    deps.graph.patchMeta(
-      p.id,
-      {
+    writes.push({
+      id: p.id,
+      set: {
         ...set,
         rejudgedAt: new Date(deps.now()).toISOString(),
         previousHappened: p.meta?.happened ?? '',
       },
-      remove
-    );
-    applied++;
+      remove,
+    });
   }
-  return { rows, applied };
+  const done = (extra: Partial<RejudgeReport>): RejudgeReport => ({
+    rows,
+    applied: 0,
+    ...(stopped ? { stopped } : {}),
+    ...extra,
+  });
+  if (!writes.length) return done({});
+  let refused: string | null = null;
+  try {
+    refused = deps.beforeWrite?.() ?? null;
+  } catch (err) {
+    refused = `write check failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (refused) return done({ aborted: refused });
+  for (const w of writes) deps.graph.patchMeta(w.id, w.set, w.remove);
+  return done({ applied: writes.length });
 }
 
 async function main(argv: string[]): Promise<void> {
@@ -151,8 +248,13 @@ async function main(argv: string[]): Promise<void> {
   const cfg = (config.watcher as WatcherConfig | undefined) ?? undefined;
   if (!cfg) fail('no watcher config');
   const dir = watcherDir(config);
+  if (args.apply && args.watcherUrl) {
+    const stopped = await confirmWatcherStopped(args.watcherUrl, args.token);
+    if (!stopped.ok) fail(`--apply refused: ${stopped.reason}`);
+  }
   const graph = new Graph(dir, { logger });
   graph.load();
+  const beforeWrite = graphFilesGuard(dir);
   const log = new WatcherLog(watcherLogDir(dir), { logger });
   const tier = createWatcherClients(config, { logger }).notice;
   const client = instrumented(tier, {
@@ -179,6 +281,7 @@ async function main(argv: string[]): Promise<void> {
     logger,
     now: Date.now,
     apply: args.apply,
+    beforeWrite,
     ...(args.limit ? { limit: args.limit } : {}),
   });
   for (const r of report.rows) {
@@ -193,7 +296,8 @@ async function main(argv: string[]): Promise<void> {
       args.apply ? '' : ' (dry run: --apply to write)'
     }${report.stopped ? `; stopped: ${report.stopped}` : ''}\n`
   );
-  if (args.apply) graph.compact();
+  if (report.aborted) fail(`--apply refused: ${report.aborted}`);
+  if (args.apply && report.applied > 0) graph.compact();
 }
 
 if (import.meta.main) {

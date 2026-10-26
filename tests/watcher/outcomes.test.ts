@@ -11,6 +11,7 @@ import {
   CYCLE_START_LOOKBACK_MS,
   type GroundTruthCycle,
   type GroundTruthTool,
+  UNREADABLE_MAX_PASSES,
   applyServed,
   brierScore,
   duePredictions,
@@ -678,5 +679,94 @@ describe('the judge evidence: fair, honest and within the deadline (review 2026-
     ];
     const out = groundTruthLines(one, from(), t, deps([], cycles));
     expect(out.lines).toEqual([`${at(5)} Jarvis-Factory cycle completed: carried over`]);
+  });
+});
+
+describe('an unreadable ground truth defers the resolution (review 2026-10-25, 3)', () => {
+  const BOTS = [{ id: 'scout', name: 'Scout' }];
+  const okTool: GroundTruthTool = {
+    ts: '2026-10-23T05:00:00.000Z',
+    tool: 'web_fetch',
+    success: true,
+  };
+  const due = (s: ReturnType<typeof setup>) => {
+    const now = t;
+    t = now - 24 * 3_600_000;
+    try {
+      return s.predict('Scout fetches one more page', now - 1000);
+    } finally {
+      t = now;
+    }
+  };
+  const run = (s: ReturnType<typeof setup>, deps: object, warns: string[]) =>
+    resolvePredictions({
+      graph: s.graph,
+      client: s.client,
+      log: s.log,
+      now: () => t,
+      events: () => [],
+      groundTruth: { bots: () => BOTS, ...deps },
+      logger: { warn: (_o: object, msg: string) => warns.push(msg) },
+    });
+
+  test('groundTruthLines says which reader threw', () => {
+    const out = groundTruthLines(BOTS, 0, Date.parse('2026-10-24T00:00:00Z'), {
+      bots: () => BOTS,
+      tools: () => {
+        throw new Error('EBUSY');
+      },
+      cycles: () => [],
+    });
+    expect(out.unreadable).toEqual(['tools:scout']);
+  });
+
+  test('a reader that throws leaves the prediction pending, without a call, with one warning; the next pass resolves it', async () => {
+    const s = setup(async () => ok('{"outcome": "happened", "evidence": "a web_fetch"}'));
+    const p = due(s);
+    const warns: string[] = [];
+    let failing = true;
+    const deps = {
+      tools: () => {
+        if (failing) throw new Error('EBUSY');
+        return [okTool];
+      },
+      cycles: () => [],
+    };
+    const first = await run(s, deps, warns);
+    expect(first.resolved).toBe(0);
+    expect(s.prompts).toHaveLength(0);
+    expect(warns).toHaveLength(1);
+    expect(s.graph.get(p.id)?.meta?.resolvedAt).toBeUndefined();
+    expect(s.graph.get(p.id)?.meta?.unreadablePasses).toBe('1');
+    failing = false;
+    const second = await run(s, deps, warns);
+    expect(second.resolved).toBe(1);
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('happened');
+    expect(meta.unreadablePasses).toBeUndefined();
+  });
+
+  test('a cycle reader still unreadable after 3 passes resolves unknown with "records unreadable"', async () => {
+    const s = setup(async () => ok('{"outcome": "happened"}'));
+    const p = due(s);
+    const warns: string[] = [];
+    const deps = {
+      tools: () => [okTool],
+      cycles: () => {
+        throw new Error('EACCES');
+      },
+    };
+    for (let i = 1; i <= UNREADABLE_MAX_PASSES - 1; i++) {
+      expect((await run(s, deps, warns)).resolved).toBe(0);
+      expect(s.graph.get(p.id)?.meta?.resolvedAt).toBeUndefined();
+    }
+    expect((await run(s, deps, warns)).resolved).toBe(1);
+    expect(s.prompts).toHaveLength(0);
+    const meta = s.graph.get(p.id)?.meta ?? {};
+    expect(meta.outcome).toBe('unknown');
+    expect(meta.evidence).toContain('records unreadable');
+    expect(meta.happened).toBeUndefined();
+    expect(meta.brier).toBeUndefined();
+    expect(warns).toHaveLength(UNREADABLE_MAX_PASSES);
   });
 });

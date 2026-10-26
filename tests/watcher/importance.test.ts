@@ -283,3 +283,34 @@ describe('planForgetting (review 2026-10-25: below the target too)', () => {
     ).toHaveLength(4);
   });
 });
+
+describe('forgetting never takes an open prediction (review 2026-10-25)', () => {
+  test('an unresolved prediction and what it predicts about are protected until it resolves', () => {
+    const g = graph();
+    const about = fact(g, 'the bot retries the import');
+    const unrelated = fact(g, 'unrelated low fact');
+    const p = g.addNeuron({
+      kind: 'prediction',
+      text: 'b1 retries the import tomorrow',
+      support: { bots: ['b1'] },
+      createdBy: 'watcher',
+      activations: 1,
+      meta: { dueAt: new Date(t + 30 * DAY).toISOString(), probability: '0.6' },
+    } as never);
+    g.addEdge({ from: p.id, to: about.id, rel: 'predicts', weight: 0.6, createdBy: 'watcher' });
+    t += 10 * DAY;
+    const c = ctx({ nowMs: t, graph: g });
+    expect(protectionOf(g.get(p.id) as Neuron, c)).toBe('pending');
+    expect(protectionOf(g.get(about.id) as Neuron, c)).toBe('pending');
+    expect(importanceOf(g.get(p.id) as Neuron, c).reason).toContain('open prediction');
+    const plan = planForgetting(g.list(), c, { threshold: 0.15, target: 0 });
+    const ids = plan.archive.map((x) => x.neuron.id);
+    expect(ids).not.toContain(p.id);
+    expect(ids).not.toContain(about.id);
+    expect(ids).toContain(unrelated.id);
+    // once resolved, the open-prediction protection ends
+    g.patchMeta(p.id, { resolvedAt: new Date(t).toISOString(), outcome: 'unknown' }, []);
+    expect(protectionOf(g.get(p.id) as Neuron, c)).not.toBe('pending');
+    expect(protectionOf(g.get(about.id) as Neuron, c)).not.toBe('pending');
+  });
+});
