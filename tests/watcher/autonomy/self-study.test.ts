@@ -291,7 +291,7 @@ describe('vetting what the model proposed', () => {
     ]);
   });
 
-  test('no support is dropped; more than 3 are dropped', () => {
+  test('no support is dropped and takes no slot of the 3', () => {
     const v = vetProposals(
       [
         proposal({ support: [] }),
@@ -302,8 +302,9 @@ describe('vetting what the model proposed', () => {
       ids,
       current
     );
-    expect(v.accepted.map((p) => p.title)).toEqual(['a', 'b']);
-    expect(v.dropped.map((d) => d.why)).toEqual(['it cites no records', 'more than 3 proposals']);
+    // Review PR #25: the invalid first one no longer takes a slot (was ['a', 'b']).
+    expect(v.accepted.map((p) => p.title)).toEqual(['a', 'b', 'c']);
+    expect(v.dropped.map((d) => d.why)).toEqual(['it cites no records']);
   });
 
   test('proposedBy is always watcher and `from` is the live value the allowlist showed', () => {
@@ -368,6 +369,8 @@ function harness(
     ceiling?: number;
     noticeCap?: number;
     autonomy?: SelfStudyAutonomy;
+    /** No autonomy API attached at all (`autonomy()` is undefined). */
+    noAutonomy?: boolean;
     running?: boolean;
     startedAtMs?: number;
   } = {}
@@ -426,7 +429,7 @@ function harness(
     watcherDir,
     config: () => config,
     client: () => instrumentedClient,
-    autonomy: () => autonomy,
+    autonomy: () => (opts.noAutonomy ? undefined : autonomy),
     log: {
       say: (_phase, op, text, extra) => {
         rows.push({ op, text, extra: extra as Record<string, unknown> });
@@ -700,5 +703,116 @@ describe('the sentinel stays outside the watcher dir', () => {
     const inside = (p: string) => relative(h.watcherDir, p).split(/[\\/]/)[0] !== '..';
     expect(inside(notesFile(h.watcherDir))).toBe(true);
     expect(inside(killSentinelPath(config))).toBe(false);
+  });
+});
+
+describe('review round 1 (PR #25)', () => {
+  test('a throw from submit after the paid call still writes the state: the next tick does not call again', async () => {
+    const h = harness({
+      reply: validAnswer,
+      autonomy: {
+        enabled: () => true,
+        submit: async () => {
+          throw new Error('store down');
+        },
+      },
+    });
+    const out = await h.study.run('schedule');
+    expect(out.status).toBe('ran');
+    expect(h.calls()).toBe(1);
+    const state = readSelfStudyState(h.watcherDir);
+    expect(state.lastRunAt).toBe(new Date(t).toISOString());
+    expect(state.lastOutcome?.rejected.map((r) => r.why)).toEqual([
+      'the proposal store failed (store down)',
+    ]);
+    expect(h.study.tick(t + 11 * 60_000)).toBe(false);
+    expect(h.calls()).toBe(1);
+  });
+
+  test('any other throw after the paid call is a failed run that was paid for: state and notes written', async () => {
+    const h = harness({
+      reply: validAnswer,
+      autonomy: {
+        enabled: () => true,
+        // a malformed answer from the store: reading `proposal.id` throws
+        submit: async () => ({ ok: true }) as never,
+      },
+    });
+    const out = await h.study.run('schedule');
+    expect(out.status === 'ran' && out.outcome.status).toBe('failed');
+    const state = readSelfStudyState(h.watcherDir);
+    expect(state.lastRunAt).toBe(new Date(t).toISOString());
+    expect(state.lastOutcome?.status).toBe('failed');
+    expect(state.lastOutcome?.costUsd).toBe(0.02);
+    expect(readFileSync(notesFile(h.watcherDir), 'utf-8')).toContain('The run failed');
+    expect(h.study.tick(t + 11 * 60_000)).toBe(false);
+    expect(h.calls()).toBe(1);
+  });
+
+  test("watcher.usdPerDay is the last 7 whole UTC days ÷ 7, never today's partial day", () => {
+    const config = testConfig(join(root, 'data'));
+    const asked: string[] = [];
+    const readers = plantedReaders({
+      watcherDays: (dates) => {
+        asked.push(...dates);
+        return dates.map((date) => ({
+          date,
+          notice: { calls: 1, costUsd: 1 },
+          integrate: { calls: 0, costUsd: 0 },
+        }));
+      },
+    });
+    const d = buildDigest({ config, readers, nowMs: t });
+    expect(asked).toEqual([
+      '2026-10-18',
+      '2026-10-19',
+      '2026-10-20',
+      '2026-10-21',
+      '2026-10-22',
+      '2026-10-23',
+      '2026-10-24',
+    ]);
+    expect(d.watcher.usdPerDay).toBe(1);
+    expect(d.watcher.days).toBe(7);
+  });
+
+  test('the 3-proposal cap counts proposals that passed vetting, not array positions', () => {
+    const ids = new Set(['d-b1-cycles']);
+    const current = new Map<string, unknown>([['bots.b1.agentLoop.every', '2h']]);
+    const p = (title: string, support: string[] = ['d-b1-cycles']) => ({
+      kind: 'fleet-cadence',
+      title,
+      support,
+      changes: [{ path: 'bots.b1.agentLoop.every', to: '6h' }],
+    });
+    const v = vetProposals([p('bad', []), 'nope', p('a'), p('b'), p('c'), p('d')], ids, current);
+    expect(v.accepted.map((x) => x.title)).toEqual(['a', 'b', 'c']);
+    expect(v.dropped.map((x) => x.why)).toEqual([
+      'it cites no records',
+      'not an object',
+      'more than 3 proposals',
+    ]);
+  });
+
+  test('never attached → "autonomy not attached", not "proposals are off"', async () => {
+    const out = await harness({ noAutonomy: true }).study.run();
+    expect(out).toEqual({ status: 'unavailable', reason: 'The autonomy API is not attached' });
+    const off = await harness({ proposals: false }).study.run();
+    expect(off.status === 'unavailable' && off.reason).toContain('Proposals are off');
+  });
+
+  test('the state is re-read after the awaited call: a field written meanwhile is kept', async () => {
+    const stateFile = selfStudyStateFile(join(root, 'data', 'watcher'));
+    const h = harness({
+      reply: async () => {
+        mkdirSync(join(stateFile, '..'), { recursive: true });
+        writeFileSync(stateFile, JSON.stringify({ writtenMeanwhile: 'kept' }));
+        return '{"findings":[],"proposals":[]}';
+      },
+    });
+    await h.study.run();
+    const raw = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    expect(raw.writtenMeanwhile).toBe('kept');
+    expect(raw.lastRunAt).toBe(new Date(t).toISOString());
   });
 });

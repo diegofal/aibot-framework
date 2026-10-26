@@ -26,10 +26,10 @@
  * `lastAttemptAt` and the last outcome. Every builder here is pure over
  * injected readers and never throws; `SelfStudy` schedules and runs it.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseLLMJson } from '../../bot/llm-json-parser';
-import type { Config } from '../../config';
+import { type Config, writeJsonFileAtomic, writeTextFileAtomic } from '../../config';
 import { resolveStatsDirs } from '../../stats/paths';
 import { readAgentCycles } from '../../stats/readers/agent-cycles';
 import { readLlmEntries } from '../../stats/readers/llm-query-log';
@@ -194,7 +194,9 @@ const REASON_SOURCES = new Set([
 /**
  * The class of an error or skipped cycle, derived by code from its reason. Only
  * the class reaches the digest, never the reason text (it can quote a plan,
- * a page or a message).
+ * a page or a message). The regexes map a reason — for a skipped cycle often
+ * the planner's own prose — to one of the fixed classes above; the result
+ * feeds a count in the digest and never an action.
  */
 export function cycleClass(row: Pick<CycleRow, 'reason' | 'reasonSource'>): string {
   const reason = typeof row.reason === 'string' ? row.reason.toLowerCase() : '';
@@ -327,10 +329,12 @@ export function buildDigest(input: DigestInput): FleetDigest {
   const cycles = sum((b) => b.cycles.total);
   const error = sum((b) => b.cycles.error);
 
+  // The watcher's own spend: the last `days` whole UTC days (today is partial
+  // and left out), so the per-day figure never over-counts.
+  const todayStart = Date.parse(`${utcDate(nowMs)}T00:00:00Z`);
   const dates: string[] = [];
-  for (let t = sinceMs; t <= nowMs + 1; t += DAY_MS) dates.push(utcDate(t));
-  if (dates[dates.length - 1] !== utcDate(nowMs)) dates.push(utcDate(nowMs));
-  const wDays = safeRows(() => readers.watcherDays([...new Set(dates)]));
+  for (let k = days; k >= 1; k--) dates.push(utcDate(todayStart - k * DAY_MS));
+  const wDays = safeRows(() => readers.watcherDays(dates));
   const notice = { calls: 0, usd: 0 };
   const integrate = { calls: 0, usd: 0 };
   for (const d of wDays) {
@@ -741,14 +745,14 @@ export function vetProposals(
   digestIds: ReadonlySet<string>,
   current: ReadonlyMap<string, unknown>
 ): VetResult {
+  // The model's JSON decides only what is *proposed*: what reaches the store
+  // is what passes these checks, and what applies is decided by the rung 0
+  // parser (`ProposalStore.submit`: allowlist, ranges, locks) and then by the
+  // operator's approval. Nothing here acts on the model's text.
   const accepted: VetResult['accepted'] = [];
   const dropped: VetResult['dropped'] = [];
-  raw.forEach((p, i) => {
+  raw.forEach((p) => {
     const title = titleOf(p);
-    if (i >= MAX_SELF_STUDY_PROPOSALS) {
-      dropped.push({ title, why: `more than ${MAX_SELF_STUDY_PROPOSALS} proposals` });
-      return;
-    }
     if (!p || typeof p !== 'object' || Array.isArray(p)) {
       dropped.push({ title, why: 'not an object' });
       return;
@@ -778,6 +782,11 @@ export function vetProposals(
           return out;
         })
       : (obj.changes as unknown[]);
+    // The cap counts proposals that passed vetting: an invalid one never takes a slot.
+    if (accepted.length >= MAX_SELF_STUDY_PROPOSALS) {
+      dropped.push({ title, why: `more than ${MAX_SELF_STUDY_PROPOSALS} proposals` });
+      return;
+    }
     const { proposedBy: _ignored, ...rest } = obj;
     accepted.push({ ...rest, changes, proposedBy: 'watcher' } as VetResult['accepted'][number]);
   });
@@ -832,19 +841,9 @@ export function readSelfStudyState(watcherDir: string): SelfStudyState {
   }
 }
 
-function writeAtomic(path: string, dir: string, text: string): void {
-  mkdirSync(dir, { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, text, 'utf-8');
-  renameSync(tmp, path);
-}
-
 export function writeSelfStudyState(watcherDir: string, state: SelfStudyState): void {
-  writeAtomic(
-    selfStudyStateFile(watcherDir),
-    autonomyDir(watcherDir),
-    `${JSON.stringify(state, null, 2)}\n`
-  );
+  mkdirSync(autonomyDir(watcherDir), { recursive: true });
+  writeJsonFileAtomic(selfStudyStateFile(watcherDir), state);
 }
 
 export function readNotes(watcherDir: string): string | undefined {
@@ -976,7 +975,9 @@ export class SelfStudy {
     if (this.deps.killed()) return 'The hard kill is on';
     const s = selfStudySettings(this.deps.config());
     if (!s.enabled) return 'Self-study is off (watcher.autonomy.selfStudy.enabled)';
-    if (!s.proposals || !this.deps.autonomy()?.enabled()) {
+    const autonomy = this.deps.autonomy();
+    if (!autonomy) return 'The autonomy API is not attached';
+    if (!s.proposals || !autonomy.enabled()) {
       return 'Proposals are off (watcher.autonomy.proposals.enabled)';
     }
     if (!this.deps.client()) return 'The watcher has no notice model';
@@ -1057,8 +1058,15 @@ export class SelfStudy {
       errorShare: digest.fleet.errorShare,
       watcherUsdPerDay: digest.watcher.usdPerDay,
     };
-    const base = { at, trigger, findings: [], proposed: [], dropped: [], rejected: [], headline };
-    const state = readSelfStudyState(this.deps.watcherDir);
+    const base: Omit<SelfStudyOutcome, 'status'> = {
+      at,
+      trigger,
+      findings: [],
+      proposed: [],
+      dropped: [],
+      rejected: [],
+      headline,
+    };
 
     if (isCancelled()) return { status: 'cancelled' };
     const res = await client.chat(
@@ -1067,6 +1075,45 @@ export class SelfStudy {
     );
     // A stop discards the answer: nothing is written, not even the state.
     if (isCancelled()) return { status: 'cancelled' };
+    try {
+      return await this.afterCall(res, { at, base, rendered, allowlist, autonomy });
+    } catch (err) {
+      // A throw after the call still writes the state: a call that reached the
+      // model was paid for and sets the weekly clock, so the scheduler never
+      // pays again for the same run; a refused one waits the retry.
+      this.deps.logger?.warn({ err }, 'Watcher: self-study failed after the model call');
+      const outcome: SelfStudyOutcome = {
+        ...base,
+        status: 'failed',
+        reason: 'the run failed after the model answered',
+        ...(res.ok
+          ? {
+              model: res.model,
+              tokens: res.tokens,
+              ...(res.costUsd !== undefined ? { costUsd: res.costUsd } : {}),
+              durationMs: res.durationMs,
+              ...(res.recordId ? { recordId: res.recordId } : {}),
+            }
+          : {}),
+      };
+      if (res.ok) this.finish(outcome, at);
+      else this.persist({ lastAttemptAt: at, lastOutcome: outcome });
+      return { status: 'ran', outcome };
+    }
+  }
+
+  /** Everything after the model call; `execute` writes the state if this throws. */
+  private async afterCall(
+    res: Awaited<ReturnType<InstrumentedClient['chat']>>,
+    c: {
+      at: string;
+      base: Omit<SelfStudyOutcome, 'status'>;
+      rendered: RenderedDigest;
+      allowlist: ReturnType<typeof renderAllowlist>;
+      autonomy: SelfStudyAutonomy;
+    }
+  ): Promise<SelfStudyRunResult> {
+    const { at, base, rendered, allowlist, autonomy } = c;
 
     if (!res.ok && res.reason !== 'error') {
       const outcome: SelfStudyOutcome = {
@@ -1074,7 +1121,7 @@ export class SelfStudy {
         status: 'skipped',
         reason: REFUSAL_WORDS[res.reason] ?? res.reason,
       };
-      this.persist({ ...state, lastAttemptAt: at, lastOutcome: outcome });
+      this.persist({ lastAttemptAt: at, lastOutcome: outcome });
       this.say(
         'self-study:skipped',
         `I did not run my self-study: ${outcome.reason}. I will try again in ${
@@ -1092,7 +1139,7 @@ export class SelfStudy {
         durationMs: res.durationMs,
         ...(res.recordId ? { recordId: res.recordId } : {}),
       };
-      this.persist({ ...state, lastAttemptAt: at, lastOutcome: outcome });
+      this.persist({ lastAttemptAt: at, lastOutcome: outcome });
       this.say(
         'self-study:failed',
         `My self-study failed: ${outcome.reason}. I will try again in ${SELF_STUDY_RETRY_MS / HOUR_MS} h.`,
@@ -1123,7 +1170,7 @@ export class SelfStudy {
         status: 'failed',
         reason: 'the answer was not readable JSON',
       };
-      this.finish(state, outcome, at);
+      this.finish(outcome, at);
       this.say(
         'self-study:failed',
         'My self-study answer was not readable, so I proposed nothing. The next run is in a week.',
@@ -1140,7 +1187,14 @@ export class SelfStudy {
     const rejected: SelfStudyOutcome['rejected'] = [];
     for (const input of vet.accepted) {
       const title = titleOf(input);
-      const r = await autonomy.submit(input);
+      let r: Awaited<ReturnType<SelfStudyAutonomy['submit']>>;
+      try {
+        r = await autonomy.submit(input);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        rejected.push({ title, why: `the proposal store failed (${oneLine(msg, 160)})` });
+        continue;
+      }
       if (r.ok) {
         proposed.push({ id: r.proposal.id, title: r.proposal.title, status: r.proposal.status });
       } else {
@@ -1156,28 +1210,29 @@ export class SelfStudy {
       dropped: vet.dropped,
       rejected,
     };
-    this.finish(state, outcome, at);
+    this.finish(outcome, at);
     this.say('self-study:run', narrateSelfStudy(outcome), rowExtra);
     return { status: 'ran', outcome };
   }
 
   /** A run that reached the model: state (the weekly clock) and NOTES.md. */
-  private finish(state: SelfStudyState, outcome: SelfStudyOutcome, at: string): void {
-    this.persist({ ...state, lastRunAt: at, lastAttemptAt: at, lastOutcome: outcome });
+  private finish(outcome: SelfStudyOutcome, at: string): void {
+    this.persist({ lastRunAt: at, lastAttemptAt: at, lastOutcome: outcome });
     try {
-      writeAtomic(
-        notesFile(this.deps.watcherDir),
-        autonomyDir(this.deps.watcherDir),
-        renderNotes(outcome)
-      );
+      mkdirSync(autonomyDir(this.deps.watcherDir), { recursive: true });
+      writeTextFileAtomic(notesFile(this.deps.watcherDir), renderNotes(outcome));
     } catch (err) {
       this.deps.logger?.warn({ err }, 'Watcher: self-study notes not written');
     }
   }
 
-  private persist(state: SelfStudyState): void {
+  /** Merged over the state as it reads now (re-read after the awaited call, never a pre-call snapshot). */
+  private persist(patch: SelfStudyState): void {
     try {
-      writeSelfStudyState(this.deps.watcherDir, state);
+      writeSelfStudyState(this.deps.watcherDir, {
+        ...readSelfStudyState(this.deps.watcherDir),
+        ...patch,
+      });
     } catch (err) {
       this.deps.logger?.warn({ err }, 'Watcher: self-study state not written');
     }

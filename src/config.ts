@@ -1638,13 +1638,18 @@ export function botsPathFromConfigPath(configPath: string): string {
   return join(dirname(configPath), 'bots.json');
 }
 
-/**
- * Write `value` as pretty JSON (trailing newline) atomically: a sibling
- * `<path>.tmp` renamed over `path`, so a crash never leaves half a file.
- * The replacement keeps the mode of the file it replaces (a 0600 config with
- * inline secrets stays 0600, not the umask's 0644); a new file is 0600.
- */
+/** Write `value` as pretty JSON (trailing newline) atomically: see `writeTextFileAtomic`. */
 export function writeJsonFileAtomic(path: string, value: unknown): void {
+  writeTextFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * Write `text` atomically: a sibling `<path>.tmp` renamed over `path`, so a
+ * crash never leaves half a file. The replacement keeps the mode of the file
+ * it replaces (a 0600 config with inline secrets stays 0600, not the umask's
+ * 0644); a new file is 0600. The directory must exist.
+ */
+export function writeTextFileAtomic(path: string, text: string): void {
   const tmp = `${path}.tmp`;
   let mode = 0o600;
   try {
@@ -1652,7 +1657,7 @@ export function writeJsonFileAtomic(path: string, value: unknown): void {
   } catch {
     // no file yet: a file that holds config starts private
   }
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf-8', mode });
+  writeFileSync(tmp, text, { encoding: 'utf-8', mode });
   // `mode` on create is masked by the umask, and a stale tmp keeps its own.
   chmodSync(tmp, mode);
   renameSync(tmp, path);

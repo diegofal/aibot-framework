@@ -360,12 +360,18 @@ export class ProposalStore {
    * recorded (and not still `applying`) shows `approved`. `refresh` (every
    * tick and every decision) stores the same transitions; queued proposals
    * are promoted only there, so a slot freed by expiry is filled at the next
-   * tick. What `GET /api/watcher/proposals` and Needs You read.
+   * tick. What `GET /api/watcher/proposals` and Needs You read. `changeOf`:
+   * a lookup over one read of the ledger (what `list()` passes), so the
+   * ledger is never read once per pending proposal; absent → `changeFor`.
    */
-  view(nowMs: number = this.now()): Proposal[] {
+  view(
+    nowMs: number = this.now(),
+    changeOf?: (proposalId: string) => ChangeRecord | undefined
+  ): Proposal[] {
+    const lookup = changeOf ?? ((id: string) => this.changeOf(id));
     return readProposals(this.deps.watcherDir).map((p) => {
       if (p.status !== 'pending') return p;
-      const existing = this.changeOf(p.id);
+      const existing = lookup(p.id);
       if (existing) return existing.status === 'applying' ? p : approvedFrom(p, existing);
       if (p.expiresAt && Date.parse(p.expiresAt) <= nowMs) return { ...p, status: 'expired' };
       return p;

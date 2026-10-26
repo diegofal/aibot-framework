@@ -125,8 +125,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
     lockContext: () => ({ config }),
     apply: (p) => ledger.apply(p),
     // An apply-failed change never went live: its proposal can be approved again.
-    changeFor: (proposalId) =>
-      ledger.all().find((c) => c.proposalId === proposalId && c.status !== 'apply-failed'),
+    changeFor: (proposalId) => changeIn(ledger.all(), proposalId),
     logger: opts.logger,
   });
 
@@ -152,7 +151,9 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
       const s = proposalSettings(config);
       if (!s.enabled)
         return { enabled: false, proposals: [], changes: [], maxPending: s.maxPending };
-      const all = store.view(now());
+      // One read of the ledger for the whole list.
+      const ledgerAll = ledger.all();
+      const all = store.view(now(), (proposalId) => changeIn(ledgerAll, proposalId));
       const pending = all.filter((p) => p.status === 'pending');
       const decided = all
         .filter(
@@ -161,7 +162,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
         .sort(newestFirst((p: Proposal) => p.decidedAt ?? p.pendingAt ?? p.createdAt))
         .slice(0, LIST_HISTORY_LIMIT);
       // A change that is live, still settling or needs the operator is never cut by the history limit.
-      const byApplied = ledger.all().sort(newestFirst((c: ChangeRecord) => c.appliedAt));
+      const byApplied = ledgerAll.sort(newestFirst((c: ChangeRecord) => c.appliedAt));
       const open = (c: ChangeRecord) =>
         c.status === 'applied' ||
         c.status === 'revert-failed' ||
@@ -214,6 +215,11 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
       }),
     ready: () => recovered,
   };
+}
+
+/** A proposal's recorded change. An apply-failed change never went live: its proposal can be approved again. */
+function changeIn(changes: ChangeRecord[], proposalId: string): ChangeRecord | undefined {
+  return changes.find((c) => c.proposalId === proposalId && c.status !== 'apply-failed');
 }
 
 function newestFirst<T>(at: (x: T) => string) {
