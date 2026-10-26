@@ -14,11 +14,29 @@
  * The Mind panel under the ball lists what the ball holds, one tab per kind
  * (`watcher-mind-helpers.js`); a row opens its neuron, a legend kind filters
  * the ball to that kind.
+ * Autonomy rung 0 (`watcher-autonomy-helpers.js`): the hard-kill banner and
+ * the month spend in the header, and the Proposals panel under the ball
+ * (`/api/watcher/proposals`, two-step Approve / Revert, inline Reject note).
+ * The panel also mounts on the watcher-off screen (the ledger works without
+ * the watcher); while the kill banner shows, the state is re-read every
+ * `KILL_POLL_MS` so clearing the switch re-enables Start without a reload.
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
 import { closeSheet, confirmDialog, openSheet, showToast, skeleton } from '../ui/index.js';
 import { api, escapeHtml, getAuthToken } from './shared.js';
+import {
+  KILL_POLL_MS,
+  armClick,
+  isAutonomyRow,
+  killBannerHtml,
+  monthSpendHtml,
+  needsKillPoll,
+  proposalsPanelHtml,
+  shouldRedrawProposals,
+  startBlockedByKill,
+  watcherOffHtml,
+} from './watcher-autonomy-helpers.js';
 import { mountBall } from './watcher-ball.js';
 import {
   SPAWN_PACE,
@@ -88,6 +106,8 @@ const GRAPH_REFETCH_DEBOUNCE_MS = 1500;
 const MIND_REDRAW_MS = 800;
 /** Broadcasts the Mind panel holds (the route's maximum). */
 const BROADCAST_LIMIT = 200;
+/** `autonomy:*` log rows within this window share one proposals refetch. */
+const PROPOSALS_REFETCH_DEBOUNCE_MS = 1500;
 
 let page = null;
 /** Bumped on every destroy: a render whose awaits resolve after it gives up. */
@@ -102,9 +122,12 @@ export function destroyWatcher() {
   page.ball?.dispose();
   clearInterval(page.clock);
   clearInterval(page.slowClock);
+  clearInterval(page.killPoll);
   clearTimeout(page.replay?.timer);
   clearTimeout(page.graphRefetch);
   clearTimeout(page.mindTimer);
+  clearTimeout(page.autonomy?.refetch);
+  clearTimeout(page.autonomy?.disarm);
   page = null;
 }
 
@@ -117,7 +140,46 @@ function showOff() {
   const el = page?.el;
   destroyWatcher();
   closeSheet();
-  if (el) el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
+  if (el) mountOff(el, null);
+}
+
+/** The proposals panel's state, the same on the live page and the off screen. */
+function newAutonomy() {
+  return {
+    resp: null,
+    html: null,
+    refetch: null,
+    disarm: null,
+    ui: { armed: null, errors: {}, rejecting: {}, busy: null },
+  };
+}
+
+/**
+ * The off screen (`watcher.enabled: false`). Proposals and the change ledger
+ * work without the watcher, so the Proposals panel mounts here too and an
+ * applied change stays revertable; re-read on the slow clock (no socket).
+ */
+function mountOff(el, state) {
+  destroyWatcher();
+  el.innerHTML = `${TITLE}${watcherOffHtml(watcherDisabledHtml(), state)}`;
+  // `stopped`: no socket, ball or graph here; an empty model keeps a late
+  // continuation of the live page harmless (its hosts are gone, it draws nothing).
+  page = {
+    el,
+    off: true,
+    stopped: true,
+    busy: false,
+    model: createWatcherModel({ state }),
+    listeners: new AbortController(),
+    autonomy: newAutonomy(),
+    clock: null,
+    slowClock: null,
+  };
+  wire(el, page.listeners.signal);
+  void refreshProposals();
+  page.slowClock = setInterval(() => {
+    if (page) void refreshProposals();
+  }, SLOW_CLOCK_MS);
 }
 
 /* ── Rendering ───────────────────────────────────────────────────── */
@@ -136,9 +198,12 @@ function drawState({ forceTiers = false } = {}) {
   const view = { config: state?.config ?? null, busy: !!page.busy };
   const bar = host.querySelector('.watcher-state');
   const opts = { busy: page.busy, embedding: page.embedding };
+  drawAutonomyHead();
   if (!bar) {
     host.innerHTML = stateHtml(state, Date.now(), opts);
     page.tierView = view;
+    syncStartButton(host.querySelector('.watcher-state'));
+    syncKillPoll();
     return;
   }
   const parts = stateParts(state, Date.now(), opts);
@@ -150,14 +215,208 @@ function drawState({ forceTiers = false } = {}) {
   set('.watcher-counts', parts.counts);
   set('.watcher-notes', parts.notes);
   set('.watcher-embed', parts.embed);
-  const button = bar.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
-  syncStateButton(button, state, { busy: page.busy });
+  syncStartButton(bar);
+  syncKillPoll();
   const tiers = bar.querySelector('.watcher-tiers-host');
   const focused = !!tiers?.contains(document.activeElement);
   if (tiers && shouldRedrawTiers(page.tierView, view, focused, { force: forceTiers })) {
     tiers.innerHTML = parts.tiers;
     page.tierView = view;
   }
+}
+
+/** Start/Stop in place; Start stays visible but disabled while the hard kill is on (C1). */
+function syncStartButton(bar) {
+  const button = bar?.querySelector('[data-action="watcher-start"], [data-action="watcher-stop"]');
+  if (!button) return;
+  const state = page.model.state;
+  const killed = startBlockedByKill(state);
+  syncStateButton(button, state, { busy: page.busy || killed });
+  const title = killed ? 'The hard kill is on: clear it first' : '';
+  if (button.title !== title) button.title = title;
+}
+
+/**
+ * While the kill banner shows, re-read `GET /api/watcher` every `KILL_POLL_MS`
+ * (nothing publishes `watcher:state` while the watcher is stopped): clearing
+ * the switch re-enables Start without a reload. Only the page updates; the
+ * watcher is never started from here.
+ */
+function syncKillPoll() {
+  const want = needsKillPoll(page.model.state);
+  if (want && !page.killPoll) {
+    page.killPoll = setInterval(() => void pollKill(), KILL_POLL_MS);
+  } else if (!want && page.killPoll) {
+    clearInterval(page.killPoll);
+    page.killPoll = null;
+  }
+}
+
+async function pollKill() {
+  const mine = page;
+  if (!page || page.busy) return;
+  const res = await api('/api/watcher').catch(() => null);
+  if (page !== mine || !page || page.busy) return;
+  if (isWatcherOff(res)) return showOff();
+  if (!res || res.error) return;
+  page.model.state = mergeWatcherState(page.model.state, res);
+  drawState();
+}
+
+/** The kill banner above the state bar and the month spend under it (no controls: plain swaps). */
+function drawAutonomyHead() {
+  const state = page.model.state;
+  const set = (sel, html) => {
+    const node = $(sel);
+    if (!node) return;
+    if (node.innerHTML !== html) node.innerHTML = html;
+    node.hidden = !html;
+  };
+  set('#watcher-kill', killBannerHtml(state?.killed, Date.now()));
+  set('#watcher-month', monthSpendHtml(state?.month));
+}
+
+/* ── Proposals (autonomy rung 0) ─────────────────────────────────── */
+
+/**
+ * The Proposals panel. Rebuilt only when its markup changed and never while a
+ * rejection note has the focus, unless `force` (the page's own action). A
+ * focused button or note keeps the focus across a rebuild (`data-focus-key`).
+ */
+function drawProposals({ force = false } = {}) {
+  const host = $('#watcher-proposals');
+  if (!host) return;
+  const a = page.autonomy;
+  const html = proposalsPanelHtml(a.resp, { nowMs: Date.now(), ui: a.ui });
+  const active = host.contains(document.activeElement) ? document.activeElement : null;
+  const typing = !!active?.matches?.('[data-autonomy-note]');
+  if (!shouldRedrawProposals(a.html, html, { typing, force })) return;
+  const focusKey = active?.dataset?.focusKey ?? null;
+  const noteId = typing ? active.dataset.autonomyNote : null;
+  host.innerHTML = html;
+  host.hidden = !html;
+  a.html = html;
+  const again = noteId
+    ? host.querySelector(`[data-autonomy-note="${CSS.escape(noteId)}"]`)
+    : focusKey
+      ? host.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)
+      : null;
+  if (again && !again.disabled) {
+    again.focus();
+    if (noteId) again.setSelectionRange?.(again.value.length, again.value.length);
+  }
+}
+
+async function refreshProposals() {
+  const mine = page;
+  const res = await api('/api/watcher/proposals').catch(() => null);
+  if (page !== mine || !page) return;
+  page.autonomy.refetch = null;
+  // `enabled: false` (or no route yet: 404 `{ error }`) renders nothing; a
+  // failed re-read keeps what the panel showed.
+  if (res && !res.error && typeof res.enabled === 'boolean') page.autonomy.resp = res;
+  drawProposals();
+}
+
+function scheduleProposalsRefetch() {
+  if (!page || page.autonomy.refetch) return;
+  page.autonomy.refetch = setTimeout(() => void refreshProposals(), PROPOSALS_REFETCH_DEBOUNCE_MS);
+}
+
+/** First click arms (`armClick`), a second one within `ARM_MS` fires; the armed label resets by itself. */
+function armedFire(key) {
+  const a = page.autonomy;
+  const out = armClick(a.ui.armed, key, Date.now());
+  a.ui.armed = out.armed;
+  clearTimeout(a.disarm);
+  a.disarm = out.armed
+    ? setTimeout(
+        () => {
+          if (!page) return;
+          page.autonomy.ui.armed = null;
+          drawProposals({ force: true });
+        },
+        Math.max(0, out.armed.until - Date.now()) + 50
+      )
+    : null;
+  if (!out.fire) drawProposals({ force: true });
+  return out.fire;
+}
+
+/**
+ * One proposal or change action. `id` keys the card's busy state and its
+ * inline error: a 409 (any `{ error }`) shows on that card. The list is
+ * re-read after every action.
+ */
+async function autonomyAct(id, path, body, done) {
+  const a = page.autonomy;
+  if (a.ui.busy) return;
+  const mine = page;
+  a.ui.busy = id;
+  delete a.ui.errors[id];
+  drawProposals({ force: true });
+  const res = await api(path, { method: 'POST', ...(body ? { body } : {}) }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (page !== mine || !page) return;
+  a.ui.busy = null;
+  if (!res || res.error || res.enabled === false) {
+    a.ui.errors[id] = res?.error || (res?.enabled === false ? 'Proposals are off.' : 'No answer');
+  } else {
+    showToast(done);
+    delete a.ui.rejecting[id];
+  }
+  drawProposals({ force: true });
+  await refreshProposals();
+}
+
+function approveProposal(button) {
+  const id = button?.dataset.proposalId;
+  // The hash this button was rendered with: exactly the card on screen, never a re-fetched one.
+  const contentHash = button?.dataset.contentHash;
+  if (!id || !contentHash || !armedFire(`approve:${id}:${contentHash}`)) return;
+  return autonomyAct(
+    id,
+    `/api/watcher/proposals/${encodeURIComponent(id)}/approve`,
+    { contentHash },
+    'Approved: the change is live.'
+  );
+}
+
+function revertChange(button) {
+  const id = button?.dataset.changeId;
+  if (!id || !armedFire(`revert:${id}`)) return;
+  return autonomyAct(
+    id,
+    `/api/watcher/changes/${encodeURIComponent(id)}/revert`,
+    null,
+    'Reverted: the values are back.'
+  );
+}
+
+function openReject(id) {
+  if (!id) return;
+  const ui = page.autonomy.ui;
+  ui.rejecting[id] = ui.rejecting[id] ?? '';
+  ui.armed = null;
+  drawProposals({ force: true });
+  $(`[data-autonomy-note="${CSS.escape(id)}"]`)?.focus();
+}
+
+function cancelReject(id) {
+  delete page.autonomy.ui.rejecting[id];
+  drawProposals({ force: true });
+}
+
+function sendReject(id) {
+  if (!id) return;
+  const note = String(page.autonomy.ui.rejecting[id] ?? '').trim();
+  return autonomyAct(
+    id,
+    `/api/watcher/proposals/${encodeURIComponent(id)}/reject`,
+    note ? { note } : {},
+    'Rejected.'
+  );
 }
 
 function drawLog() {
@@ -204,7 +463,7 @@ function shell() {
     <section class="watcher-stage" aria-label="The watcher's graph">
       <div class="watcher-ball" id="watcher-ball"></div>
       <div class="watcher-ball-fallback" id="watcher-ball-fallback" hidden>The 3D view could not start in this browser (WebGL unavailable). The log below still updates live.</div>
-      <div class="watcher-overlay watcher-overlay-top" id="watcher-state"></div>
+      <div class="watcher-overlay watcher-overlay-top"><div id="watcher-kill" hidden></div><div id="watcher-state"></div><div id="watcher-month" hidden></div></div>
       <div class="watcher-overlay watcher-overlay-controls">
         <button type="button" class="btn btn-sm" data-action="watcher-replay-birth" data-replay-start>Replay birth</button>
         <button type="button" class="btn btn-sm" data-action="watcher-clean-graph" title="Archive bookkeeping facts and merge near-duplicates (hygiene: watcher-graph)">Clean the graph</button>
@@ -213,6 +472,7 @@ function shell() {
       <div class="watcher-overlay watcher-overlay-bottom"><div id="watcher-legend">${legendHtml()}</div><div class="watcher-hint">drag to orbit · click the ball, then scroll to zoom · click a neuron</div></div>
       <div class="watcher-replay" id="watcher-replay" hidden><span data-replay-label></span><button type="button" class="btn btn-sm" data-action="watcher-replay-stop">Stop replay</button></div>
     </section>
+    <section class="watcher-autonomy" id="watcher-proposals" aria-label="Proposals" hidden></section>
     <section class="watcher-mind" aria-label="What the watcher holds">
       <div class="watcher-mind-head"><div class="watcher-log-title">Mind</div><div class="watcher-card-sub">Everything in the ball, readable: pick a kind, search, click a row to light it in the ball and see where it came from.</div></div>
       <div id="watcher-mind-tabs"></div>
@@ -505,11 +765,12 @@ async function cleanGraph() {
 }
 
 async function sendSignal(id, signal) {
+  const mine = page;
   const res = await api(`/api/watcher/neurons/${encodeURIComponent(id)}/signal`, {
     method: 'POST',
     body: { signal },
   }).catch((err) => ({ error: err?.message || 'Request failed' }));
-  if (!page) return;
+  if (page !== mine || !page) return;
   if (!res || res.error) {
     showToast(`Could not save the signal: ${res?.error ?? 'no answer'}`, { tone: 'danger' });
     return;
@@ -552,6 +813,7 @@ function onEffect(effect) {
       if (ballLive) page.ball.move(effect.ids);
       break;
     case 'log':
+      if (isAutonomyRow(effect.row)) scheduleProposalsRefetch();
       if (page.paused) {
         page.pending++;
         drawLogHead();
@@ -617,7 +879,10 @@ function onMessage(e) {
     if (!page.paused && !page.replay) drawLog();
     // Every history after the first is a reconnect: what changed meanwhile
     // only exists in the graph.
-    if (page.historySeen) scheduleGraphRefetch();
+    if (page.historySeen) {
+      scheduleGraphRefetch();
+      scheduleProposalsRefetch();
+    }
     page.historySeen = true;
     return;
   }
@@ -848,6 +1113,16 @@ function wire(el, signal) {
           return togglePass(e.target.closest('[data-seq]')?.dataset.seq);
         case 'watcher-clean-graph':
           return cleanGraph();
+        case 'autonomy-approve':
+          return approveProposal(e.target.closest('[data-action]'));
+        case 'autonomy-revert':
+          return revertChange(e.target.closest('[data-action]'));
+        case 'autonomy-reject':
+          return openReject(e.target.closest('[data-action]').dataset.proposalId);
+        case 'autonomy-reject-send':
+          return sendReject(e.target.closest('[data-action]').dataset.proposalId);
+        case 'autonomy-reject-cancel':
+          return cancelReject(e.target.closest('[data-action]').dataset.proposalId);
         default:
           break;
       }
@@ -879,10 +1154,32 @@ function wire(el, signal) {
   el.addEventListener(
     'input',
     (e) => {
+      // A rejection note is kept as typed, so a rebuild of the panel puts it back.
+      const noteId = e.target?.dataset?.autonomyNote;
+      if (page && noteId) {
+        page.autonomy.ui.rejecting[noteId] = e.target.value;
+        return;
+      }
       if (!page || e.target?.id !== 'watcher-mind-search') return;
       page.mind.query = e.target.value;
       page.mind.shown = MIND_PAGE_SIZE;
       drawMind();
+    },
+    { signal }
+  );
+  // In a rejection note, Enter sends the rejection and Escape closes the note.
+  el.addEventListener(
+    'keydown',
+    (e) => {
+      const noteId = e.target?.dataset?.autonomyNote;
+      if (!page || !noteId) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendReject(noteId);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelReject(noteId);
+      }
     },
     { signal }
   );
@@ -959,10 +1256,7 @@ export async function renderWatcher(el) {
     );
     return;
   }
-  if (isWatcherOff(state)) {
-    el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
-    return;
-  }
+  if (isWatcherOff(state)) return mountOff(el, state);
 
   const [graph, log, metrics, broadcasts, self] = await Promise.all([
     api('/api/watcher/graph').catch(() => null),
@@ -972,10 +1266,7 @@ export async function renderWatcher(el) {
     api('/api/watcher/self').catch(() => null),
   ]);
   if (gen !== generation) return;
-  if (isWatcherOff(graph) || isWatcherOff(log)) {
-    el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
-    return;
-  }
+  if (isWatcherOff(graph) || isWatcherOff(log)) return mountOff(el, null);
   if (graph?.error) showToast(`Could not load the graph: ${graph.error}`, { tone: 'danger' });
 
   page = {
@@ -1012,6 +1303,8 @@ export async function renderWatcher(el) {
     mind: { tab: 'insight', query: '', shown: MIND_PAGE_SIZE, open: new Set() },
     mindTimer: null,
     kindFilter: null,
+    autonomy: newAutonomy(),
+    killPoll: null,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -1024,6 +1317,7 @@ export async function renderWatcher(el) {
   drawMind();
   drawSelf();
   void refreshEmbedding();
+  void refreshProposals();
   wire(el, page.listeners.signal);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();
@@ -1037,6 +1331,7 @@ export async function renderWatcher(el) {
     if (!page) return;
     drawState();
     if (!page.paused) drawLog();
+    drawProposals();
   }, CLOCK_MS);
 
   await mountTheBall();

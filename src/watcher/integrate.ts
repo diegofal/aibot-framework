@@ -27,6 +27,13 @@
  * or a neuron already marked): `fleet_memory_search` then shows it only to the
  * operator.
  *
+ * S1 (`docs/plans/watcher-autonomy-plan.md`): a woken pass (any trigger but
+ * `manual`) whose prompt has the key (`integratePromptKey`: volatile parts
+ * removed) of the last pass that got a readable answer is skipped before the
+ * call: no budget, one `integrate:skipped` row per streak, and nothing
+ * consumed (pending, agenda, run time); only `lastAttemptAt` moves, so the
+ * next wake still waits `INTEGRATE_MIN_GAP_MS`.
+ *
  * One pass at a time (`run` shares the one in flight); pending is cleared only
  * for what the pass read, and only after a readable answer. Rows are
  * code-written; model text appears only quoted. Never throws.
@@ -62,6 +69,7 @@ import {
   type IntegratePredictionRow,
   type IntegratePromptInput,
   buildIntegratePrompt,
+  integratePromptKey,
 } from './prompts';
 import type { Attention } from './self-model';
 import {
@@ -158,6 +166,8 @@ export type IntegrateOutcome =
   | { status: 'capped' | 'breaker' }
   | { status: 'failed'; error: string }
   | { status: 'unparsable' }
+  /** S1: the prompt equals the last readable pass's (volatile parts removed): no call. */
+  | { status: 'skipped' }
   | {
       status: 'integrated';
       insights: Neuron[];
@@ -199,6 +209,10 @@ export interface IntegrateState {
    * applied pass that was shown it again, clears the entry (one retry each).
    */
   agendaRetryAt?: Record<string, string>;
+  /** S1: `integratePromptKey` of the last pass that got a readable answer. */
+  lastPromptKey?: string;
+  /** S1: the key the current skip streak already logged (one row per streak). */
+  skippedKey?: string;
 }
 
 /** O3: a question broadcast kept back while the operator is silent. */
@@ -392,6 +406,8 @@ function readState(dir: string): IntegrateState {
       ...(Array.isArray(raw.deferredQuestions)
         ? { deferredQuestions: objList(raw.deferredQuestions).flatMap(deferredQuestion) }
         : {}),
+      ...(typeof raw.lastPromptKey === 'string' ? { lastPromptKey: raw.lastPromptKey } : {}),
+      ...(typeof raw.skippedKey === 'string' ? { skippedKey: raw.skippedKey } : {}),
     };
   } catch {
     return emptyState();
@@ -703,7 +719,8 @@ export class Integrator {
     const hasAgenda = agenda.pairs.length > 0 || agenda.insights.length > 0;
     // Nothing pending: only news on the agenda justifies a pass (also when
     // `run` is called directly); an agenda the last pass saw is idle.
-    if (nothingPending && !this.agendaChanged(scan, this.deps.now())) return { status: 'idle' };
+    const agendaNews = this.agendaChanged(scan, this.deps.now());
+    if (nothingPending && !agendaNews) return { status: 'idle' };
     if (isCancelled()) return { status: 'cancelled' };
 
     // Snapshot what this pass reads: anything observed meanwhile stays pending.
@@ -792,6 +809,16 @@ export class Integrator {
       [...shown.values()].some((n) => isOperatorSourced(n));
 
     const prompt = buildIntegratePrompt(input);
+    const promptKey = integratePromptKey(prompt);
+    // Agenda news can be invisible in the text (a broadcast to retry: a failed
+    // or capped send may leave no trace in the prompt), so it always calls.
+    if (
+      (opts.trigger ?? 'manual') !== 'manual' &&
+      !agendaNews &&
+      promptKey === this.st.lastPromptKey
+    ) {
+      return this.skipped(promptKey, opts);
+    }
     const res = await this.deps.client.chat(
       [
         { role: 'system', content: prompt.system },
@@ -870,6 +897,9 @@ export class Integrator {
     this.st.attending = uniq(out.attending.filter((id) => known.has(id)));
     this.st.attendingAt = nowIso;
     this.st.lastRunAt = nowIso;
+    // S1: what a readable pass read; the next woken pass with the same key is skipped.
+    this.st.lastPromptKey = promptKey;
+    this.st.skippedKey = undefined;
     const shownVariables = new Set(Object.keys(interoception ?? {}));
     // The model's "How I am" variables, plus the stakes rules that shaped the
     // pass (O3): introspection reads both as what drove it.
@@ -1043,7 +1073,28 @@ export class Integrator {
     };
   }
 
-  /** Adds `ids` to the covered agenda ids; true when anything was added. */
+  /**
+   * S1: a woken pass that would ask what the last readable pass asked. Nothing
+   * it would have consumed is (pending items, salience, agenda, `lastRunAt`):
+   * the pass is as if it never ran, except for `lastAttemptAt` (set before the
+   * prompt was built), which keeps the next wake `INTEGRATE_MIN_GAP_MS` away.
+   * One row per streak of equal skips.
+   */
+  private skipped(promptKey: string, opts: IntegrateRunOptions): IntegrateOutcome {
+    if (opts.isCancelled?.()) return { status: 'cancelled' };
+    if (this.st.skippedKey !== promptKey) {
+      this.st.skippedKey = promptKey;
+      this.persist();
+      this.deps.log.say(
+        'integrate',
+        'integrate:skipped',
+        'Nothing changed since my last thought: what I would read now is what I already thought about, so I did not think again.',
+        { trigger: opts.trigger ?? 'manual', source: 'watcher:integrate' }
+      );
+    }
+    return { status: 'skipped' };
+  }
+
   /** Arms (failed, deferred, capped) or clears (delivered) an insight's agenda retry. */
   private noteRetry(insightId: string, status: BroadcastResult['status']): void {
     const retry = { ...(this.st.agendaRetryAt ?? {}) };
@@ -1054,6 +1105,7 @@ export class Integrator {
     this.st.agendaRetryAt = Object.keys(retry).length ? retry : undefined;
   }
 
+  /** Adds `ids` to the covered agenda ids; true when anything was added. */
   private retireAgenda(ids: string[]): boolean {
     if (!ids.length) return false;
     this.st.agendaCovered = uniq([...(this.st.agendaCovered ?? []), ...ids]).slice(
@@ -1093,6 +1145,8 @@ export class Integrator {
       }
       return { status: 'breaker' };
     }
+    // Killed (C1) or past the monthly ceiling (C6): the watcher writes its own row for both.
+    if (res.reason === 'killed' || res.reason === 'ceiling') return { status: 'capped' };
     if (budget.firstCapToday('integrate')) {
       const cfg = this.deps.config().integrate;
       log.say(

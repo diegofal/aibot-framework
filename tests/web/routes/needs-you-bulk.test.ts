@@ -497,6 +497,7 @@ describe('POST /api/needs-you/clear-stale', () => {
       production: 1,
       feedback: 1,
       tool: 0,
+      watcher: 0,
     });
     expect(res.body.results).toHaveLength(7);
     expect(calls.some((c) => c[0] === 'evaluateProduction' || c[0] === 'approveTool')).toBe(false);

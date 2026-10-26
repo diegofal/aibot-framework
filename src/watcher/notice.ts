@@ -446,6 +446,9 @@ export class Noticer {
       }
       return { status: 'breaker' };
     }
+    // Killed (C1) or past the monthly ceiling (C6): not today's notice cap, and
+    // the watcher writes its own row for both, so none here.
+    if (res.reason === 'killed' || res.reason === 'ceiling') return { status: 'capped' };
     if (budget.firstCapToday('notice')) {
       log.say(
         'notice',

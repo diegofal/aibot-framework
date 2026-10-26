@@ -35,7 +35,7 @@ import { resolveStatsDirs } from '../../src/stats/paths';
 import { readAgentCycles } from '../../src/stats/readers/agent-cycles';
 import { DailyBudget } from '../../src/watcher/budget';
 import { Graph } from '../../src/watcher/graph';
-import { createWatcherClients, instrumented } from '../../src/watcher/llm';
+import { type WatcherRefusal, createWatcherClients, instrumented } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
 import {
   type JudgeDeps,
@@ -148,7 +148,7 @@ export interface RejudgeDeps extends JudgeDeps {
 export interface RejudgeReport {
   rows: RejudgeRow[];
   applied: number;
-  stopped?: 'cap' | 'tokens' | 'breaker';
+  stopped?: WatcherRefusal;
   /** `beforeWrite` refused: why. Nothing was written. */
   aborted?: string;
 }

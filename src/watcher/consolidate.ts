@@ -316,7 +316,7 @@ export interface ConsolidateOutcome {
   skipped: number;
   /** Preview mode: summaries that passed validation and were only logged. */
   previewed: number;
-  stopped?: 'busy' | 'cap' | 'tokens' | 'breaker' | 'cancelled' | 'error';
+  stopped?: 'busy' | 'cap' | 'tokens' | 'breaker' | 'ceiling' | 'killed' | 'cancelled' | 'error';
 }
 
 const STOPPED_TEXT: Record<NonNullable<ConsolidateOutcome['stopped']>, string> = {
@@ -324,6 +324,8 @@ const STOPPED_TEXT: Record<NonNullable<ConsolidateOutcome['stopped']>, string> =
   cap: "today's noticing budget is spent",
   tokens: "today's token budget is spent",
   breaker: 'the backend is rate-limited (circuit open)',
+  ceiling: "this month's spending ceiling is reached",
+  killed: 'the hard kill switch is on',
   cancelled: 'the watcher is stopping',
   error: 'an unexpected error (see the server log)',
 };

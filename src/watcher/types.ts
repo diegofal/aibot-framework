@@ -181,6 +181,14 @@ export interface WatcherState {
    * (`POST /api/watcher/config` → `applyConfig`) reaches the others.
    */
   tiers?: Record<'notice' | 'integrate', { enabled: boolean; maxPerDay: number }>;
+  /**
+   * Autonomy rung 0, C1: the hard kill is on (`src/watcher/kill.ts`): the
+   * environment (`AIBOT_WATCHER_KILL`) or the sentinel file
+   * (`<paths.data>/watcher-kill`). While killed nothing starts and no call leaves.
+   */
+  killed?: { source: 'env' | 'file'; since: string };
+  /** Autonomy rung 0, C6: USD-equivalent spent this UTC month and the ceiling. */
+  month?: { costUsd: number; ceilingUsd: number };
 }
 
 export type WatcherEventType =
@@ -295,6 +303,11 @@ export interface WatcherConfig {
     maxClusters: number;
     minCoverage?: number;
   };
+  /** Autonomy rung 0: the operator's controls (`src/watcher/autonomy/`); absent = `WATCHER_DEFAULTS.autonomy`. */
+  autonomy?: {
+    monthlyCeilingUsd: number;
+    proposals: { enabled: boolean; maxPending: number; approvalTtlHours: number };
+  };
 }
 
 /** Mirrors `WatcherConfigSchema` in `src/config.ts` (tests/watcher/types.test.ts keeps them equal). */
@@ -335,6 +348,10 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
     minCluster: 6,
     maxClusters: 10,
     minCoverage: 0.5,
+  },
+  autonomy: {
+    monthlyCeilingUsd: 90,
+    proposals: { enabled: false, maxPending: 3, approvalTtlHours: 72 },
   },
 };
 

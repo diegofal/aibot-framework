@@ -4,6 +4,7 @@
  * prompt can see is decided in one place (`notice.ts`), after tier 0 already
  * reduced non-operator text to topic words.
  */
+import { createHash } from 'node:crypto';
 import type { Attention } from './self-model';
 import type { Neuron, NeuronKind } from './types';
 
@@ -249,6 +250,52 @@ function predictionRow(p: IntegratePredictionRow): string {
 
 function section(title: string, lines: string[], empty = '(none)'): string {
   return [`## ${title}`, ...(lines.length ? lines : [empty])].join('\n');
+}
+
+/** An event's head line (`itemLines`): its buffer id, time and salience are a re-occurrence's, not its content. */
+const EVENT_HEAD_RE = /^- \[b-[^\]\s]+\] \S+ · (.*) · salience -?\d+(?:\.\d+)?/;
+/** A held item in "What I am attending to": its buffer id and salience. */
+const ATTENDING_ITEM_RE = /^- event: \[b-[^\]\s]+\] (.*) \(salience -?\d+(?:\.\d+)?\)$/;
+const NUMBER_RE = /-?\d+(?:\.\d+)?/g;
+/** Sections whose numbers are readings that drift by the minute ("How I am"), or figures behind a stakes rule. */
+const DRIFTING_NUMBER_SECTIONS = new Set(['## How I am', '## Something is wrong']);
+const EVENTS_SECTION = '## What happened since my last thought';
+const ATTENDING_SECTION = '## What I am attending to';
+
+/**
+ * S1 (`docs/plans/watcher-autonomy-plan.md`): a sha256 of an integrate
+ * prompt without what changes when its content does not: an event's head
+ * metadata (buffer id `[b-…]`, the time it was sensed, its salience: a new
+ * occurrence of the same event; integrate never cites them), the held items'
+ * ids and salience and the phase line in "What I am attending to", and the
+ * numbers in "How I am" and "Something is wrong". Nothing else is masked: a
+ * time or a number inside an event's text, a neuron, an operator's words or a
+ * prediction's due date is content, so two prompts that differ there never
+ * share a key. Two prompts with the same key ask the model the same question.
+ * Pure.
+ */
+export function integratePromptKey(prompt: { system: string; user: string }): string {
+  const lines = (s: string, f: (line: string) => string) => s.split('\n').map(f).join('\n');
+  const sections = prompt.user.split(/\n\n(?=## )/).map((s) => {
+    const title = s.split('\n', 1)[0] ?? '';
+    if (DRIFTING_NUMBER_SECTIONS.has(title)) return s.replace(NUMBER_RE, '#');
+    if (title === EVENTS_SECTION) {
+      return lines(s, (line) => line.replace(EVENT_HEAD_RE, '- [b] <time> · $1 · salience'));
+    }
+    if (title === ATTENDING_SECTION) {
+      return lines(s, (line) =>
+        line.startsWith('- phase: ')
+          ? '- phase'
+          : line.replace(ATTENDING_ITEM_RE, '- event: [b] $1')
+      );
+    }
+    return s;
+  });
+  return createHash('sha256')
+    .update(prompt.system)
+    .update('\u0000')
+    .update(sections.join('\n\n'))
+    .digest('hex');
 }
 
 /** System and user text for one integrate pass. */

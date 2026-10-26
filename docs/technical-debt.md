@@ -178,6 +178,42 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 **Estimated cost to pay.** Hours: bind public identity to a verified widget session (`userHash`) before matching.
 
+### Every watcher call pays the cache-write premium and never reads the cache
+
+| | |
+|---|---|
+| **Added** | 2026-10-25 |
+| **Where** | `src/claude-cli.ts` (how the CLI is spawned for `src/watcher/llm.ts` calls) |
+| **Decided by** | lead, watcher autonomy rung 0 (measured while building S1) |
+
+**What was deferred.** Every integrate and notice call writes its whole input (12k–21k tokens on integrate) as a prompt-cache write and never reads it back: passes are 9 min to hours apart and the user prompt is one block. Cache writes cost more than plain input tokens.
+
+**Why it was the right call then.** Fixing it means changing how the Claude CLI is invoked for every caller, outside the rung 0 scope (controls first).
+
+**What it costs while it stands.** The cache-write premium on ~40 watcher calls a day; the same likely holds for fleet calls with long gaps.
+
+**The trigger.** The rung 2 cost audit, or any week where watcher spend exceeds $20.
+
+**Estimated cost to pay.** Hours: find whether the CLI can skip cache writes for one-shot calls (or send the prompt so the stable prefix is its own block), measure `cacheCreationTokens` before and after.
+
+### The `improve` tool rewrites a bot's soul files without approval
+
+| | |
+|---|---|
+| **Added** | 2026-10-25 |
+| **Where** | `src/tools/improve.ts` |
+| **Decided by** | lead, noticed while writing `docs/plans/watcher-autonomy-plan.md` |
+
+**What was deferred.** `improve` spawns the Claude CLI with Read/Edit/Write over a bot's IDENTITY, SOUL, MOTIVATIONS and memory. A bot can change its own personality with no operator approval and no diff review; there is a `.versions` backup, nothing more.
+
+**Why it was the right call then.** It concerns the bots, not the watcher; the autonomy plan keeps `improve` out of every watcher toolset.
+
+**What it costs while it stands.** Identity drift the operator only sees after the fact; the opposite of the approval model the watcher now has.
+
+**The trigger.** The first time a bot's SOUL.md or IDENTITY.md changes in a way the operator did not ask for, or before any bot gets more autonomy.
+
+**Estimated cost to pay.** A day: route `improve` output through the same proposal-and-approval queue as a diff, or require `confirm` in both permission modes.
+
 ### Watcher broadcasts can carry operator-sourced insight text to a bot
 
 | | |

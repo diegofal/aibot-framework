@@ -361,3 +361,41 @@ describe('detailPanel — why', () => {
     expect(detailPanel(askItem, {}, NOW)).not.toContain('class="why"');
   });
 });
+
+describe('watcher proposals (autonomy rung 0)', () => {
+  const watcherItem = {
+    id: 'watcher:p-11111111',
+    kind: 'watcher',
+    botId: '__watcher__',
+    botName: 'Watcher',
+    title: 'Watcher proposal: Raise the notice bar',
+    body: 'watcher.notice.salienceBar: 0.3 → 0.4',
+    options: null,
+    createdAt: iso(NOW - 2 * H),
+    urgency: 'low',
+    actions: [],
+    href: '#/watcher',
+    meta: { proposalId: 'p-11111111' },
+  };
+
+  it('has a label, a summary noun and a filter count', () => {
+    expect(KIND_LABEL.watcher).toBe('Watcher');
+    expect(queueSummary({ watcher: 2 })).toBe('2 watcher proposals');
+    expect(queueSummary({ watcher: 1 })).toBe('1 watcher proposal');
+  });
+
+  it('"o" and the name link open the watcher page, never an agent home', () => {
+    const s = initialState([watcherItem], watcherItem.id);
+    expect(reduceKey(s, 'o').effect).toEqual({ type: 'open', href: '#/watcher' });
+    expect(reduceKey(s, 'Enter').effect).toEqual({ type: 'open', href: '#/watcher' });
+    const html = detailPanel(watcherItem, {}, NOW);
+    expect(html).toContain('href="#/watcher"');
+    expect(html).not.toContain('#/agents/');
+  });
+
+  it('no approve or reject from here: a/d do nothing', () => {
+    const s = initialState([watcherItem], watcherItem.id);
+    expect(reduceKey(s, 'a').effect).toEqual({ type: 'none' });
+    expect(reduceKey(s, 'd').effect).toEqual({ type: 'none' });
+  });
+});

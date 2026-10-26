@@ -24,6 +24,8 @@
  *   permission  every pending `ask_permission` request
  *   proposal    every `status: 'pending'` agent proposal
  *   tool        a pending dynamic tool (admin / single-tenant only)
+ *   watcher     a pending watcher proposal (autonomy rung 0, admin / single-tenant
+ *               only); decided on the watcher page, never from here (C3, C7)
  *   production  one item per production file that is still active (not
  *               archived or deleted since) and has no `evaluation.status`
  *   feedback    a pending feedback entry whose thread ends with the bot's
@@ -53,6 +55,7 @@ import { getTenantId, isAdminOrSingleTenant, scopeBots } from '../../tenant/tena
 import type { AgentProposal } from '../../tools/agent-proposal-store';
 import type { DynamicToolMeta } from '../../tools/dynamic-tool-store';
 import type { ThreadMessage } from '../../types/thread';
+import type { Proposal } from '../../watcher/autonomy/types';
 import { agentProposalToWhy } from '../../why/builders/agent-proposal';
 import { askToWhy } from '../../why/builders/ask';
 import { feedbackToWhy } from '../../why/builders/feedback';
@@ -62,7 +65,14 @@ import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
 import type { WorkerPoolApi, WorkerRunView } from '../../workers/types';
 
-export type NeedsYouKind = 'ask' | 'permission' | 'proposal' | 'production' | 'feedback' | 'tool';
+export type NeedsYouKind =
+  | 'ask'
+  | 'permission'
+  | 'proposal'
+  | 'production'
+  | 'feedback'
+  | 'tool'
+  | 'watcher';
 export type NeedsYouUrgency = 'high' | 'normal' | 'low';
 export type NeedsYouActionId =
   | 'answer'
@@ -81,6 +91,7 @@ export const NEEDS_YOU_KINDS: readonly NeedsYouKind[] = [
   'production',
   'feedback',
   'tool',
+  'watcher',
 ];
 
 export interface NeedsYouAction {
@@ -116,7 +127,7 @@ export interface NeedsYouItem {
   href: string;
   meta: Record<string, string | number | boolean | string[] | null>;
   /**
-   * "Why this?" (`src/why/`) for every kind but dynamic tools, on
+   * "Why this?" (`src/why/`) for every kind but dynamic tools and watcher proposals, on
    * `GET /api/needs-you` only (the count and write paths never read the cycle log).
    */
   why?: Why;
@@ -192,6 +203,12 @@ export interface NeedsYouSources {
   tools?: () => DynamicToolMeta[];
   /** Task-worker runs (active ones); the `waiting` ones are listed as `waitingWorkers`. */
   workers?: () => WorkerRunView[];
+  /**
+   * Watcher proposals (autonomy rung 0, admin-only queue kind `watcher`); only
+   * `status: 'pending'` are listed. Never decided from Needs You: approval binds
+   * the hash of the proposal the operator read on the watcher page (C3, C7).
+   */
+  watcherProposals?: () => Proposal[];
 }
 
 /**
@@ -251,6 +268,7 @@ export const NEEDS_YOU_SUPPORTED_ACTIONS: Record<NeedsYouKind, readonly NeedsYou
   production: ['approve', 'reject', 'archive'],
   feedback: ['dismiss'],
   tool: ['approve', 'reject', 'delete'],
+  watcher: [],
 };
 
 type ConcreteAction = Exclude<NeedsYouBulkAction, 'neutral'>;
@@ -267,6 +285,7 @@ export const NEEDS_YOU_NEUTRAL_ACTION: Record<NeedsYouKind, ConcreteAction | nul
   production: 'archive',
   feedback: 'dismiss',
   tool: null,
+  watcher: null,
 };
 
 /** `clear-stale` without `kinds`: every kind with a neutral action (all but tools). */
@@ -330,7 +349,7 @@ function stringList(value: unknown): string[] | null {
 }
 
 function emptyByKind(): Record<NeedsYouKind, number> {
-  return { ask: 0, permission: 0, proposal: 0, production: 0, feedback: 0, tool: 0 };
+  return { ask: 0, permission: 0, proposal: 0, production: 0, feedback: 0, tool: 0, watcher: 0 };
 }
 
 /** Most urgent first, then newest first; ties keep their input order. */
@@ -349,7 +368,7 @@ export function sortNeedsYou(items: NeedsYouItem[]): NeedsYouItem[] {
 
 interface BuildContext {
   allowed: Set<string> | undefined;
-  /** Admin or single-tenant: may see admin-only kinds (`tool`). */
+  /** Admin or single-tenant: may see admin-only kinds (`tool`, `watcher`). */
   admin: boolean;
   nameOf: (botId: string) => string;
   nowMs: number;
@@ -1024,6 +1043,57 @@ function buildTools(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[]
   });
 }
 
+// ─── watcher proposals ───
+
+/** Where the watcher's items point: the watcher is not a bot (same id the query log uses). */
+export const WATCHER_ITEM_BOT_ID = '__watcher__';
+
+function plainValue(v: unknown): string {
+  if (typeof v === 'string') return v;
+  try {
+    return JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function buildWatcherProposals(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] {
+  // The watcher is the instance's own: admin / single-tenant only, like tools.
+  if (!ctx.admin) return [];
+  const rows = safeRead(ctx, 'watcherProposals', sources.watcherProposals);
+  return safeMap(ctx, 'watcherProposals', rows, (p) => {
+    if (p.status !== 'pending' || typeof p.id !== 'string') return null;
+    const changes = Array.isArray(p.changes) ? p.changes : [];
+    const lines = [
+      changes
+        .map((ch) => `${str(ch?.path)}: ${plainValue(ch?.from)} → ${plainValue(ch?.to)}`)
+        .join('\n'),
+      str(p.rationale),
+      p.predicted?.effect ? `Expected: ${str(p.predicted.effect)}` : '',
+      p.expiresAt ? `Expires ${toIso(p.expiresAt, ctx.nowMs)} unless you decide.` : '',
+      'Review it on the watcher page: approval names the exact version you read there.',
+    ].filter(Boolean);
+    return {
+      id: `watcher:${p.id}`,
+      kind: 'watcher',
+      botId: WATCHER_ITEM_BOT_ID,
+      botName: 'Watcher',
+      title: truncate(`Watcher proposal: ${str(p.title) || p.id}`),
+      body: lines.join('\n\n'),
+      options: null,
+      createdAt: toIso(p.pendingAt ?? p.createdAt, ctx.nowMs),
+      urgency: 'low',
+      actions: [],
+      href: '#/watcher',
+      meta: {
+        proposalId: p.id,
+        proposalKind: str(p.kind) || null,
+        expiresAt: str(p.expiresAt) || null,
+      },
+    };
+  });
+}
+
 // ─── composition ───
 
 /**
@@ -1055,6 +1125,7 @@ export function buildNeedsYou(
     ...buildProductions(ctx, s),
     ...buildFeedback(ctx, s),
     ...buildTools(ctx, s),
+    ...buildWatcherProposals(ctx, s),
   ]);
   // Only items that survived mapping: a row safeMap skipped never costs a read.
   const listed = new Set(items);
@@ -1118,6 +1189,9 @@ export function resolveBulkAction(
   kind: NeedsYouKind,
   action: NeedsYouBulkAction
 ): { action: ConcreteAction } | { error: string } {
+  if (NEEDS_YOU_SUPPORTED_ACTIONS[kind].length === 0) {
+    return { error: `${kind} items are decided on the watcher page, not from Needs You` };
+  }
   const concrete = action === 'neutral' ? NEEDS_YOU_NEUTRAL_ACTION[kind] : action;
   if (!concrete) {
     return { error: `${kind} items have no neutral action — reject them explicitly` };

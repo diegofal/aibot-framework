@@ -3,9 +3,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import {
+  CLEAR_STALE_DEFAULT_KINDS,
   NEEDS_YOU_KINDS,
   type NeedsYouItem,
   type NeedsYouSources,
+  applyNeedsYouAction,
   buildNeedsYou,
   buildWaitingWorkers,
   needsYouActionsFromBotManager,
@@ -149,6 +151,7 @@ describe('GET /api/needs-you', () => {
       production: 0,
       feedback: 0,
       tool: 0,
+      watcher: 0,
     });
     expect(typeof body.generatedAt).toBe('string');
   });
@@ -191,6 +194,7 @@ describe('GET /api/needs-you', () => {
       production: 1,
       feedback: 1,
       tool: 0,
+      watcher: 0,
     });
   });
 
@@ -275,7 +279,15 @@ describe('GET /api/needs-you', () => {
     const count = await (await makeApp(src, 't2').request('/api/needs-you/count')).json();
     expect(count).toEqual({
       count: 5,
-      byKind: { ask: 1, permission: 1, proposal: 1, production: 1, feedback: 1, tool: 0 },
+      byKind: {
+        ask: 1,
+        permission: 1,
+        proposal: 1,
+        production: 1,
+        feedback: 1,
+        tool: 0,
+        watcher: 0,
+      },
       editedSinceReview: 0,
     });
   });
@@ -1119,5 +1131,104 @@ describe('waiting workers (C20)', () => {
     expect(src.workers?.()).toEqual([]);
     holder.pool = { list: () => [waiting('r-1', 'b1', 'q1')] };
     expect(src.workers?.()).toHaveLength(1);
+  });
+});
+
+describe('watcher proposals (autonomy rung 0, C7)', () => {
+  const watcherProposal = (id: string, status = 'pending', ageH = 2) =>
+    ({
+      id,
+      kind: 'threshold',
+      title: `Raise the notice bar ${id}`,
+      rationale: 'Most notice passes keep nothing.',
+      support: ['n-0000aaaa'],
+      changes: [{ path: 'watcher.notice.salienceBar', from: 0.3, to: 0.4 }],
+      predicted: { effect: 'Fewer notice passes', savingUsdPerWeek: 1.5 },
+      guard: { metric: 'servedRate', direction: 'min', bound: 0.2, windowHours: 72 },
+      rollback: 'Put the bar back to 0.3.',
+      proposedBy: 'watcher',
+      contentHash: 'a'.repeat(64),
+      status,
+      createdAt: iso(NOW - 10 * H),
+      pendingAt: iso(NOW - ageH * H),
+      expiresAt: iso(NOW + 70 * H),
+    }) as never;
+
+  it('lists pending watcher proposals for the admin and single-tenant, linking to the watcher page', async () => {
+    const src = sources({
+      watcherProposals: () => [
+        watcherProposal('p-11111111'),
+        watcherProposal('p-22222222', 'queued'),
+        watcherProposal('p-33333333', 'approved'),
+      ],
+    });
+    for (const tenant of [undefined, '__admin__']) {
+      const body = await (await makeApp(src, tenant).request('/api/needs-you')).json();
+      const items = body.items as NeedsYouItem[];
+      expect(items.map((i) => i.id)).toEqual(['watcher:p-11111111']);
+      const item = items[0];
+      expect(item.kind).toBe('watcher');
+      expect(item.href).toBe('#/watcher');
+      expect(item.botName).toBe('Watcher');
+      expect(item.title).toContain('Raise the notice bar p-11111111');
+      expect(item.body).toContain('watcher.notice.salienceBar: 0.3 → 0.4');
+      expect(item.createdAt).toBe(iso(NOW - 2 * H));
+      // Approval binds the hash of what the operator saw: only on the watcher page.
+      expect(item.actions).toEqual([]);
+      expect(item.meta.proposalId).toBe('p-11111111');
+      expect(body.byKind.watcher).toBe(1);
+      expect(body.count).toBe(1);
+    }
+    const count = await (await makeApp(src).request('/api/needs-you/count')).json();
+    expect(count.byKind.watcher).toBe(1);
+    expect(count.count).toBe(1);
+  });
+
+  it('a tenant never sees them, in the list or the count', async () => {
+    const src = sources({ watcherProposals: () => [watcherProposal('p-11111111')] });
+    const list = await (await makeApp(src, 't1').request('/api/needs-you')).json();
+    expect(list.items).toEqual([]);
+    expect(list.byKind.watcher).toBe(0);
+    const count = await (await makeApp(src, 't1').request('/api/needs-you/count')).json();
+    expect(count).toEqual({
+      count: 0,
+      byKind: {
+        ask: 0,
+        permission: 0,
+        proposal: 0,
+        production: 0,
+        feedback: 0,
+        tool: 0,
+        watcher: 0,
+      },
+      editedSinceReview: 0,
+    });
+  });
+
+  it('absent or throwing source: nothing listed, the rest still renders', async () => {
+    const none = await (await makeApp(sources()).request('/api/needs-you')).json();
+    expect(none.byKind.watcher).toBe(0);
+    const src = sources({
+      asks: () => [ask('q1', 'b1', 1)],
+      watcherProposals: () => {
+        throw new Error('store down');
+      },
+    });
+    const body = await (await makeApp(src).request('/api/needs-you')).json();
+    expect(body.items.map((i: NeedsYouItem) => i.id)).toEqual(['ask:q1']);
+  });
+
+  it('bulk and neutral actions never decide a watcher proposal', () => {
+    const item = {
+      id: 'watcher:p-1',
+      kind: 'watcher',
+      meta: { proposalId: 'p-1' },
+    } as unknown as NeedsYouItem;
+    for (const action of ['reject', 'neutral', 'approve', 'dismiss'] as const) {
+      const res = applyNeedsYouAction({}, item, action);
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain('watcher page');
+    }
+    expect(CLEAR_STALE_DEFAULT_KINDS).not.toContain('watcher');
   });
 });

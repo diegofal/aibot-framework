@@ -10,7 +10,9 @@
  *   { id, kind, botId, botName, title, body, options, createdAt, urgency,
  *     actions: [{ id, label, method, path, body?, input?, tone, hotkey? }],
  *     href, meta, why? }
- * `why` (every kind but dynamic tools) renders with the shared panel.
+ * `why` (every kind but dynamic tools and watcher proposals) renders with the
+ * shared panel. A `watcher` item (autonomy rung 0) has no actions: it is
+ * decided on the watcher page, where the proposal is read in full.
  */
 import { avatar, badge, emptyState, esc } from '../ui/index.js';
 import { bulkToolbar, toggleAll } from '../ui/select-all.js';
@@ -24,6 +26,7 @@ export const KIND_LABEL = {
   production: 'Review',
   feedback: 'Feedback',
   tool: 'Tool',
+  watcher: 'Watcher',
 };
 
 export const KIND_TONE = {
@@ -33,6 +36,7 @@ export const KIND_TONE = {
   production: 'muted',
   feedback: 'ok',
   tool: 'warn',
+  watcher: 'accent',
 };
 
 export const URGENCY_TONE = { high: 'danger', normal: 'warn', low: 'muted' };
@@ -45,6 +49,7 @@ const KIND_NOUN = {
   production: ['output to review', 'outputs to review'],
   feedback: ['reply to read', 'replies to read'],
   tool: ['tool to approve', 'tools to approve'],
+  watcher: ['watcher proposal', 'watcher proposals'],
 };
 
 export const SHORTCUTS = [
@@ -339,6 +344,7 @@ export function kindCounts(state) {
     production: 0,
     feedback: 0,
     tool: 0,
+    watcher: 0,
     edited: 0,
   };
   const hidden = new Set(state?.hidden ?? []);
@@ -466,7 +472,7 @@ export function reduceKey(state, key, ctx = {}) {
     case 'o':
       return {
         state,
-        effect: { type: 'open', href: `#/agents/${encodeURIComponent(item.botId)}` },
+        effect: { type: 'open', href: ownerHref(item) },
       };
     case 'Enter':
       return item.href
@@ -495,6 +501,12 @@ export function reduceKey(state, key, ctx = {}) {
     return { state: { ...state, chipIndex: state.chipIndex === idx ? -1 : idx }, effect: NONE };
   }
   return { state, effect: NONE };
+}
+
+/** Where the bot name and `o` go: the agent's Home, or the item's own page for the watcher (not a bot). */
+export function ownerHref(item) {
+  if (item?.kind === 'watcher') return item.href || '#/watcher';
+  return `#/agents/${encodeURIComponent(item?.botId ?? '')}`;
 }
 
 // ─── markup ───
@@ -709,7 +721,7 @@ export function detailPanel(item, state = {}, nowMs = Date.now()) {
       )}" aria-label="Reply"></textarea>`
     : '';
   const actions = (item.actions ?? []).map(actionButton).join('');
-  const agentHref = `#/agents/${encodeURIComponent(item.botId)}`;
+  const agentHref = ownerHref(item);
   return `<div class="needs-detail-head">
       ${avatar({ seed: item.botId, name: item.botName, size: 40 })}
       <div class="needs-detail-who">

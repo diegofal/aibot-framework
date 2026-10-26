@@ -10566,3 +10566,164 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Watcher autonomy rung 0: kill banner, month spend, Proposals panel ── */
+.watcher-auto-kill {
+  margin-bottom: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-md);
+  background: rgba(127, 29, 29, 0.88);
+  border: 1px solid #f87171;
+  color: #fee2e2;
+  line-height: 1.45;
+}
+.watcher-auto-kill strong {
+  color: #fff;
+}
+.watcher-auto-kill-since {
+  color: #fecaca;
+}
+.watcher-auto-month {
+  display: inline-block;
+  margin-top: var(--s2);
+  padding: 2px var(--s3);
+  border-radius: var(--r-md);
+  background: var(--stage-glass);
+  border: 1px solid var(--stage-line);
+  color: var(--stage-dim);
+  font-size: var(--fs-xs);
+}
+.watcher-auto-month.is-warn {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+.watcher-auto-month.is-over {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.88);
+  border-color: #f87171;
+}
+.watcher-autonomy {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--s3) var(--s4);
+}
+.watcher-auto-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.watcher-auto-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.watcher-auto-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+}
+.watcher-auto-kind,
+.watcher-auto-status {
+  font-size: var(--fs-xs);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.watcher-auto-status.is-live {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.watcher-auto-status.is-bad {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+.watcher-auto-expires {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+}
+.watcher-auto-field {
+  display: grid;
+  grid-template-columns: 7.5em 1fr;
+  gap: var(--s2);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.watcher-auto-label {
+  font-size: var(--fs-xs);
+  padding-top: 2px;
+}
+.watcher-auto-field code,
+.watcher-auto-changes code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.watcher-auto-changes {
+  margin: 0;
+  padding-left: 1.1em;
+}
+.watcher-auto-error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-md);
+  padding: 4px var(--s2);
+  font-size: var(--fs-sm);
+}
+.watcher-auto-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  align-items: center;
+  margin-top: 4px;
+}
+.watcher-auto-note {
+  flex: 1;
+  min-width: 12em;
+}
+.watcher-auto-row {
+  font-size: var(--fs-sm);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--border);
+}
+.watcher-auto-reason {
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.watcher-auto-sub {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  margin: var(--s3) 0 var(--s1);
+}
+.watcher-auto-empty {
+  margin: var(--s1) 0 0;
+}
+/* The watcher-off screen keeps the panel (and the month spend) under its notice. */
+.watcher-off-autonomy {
+  margin-top: var(--s4);
+}
+.watcher-off-month {
+  text-align: center;
+}
+.watcher-off-month .watcher-auto-month {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+@media (max-width: 700px) {
+  .watcher-auto-field {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+/* ── end watcher autonomy rung 0 ── */

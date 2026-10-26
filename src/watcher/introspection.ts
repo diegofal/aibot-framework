@@ -24,7 +24,7 @@ import {
 import { join } from 'node:path';
 import { parseLLMJson } from '../bot/llm-json-parser';
 import { titleTokens, tokenCoverage } from '../hygiene/text-utils';
-import type { InstrumentedClient } from './llm';
+import type { InstrumentedClient, WatcherRefusal } from './llm';
 import {
   type FieldVerdict,
   HELD_COVERAGE_THRESHOLD,
@@ -289,7 +289,7 @@ export interface WatcherIntrospectionRecord {
 
 export type IntrospectionOutcome =
   | { status: 'scored'; record: WatcherIntrospectionRecord }
-  | { status: 'refused'; reason: 'cap' | 'tokens' | 'breaker' }
+  | { status: 'refused'; reason: WatcherRefusal }
   | { status: 'failed'; error: string };
 
 export interface IntrospectionDeps {
