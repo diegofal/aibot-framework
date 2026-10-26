@@ -8,6 +8,7 @@ import type { WatcherCallResult } from '../../src/watcher/llm';
 import { WatcherLog } from '../../src/watcher/log';
 import { computeMetrics, emptyRecords } from '../../src/watcher/metrics';
 import {
+  CYCLE_START_LOOKBACK_MS,
   type GroundTruthCycle,
   type GroundTruthTool,
   applyServed,
@@ -349,6 +350,21 @@ describe('the judge reads the ground truth (review 2026-10-25)', () => {
     ]);
     // a word inside another word is not a name
     expect(predictionBots('scouting gets harder', BOTS)).toHaveLength(3);
+  });
+
+  test('groundTruthLines asks for cycles started up to a day before the window (the reader filters on startedAt)', () => {
+    const from = t - 24 * 3_600_000;
+    const to = t;
+    const { deps, asked } = truth({
+      'jarvis-factory': {
+        cycles: [cycle({ startedAt: iso(from - 2 * 3_600_000), endedAt: iso(from + 60_000) })],
+      },
+    });
+    const out = groundTruthLines([BOTS[0] as { id: string; name: string }], from, to, deps);
+    const ask = asked.find((a) => a.startsWith('cycles:jarvis-factory:'));
+    const askedFrom = Number(ask?.split(':')[2]);
+    expect(askedFrom).toBeLessThanOrEqual(from - CYCLE_START_LOOKBACK_MS);
+    expect(out.lines.some((l) => l.includes('cycle'))).toBe(true);
   });
 
   test('groundTruthLines: tool calls and cycles in the window, in time order, clipped with a count of the rest', () => {

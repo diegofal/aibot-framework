@@ -38,6 +38,9 @@ export interface ServedCycleRow {
 }
 
 /** Brier score of one forecast: (p − outcome)². A missing probability is 0.5. */
+/** How far before a prediction's window the judge looks for cycles that end inside it. */
+export const CYCLE_START_LOOKBACK_MS = 24 * 3_600_000;
+
 export function brierScore(probability: number, happened: boolean): number {
   const p = Number.isFinite(probability) ? Math.min(1, Math.max(0, probability)) : 0.5;
   const o = happened ? 1 : 0;
@@ -257,7 +260,10 @@ export function groundTruthLines(
       tools = [];
     }
     try {
-      cycles = deps.cycles?.(b.id, fromMs, toMs) ?? [];
+      // The cycle reader filters on startedAt: ask from a day earlier so a cycle that
+      // began before the prediction and ended inside the window is not missed
+      // (the per-record window check below keeps only what ended in time).
+      cycles = deps.cycles?.(b.id, fromMs - CYCLE_START_LOOKBACK_MS, toMs) ?? [];
     } catch {
       cycles = [];
     }
