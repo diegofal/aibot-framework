@@ -953,3 +953,230 @@ docker compose up -d --build
 **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-16T22-01-50`. `/api/status` 200; `FINANZAS_AGENT_KEY` present in the container; boot logged "HTTP API tools registered" with `api_finanzas_saldos`, `api_finanzas_vencimientos`, `api_finanzas_proyeccion`, `api_finanzas_conciliacion_pendientes`, and `whatsapp_export_summary`; all bots started. The finance API itself was checked with curl against production (401 without/with a wrong key, 405 on POST, 200 on the four routes with the key). Not yet exercised end to end through Finny on Telegram. Personal accounts stay off: no OAuth clients, `integrations.personalAccounts.bots` empty.
 
 **Reversible?** Restore the config backup in the volume (`config.json.bak-*`) or remove `integrations.httpApis`, and rebuild from `7aa419b`; remove `FINANZAS_AGENT_KEY` from `.env`; on the finance side, `vercel env rm AGENTE_API_SHA256 production …` and redeploy.
+
+### 2026-10-23 — Deploy the watcher (PR #12) and turn it on, both model tiers off
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, with Diego's go ("let's do it") |
+| **Why** | Ship the fleet watcher (`d7471dc`) and run birth against the real fleet; tiers off so the first run spends no tokens |
+
+```bash
+"/c/Program Files/Docker/Docker/Docker Desktop.exe"   # Docker Desktop was not running; the old container auto-started
+bun scripts/docker/backup.ts backup
+MSYS_NO_PATHCONV=1 docker cp aibot-framework-aibot-1:/app/config/config.json D:/tmp/live-config.json
+# python: config.watcher = { enabled: true, notice: { enabled: false }, integrate: { enabled: false } }
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/live-config.json aibot-framework-aibot-1:/app/config/config.json
+docker compose up -d --build
+```
+
+**Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-23T20-36-42`. Container healthy. Birth ran on boot: 3,269 neurons (6 bots, 4 people, 66 goals, 200 topics, 1,832 facts, 401 surprises, 760 questions) in 1 min 1 s, no tokens. Link stage fell back to `no-embeddings`: the Ollama service (`http://ollama:11434`, compose profile `local-ollama`) has been down for 11 days, so `nomic-embed-text` is unreachable and neurons sit on shells by kind. Page, ball and vendored Three.js served 200; `/api/watcher` 401 without a token.
+
+**Reversible?** Remove `watcher` from the live config (or set `enabled: false`) and restart; delete `/app/data/watcher/` to forget everything it learned; restore the backup for anything else.
+
+### 2026-10-23 — Relink the watcher graph after Ollama came back
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | Diego started the `ollama` service; the session reopened the link stage |
+| **Why** | Birth ran while Ollama was down, so no embeddings and no related links; resync never embeds, so the link stage had to be reopened by hand |
+
+```bash
+# inside the container, /app/data/watcher:
+cp birth.json birth.json.bak-relink
+# bun -e: drop "link" and "done" from birth.json done[], delete finishedAt, stage = "link"
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/stop
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/start
+```
+
+**Outcome.** `nomic-embed-text:latest` answers from `http://ollama:11434`. Link stage embedded all 3,269 neurons in about 2 min and added 1,388 `related` edges (3,271 → 4,659); layout recomputed; phase back to `sense`. The "Born … in 28 min 37 s" row measures from the first birth's `startedAt`. No fleet restart.
+
+**Reversible?** Restore `birth.json.bak-relink`; embeddings live in `embeddings.jsonl` and can be deleted with the watcher stopped.
+
+### 2026-10-23 — Turn on the watcher's notice tier (Haiku)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "restart" |
+| **Why** | Let the watcher turn live events into neurons; integrate stays off |
+
+```bash
+MSYS_NO_PATHCONV=1 docker cp aibot-framework-aibot-1:/app/config/config.json D:/tmp/live-config.json   # copy kept as D:/tmp/live-config.before-notice.json
+# python: config.watcher.notice = { enabled: true }
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/live-config.json aibot-framework-aibot-1:/app/config/config.json
+docker compose restart aibot
+```
+
+**Outcome.** Healthy; wake + resync (nothing new), first notice pass 75 s later: 12 events, 5 kept, 1 recognised. Model `claude-haiku-5-5`, 1,968 prompt tokens but 22,122 cache-creation tokens (the Claude CLI's own system prompt), `costUsd` 0.2163 for one pass. At the default cap of 288 passes/day that is up to about $62/day of plan quota unless later calls read the cache.
+
+**Reversible?** Set `watcher.notice.enabled` back to false (or restore the before-notice copy) and `docker compose restart aibot`.
+
+### 2026-10-23 — Cap notice, turn on integrate (2 Opus passes/day), phase 0 baselines
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "let's do this" |
+| **Why** | Bound the Haiku spend found above; let the watcher produce its first insights and broadcasts; record the metric baselines the plan is judged against |
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec aibot-framework-aibot-1 sh -c 'cd /app && bun scripts/watcher/baseline.ts --config /app/config/config.json --data /app/data'
+MSYS_NO_PATHCONV=1 docker cp aibot-framework-aibot-1:/app/config/config.json D:/tmp/live-config.json   # copy kept as live-config.before-integrate.json
+# python: watcher.notice = { enabled: true, maxPerDay: 48 }; watcher.integrate = { enabled: true, maxPerDay: 2 }
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/live-config.json aibot-framework-aibot-1:/app/config/config.json
+docker compose restart aibot
+# in the container: bun scripts/watcher/introspect.ts --subject bot:ai-perfectionist --token "$ADMIN_API_KEY"; bun scripts/watcher/canary.ts plant --bot default --fact "… heliotrope." --question "…"
+```
+
+**Outcome.** Baseline (30 d): 774 cycles, 5 % idle, median cycle gap 1.4 h, 0 topics shared by name across bots, 719 chat/plan candidates; report `/app/data/watcher/baseline-2026-10-23.json`. Healthy after restart; integrate on at 2/day. Introspection of an idle bot scored 1.00 on a single trivially matching field (scorer flaw, noted for the cleanup PR). Canary planted with bot `default` (Finny); `check --bot <other>` is due tomorrow. Measured CLI overhead for the cost fix: default call 28k prefix tokens $0.081; `--tools "" --setting-sources ""` $0.046; plus own `--system-prompt` 565 tokens $0.0046.
+
+**Reversible?** Restore `live-config.before-integrate.json` into the volume and restart.
+
+### 2026-10-23 06:20 — Switch the fleet's Claude account to Agility and run the loop
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, with Diego's go ("let's restart the bots") |
+| **Why** | Account Test 123 hit its weekly limit (429 since 2026-10-22, resets Oct 24 6pm ART); Agility tested with 82 % of the week left |
+
+```bash
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" http://127.0.0.1:3000/api/claude-accounts/default/activate
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" -d '{}' http://127.0.0.1:3000/api/agent-loop/run
+```
+
+**Outcome.** `{"ok":true}`; the claude-cli breaker reset. Strategist and planner calls succeeded on account `default` for every bot, zero 429s in the following 3 minutes. No container restart.
+
+### 2026-10-23 — Deploy the watcher follow-up (PR #14, `2197e01`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "yes please" |
+| **Why** | Bring the Claude CLI lean flags (≈40× fewer prefix tokens per call), the embedding backfill, the live watcher config route and the ball fixes to the running fleet |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Healthy; `Claude CLI v2.1.289 ready`. Watcher woke from saved state (no rebirth). Verification of the per-pass cost, the config route and the backfill row recorded below this entry once observed.
+
+**Reversible?** `git checkout d7471dc -- .` is not needed: rebuild from `d7471dc` (`git worktree add ../rollback d7471dc && docker compose -f ... build`) or `docker compose up -d --build` after reverting the merge. Config file untouched by this deploy.
+
+**Verified after the deploy.** Wake row, resync (1 new contact: the phase 0 REST sender), `maintain:link` embedded the 4 neurons noticing had created without vectors. `POST /api/watcher/config` no-op patch → 200 with `tiers` in the state. First notice pass after the deploy: `claude-haiku-5-5`, 1,492 cache-creation tokens, $0.029 (was 22,122 tokens, $0.216 on the first pass this afternoon, $0.06 with cache reads).
+
+### 2026-10-24 — Raise the watcher's integrate cap 2 → 6 (live, no restart)
+
+```bash
+# in the container, admin token:
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" -d '{"integrate":{"maxPerDay":6}}' localhost:3000/api/watcher/config
+```
+
+**Why.** A pass costs cents since `2197e01`; 4 Opus passes produced 0 broadcasts and the watcher needs more passes a day to act. **Outcome.** 200, `tiers.integrate.maxPerDay: 6`, written to `/app/config/config.json` atomically. **Reversible?** Same call with `2`.
+
+### 2026-10-24 — Deploy the watcher day-2 gaps (PR #15, `dddffc7`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "yes" |
+| **Why** | Fleet-memory prefetch in operator chats, a watcher that broadcasts (criteria, standing agenda), repeat window, introspection cause |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Healthy; wake + resync (1 new goal), `maintain:link` embedded 3 neurons. Verification (canary recall, introspection cause, first broadcast) recorded below once observed.
+
+**Reversible?** Rebuild from `2197e01`. Config untouched.
+
+**Verified after the deploy (`dddffc7`).** Cross-bot recall works through the prefetch: `canary.ts check --bot job-seeker` got "It's heliotrope … the fleet watcher's notes say you asked Finny to remember…" (log: `Fleet memory prefetch injected`). The script still reported "not found (0.29)" because it compares the whole planted sentence to the reply; fix in progress. Through `ai-perfectionist` the prefetch never ran: that bot has `tenantId: "__admin__"` and every watcher path treats any tenantId as a tenant bot (prefetch, tool exclusion, broadcast targets); fix in progress (`fix/watcher-admin-tenant`). Diagnostics run: embedding ranking of the canary question over the graph (canary fact rank 1, 0.798); `POST /api/watcher/introspect` (answer correct in substance, scored 0.5: scorer too strict, same branch).
+
+### 2026-10-24 — Deploy the admin-tenant fix (PR #16, `71a056c`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "yes" |
+| **Why** | Bots with `tenantId: "__admin__"` were excluded from fleet memory and broadcasts (the only cause of 0 broadcasts); canary `--expect`; introspection scorer |
+
+```bash
+docker compose up -d --build
+```
+
+**Outcome.** Healthy; wake, resync, `maintain:link` embedded 4 neurons. Verification (canary via `ai-perfectionist`, introspection score, first broadcast) recorded below once observed.
+
+**Reversible?** Rebuild from `dddffc7`. Config untouched.
+
+**Verified after the deploy (`71a056c`).** `canary.ts check --bot ai-perfectionist --expect heliotrope` → found (prefetch injected for an admin-tenant bot, which failed before). `POST /api/watcher/introspect` → 0.75 (phase, tool, goal match; cause miss: the watcher again cited only the salience label and number). First broadcast pending: the next agenda pass is due at 19:45 UTC (6 h after the last) unless 5 salient items arrive first.
+
+**Cap raised 6 → 8 (live, 12:3x AST).** All 6 Opus passes of the UTC day were spent before the fix landed; `POST /api/watcher/config {"integrate":{"maxPerDay":8}}` so the agenda pass due at 19:55 UTC can run today. Reversible with the same call.
+
+### 2026-10-24 — Deploy the week-1 watcher optimizations (PR #17, `b6e7555`)
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, on Diego's "yes please" |
+| **Why** | O1–O8 of `docs/plans/watcher-optimizations-plan.md` |
+
+```bash
+docker compose up -d --build
+# preview only (no apply):
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" -d '{"routine":"watcher-graph"}' localhost:3000/api/hygiene/run
+```
+
+**Outcome.** Healthy; wake, resync (1 new goal), `maintain:link` embedded 6. `stakes:integrateBudgetPressure` fired at boot (today's integrate budget already 100 % used). Infra embedding row: `nomic-embed-text:latest` ok, 51 ms. First broadcast before this deploy: 17:31Z, directive to Jarvis-Factory (from the integrate pass, after #16). Graph cleanup previewed, not applied.
+
+**Reversible?** Rebuild from `71a056c`. Config untouched.
+
+### 2026-10-25 — Deploy forgetting (PR #19, consolidation off) and the Mind panel (PR #20), `667b9d3`
+
+```bash
+docker compose up -d --build
+```
+
+**Who.** The session, on Diego's "yes please". **Outcome.** Healthy; wake, resync (6 new goals), `maintain:link` embedded 23 neurons (24 related edges); `stakes:integrateBudgetPressure` at boot (today's integrate budget used). `archived: 0` until the first daily maintenance runs forgetting. Consolidation is off (`watcher.consolidate.enabled` default false, `preview: true`). `watcher-mind-helpers.js` and `watcher-memory-helpers.js` served 200. The bot entity "** MyFirstMillion Bot" still shows the asterisks: the neuron was created at birth before the name fix (#14) and resync does not rename existing entities. **Reversible?** Rebuild from `b6e7555`; config untouched.
+
+### 2026-10-25 — Read-only look at the live watcher (config + broadcasts)
+
+```bash
+docker exec aibot-framework-aibot-1 sh -c 'cat /app/config/config.json'
+docker exec aibot-framework-aibot-1 sh -c 'cd /app/data/watcher && wc -l broadcasts.jsonl; tail -n 4 broadcasts.jsonl; ls passes | wc -l'
+```
+
+**Who.** The session, answering Diego's questions about the watcher. **Outcome.** `watcher.enabled`, notice (48/day) and integrate (8/day) on; 46 broadcast lines, 55 pass records. Nothing written. **Reversible?** n/a, read-only.
+
+### 2026-10-25 — Read-only cost figures for the watcher autonomy plan
+
+```bash
+docker exec aibot-framework-aibot-1 sh -c 'cd /app/data/watcher && for f in budget-*.json; do cat $f; echo; done'
+docker exec aibot-framework-aibot-1 bun -e '<sum costUsd of /app/data/watcher/passes/*.json by caller>'
+docker exec aibot-framework-aibot-1 bun -e '<sum costUsd of /app/data/llm-query-log/**.jsonl, last 7 days, by bot|caller>'
+docker exec aibot-framework-aibot-1 bun -e '<count /app/data/agent-cycles/**.jsonl rows, last 7 days, by status>'
+```
+
+**Who.** The session, for `docs/plans/watcher-autonomy-plan.md`. **Outcome.** Watcher ~$2.2/day (integrate cap hit 10-24 and 10-25); fleet $211 over 7 days; cycles 186 completed / 32 error / 22 skipped / 5 idle. Nothing written. **Reversible?** n/a, read-only.
+
+### 2026-10-25 — Deploy the prediction judge and forgetting fix (PR #21, `ce41afb`), re-judge old predictions
+
+| | |
+|---|---|
+| **Environment** | Local container `aibot-framework-aibot-1` |
+| **Who** | The session, unattended under Diego's "continue all the way tonight without me" (2026-10-25 23:27 AST) |
+
+```bash
+docker compose up -d --build
+# in the container:
+bun scripts/watcher/rejudge.ts --dry-run --config /app/config/config.json
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/stop
+bun scripts/watcher/rejudge.ts --apply --config /app/config/config.json --watcher-url http://localhost:3000 --token "$ADMIN_API_KEY"
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/start
+```
+
+**Outcome.** Healthy; wake, resync, `maintain:link` embedded 5. Re-judge: 9 judged, 6 changed (3 → happened, 3 → unknown, 3 stay did_not_happen), all with evidence from the tool audit and cycle log; written with the watcher stopped (URL check passed), watcher restarted. Calibration: Brier 0.42 (old judge) → **0.129** over 6 resolved (frequency baseline 0.25), 3 unknown excluded. Forgetting now runs below the size target from the next daily maintenance (≤ 200/run).
+
+**Reversible?** Each re-judged neuron keeps `meta.previousHappened` and `meta.rejudgedAt`; rebuild from `667b9d3` for the code.
