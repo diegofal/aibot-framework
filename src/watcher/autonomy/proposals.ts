@@ -299,12 +299,15 @@ export type SubmitResult =
   | { ok: true; proposal: Proposal; deduped?: true }
   | { ok: false; error: string; proposal?: Proposal };
 
-/** 500: something was done that could not be recorded; `error` says what is live. */
+/** 500: something was done (or an intent recorded) that is not settled; `error` says what is live. */
 export type DecisionResult =
   | { ok: true; proposal: Proposal; change?: ChangeRecord }
   | { ok: false; status: 403 | 404 | 409 | 500; error: string };
 
-/** A failure with `live: true` changed the live values (and could not undo them): never "not applied". */
+/**
+ * A failure with `live: true` left an intent recorded and not settled (the values may be live):
+ * never "not applied", always a 500. The ledger's next `recover` settles it.
+ */
 export type ApplyFn = (
   proposal: Proposal
 ) => Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string; live?: true }>;
@@ -319,9 +322,11 @@ export interface ProposalStoreDeps {
   /** The change ledger's apply. */
   apply: ApplyFn;
   /**
-   * The ledger's change for a proposal, if one was applied. A pending
-   * proposal with a change was approved but its decision was not stored:
-   * it is recorded as approved, never applied again.
+   * The ledger's change for a proposal, if one was recorded (never an
+   * `apply-failed` one). A pending proposal with a change was approved but its
+   * decision was not stored: it is recorded as approved, never applied again.
+   * A change still `applying` is not settled yet: the proposal stays pending,
+   * is never applied again and never expires until the ledger settles it.
    */
   changeFor?: (proposalId: string) => ChangeRecord | undefined;
   logger?: { warn: (obj: object, msg: string) => void };
@@ -426,6 +431,13 @@ export class ProposalStore {
       };
     }
     const existing = this.changeOf(p.id);
+    if (existing?.status === 'applying') {
+      return {
+        ok: false,
+        status: 500,
+        error: `It is being applied as change ${existing.id}, which is not settled yet; the next check settles it from the live values. I did not apply it again`,
+      };
+    }
     if (existing) {
       // Already applied by an approval whose decision was not stored: store it now.
       const healed = this.healApproved(p, existing);
@@ -520,8 +532,8 @@ export class ProposalStore {
       if (p.status !== 'pending') continue;
       const existing = this.changeOf(p.id);
       if (existing) {
-        // Approved, with its decision lost: record it, never expire it.
-        if (!this.healApproved(p, existing)) pending++;
+        // Approved, with its decision lost: record it, never expire it (a settling one waits).
+        if (existing.status === 'applying' || !this.healApproved(p, existing)) pending++;
         continue;
       }
       if (p.expiresAt && Date.parse(p.expiresAt) <= nowMs) {
@@ -555,7 +567,7 @@ export class ProposalStore {
     }
   }
 
-  /** `live`: the values changed and could not be undone; the note says so instead of "could not apply". */
+  /** `live`: an intent is recorded and not settled (values may be live); the note says so instead of "could not apply". */
   private applyFailed(p: Proposal, error: string, live = false): DecisionResult {
     const note = error.slice(0, PROPOSAL_LIMITS.text);
     this.write({ ...p, note });

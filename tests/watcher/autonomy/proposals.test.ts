@@ -471,3 +471,35 @@ describe('review round 1: proposals', () => {
     expect(store.get(r.proposal.id)?.status).toBe('approved');
   });
 });
+
+describe('write-ahead: proposals over settling changes', () => {
+  it('a change still applying keeps its proposal pending: never applied again, never expired, healed once settled', async () => {
+    const { store, applied } = makeStore();
+    const r = store.submit(proposalInput());
+    if (!r.ok) throw new Error('setup');
+    const change: ChangeRecord = {
+      id: 'c-0000abcd',
+      proposalId: r.proposal.id,
+      before: [],
+      after: [],
+      guard: r.proposal.guard,
+      appliedAt: new Date(t).toISOString(),
+      guardUntil: new Date(t + 72 * HOUR).toISOString(),
+      status: 'applying',
+    };
+    const deps = (store as unknown as { deps: { changeFor: (id: string) => ChangeRecord } }).deps;
+    deps.changeFor = (id) => (id === r.proposal.id ? change : (undefined as never));
+    const opts = { contentHash: r.proposal.contentHash, actor: 'operator' as const };
+    const res = await store.approve(r.proposal.id, opts);
+    expect(res).toMatchObject({ ok: false, status: 500 });
+    if (!res.ok) expect(res.error).toContain('c-0000abcd');
+    expect(applied()).toBe(0);
+    t += 100 * HOUR;
+    store.refresh();
+    expect(store.get(r.proposal.id)?.status).toBe('pending');
+    change.status = 'applied';
+    expect(store.get(r.proposal.id)?.status).toBe('approved');
+    expect(store.get(r.proposal.id)?.changeId).toBe('c-0000abcd');
+    expect(applied()).toBe(0);
+  });
+});

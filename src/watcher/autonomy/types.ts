@@ -102,11 +102,27 @@ export interface Proposal extends ProposalInput {
 }
 
 /**
- * `applied`: live. `reverted`: the operator undid it. `rolled-back`: its guard
- * regressed and code undid it. `revert-failed`: undoing it failed (the
- * before-values are still here; the operator is told).
+ * Write-ahead (C4): every write of config values is preceded by an intent
+ * record, and an intent is settled from the live values, never compensated.
+ *
+ * `applying`: intent recorded, the after-values may or may not be live yet.
+ * `applied`: live. `apply-failed`: the write failed and nothing went live.
+ * `reverting`: a revert (`cause: operator`) or rollback (`cause: guard`) is
+ * recorded and not finished; it is always finished, whatever `guardUntil`
+ * says. `reverted`: the operator undid it. `rolled-back`: its guard regressed
+ * and code undid it. `revert-failed`: needs the operator: undoing it failed,
+ * or the live values are neither the before- nor the after-values (`found`
+ * holds what was live); the before-values are still here and nothing was
+ * written over what someone else set.
  */
-export type ChangeStatus = 'applied' | 'reverted' | 'rolled-back' | 'revert-failed';
+export type ChangeStatus =
+  | 'applying'
+  | 'applied'
+  | 'apply-failed'
+  | 'reverting'
+  | 'reverted'
+  | 'rolled-back'
+  | 'revert-failed';
 
 export interface ChangeRecord {
   /** `c-` + 8 hex. */
@@ -125,8 +141,14 @@ export interface ChangeRecord {
   guardUntil: string;
   status: ChangeStatus;
   endedAt?: string;
-  /** Why it ended: the operator's revert, or the guard reading that rolled it back. */
+  /** Why it ended (or, while `reverting`, why it is being undone): the operator's revert, or the guard reading. */
   endReason?: string;
+  /** Who asked for the revert a `reverting` record (and what follows it) carries. */
+  cause?: 'operator' | 'guard';
+  /** The guard reading that started a rollback. */
+  guardReading?: number;
+  /** `revert-failed` from a settlement: the live values found, neither before nor after. */
+  found?: Array<{ path: string; value: unknown }>;
 }
 
 /** `GET /api/watcher/proposals`. */

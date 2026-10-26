@@ -264,11 +264,17 @@ function queuedRowHtml(p) {
 }
 
 const CHANGE_STATUS = {
+  applying: 'Settling…',
+  reverting: 'Settling…',
   applied: 'Live',
+  'apply-failed': 'Could not apply',
   reverted: 'Reverted by you',
   'rolled-back': 'Rolled back by its guard',
-  'revert-failed': 'Revert failed',
+  'revert-failed': 'Needs you',
 };
+
+/** Recorded, not finished: the ledger settles it from the live values at the next check. */
+const SETTLING = new Set(['applying', 'reverting']);
 
 function pairsHtml(before, after) {
   const afterOf = new Map((Array.isArray(after) ? after : []).map((a) => [a?.path, a?.value]));
@@ -281,20 +287,36 @@ function pairsHtml(before, after) {
   return rows.length ? `<ul class="watcher-auto-changes">${rows.join('')}</ul>` : '';
 }
 
+/** What a settlement found live, when it was neither the old nor the new value. */
+function foundHtml(found) {
+  if (!Array.isArray(found) || found.length === 0) return '';
+  const rows = found.map(
+    (f) => `<li><code>${esc(f?.path ?? '?')}</code>: ${esc(formatValue(f?.value))}</li>`
+  );
+  return `<div class="watcher-auto-sub">Live now</div><ul class="watcher-auto-changes">${rows.join('')}</ul>`;
+}
+
 function changeRowHtml(c, { nowMs, ui, titleOf }) {
   const status = CHANGE_STATUS[c.status] ?? String(c.status ?? '');
-  const tone = c.status === 'applied' ? 'is-live' : c.status === 'revert-failed' ? 'is-bad' : '';
+  const tone =
+    c.status === 'applied' || SETTLING.has(c.status)
+      ? 'is-live'
+      : c.status === 'revert-failed'
+        ? 'is-bad'
+        : '';
   const busy = ui?.busy === c.id ? ' disabled' : '';
   const armed = isArmed(ui?.armed, revertKey(c), nowMs);
   const guardLeftH = Math.ceil((timeOf(c.guardUntil) - nowMs) / 3_600_000);
-  const when =
-    c.status === 'applied'
+  const when = SETTLING.has(c.status)
+    ? `${c.status === 'applying' ? 'being applied' : 'being undone'} · it settles at the next check`
+    : c.status === 'applied'
       ? `applied ${relTime(c.appliedAt, nowMs)}${
           guardLeftH > 0 ? ` · its guard watches ${guardLeftH} h more` : ' · guard window over'
         }`
       : `ended ${relTime(c.endedAt, nowMs)}`;
-  // A failed automatic rollback leaves the changed value live and its guard
-  // stops watching: only the operator's Revert can put it back.
+  // A failed revert or rollback, or live values the ledger did not expect
+  // (revert-failed), wait for the operator: only Revert (or a hand edit) can
+  // settle them. A settling change has no button: the next check finishes it.
   const revert =
     c.status === 'applied' || c.status === 'revert-failed'
       ? `<div class="watcher-auto-actions"><button type="button" class="btn btn-sm${
@@ -307,7 +329,7 @@ function changeRowHtml(c, { nowMs, ui, titleOf }) {
     status
   )}</span> <strong>${esc(titleOf(c.proposalId) ?? c.proposalId ?? '')}</strong> <span class="text-dim">${esc(
     when
-  )}</span>${pairsHtml(c.before, c.after)}${
+  )}</span>${pairsHtml(c.before, c.after)}${foundHtml(c.found)}${
     c.endReason ? `<div class="watcher-auto-reason">${esc(c.endReason)}</div>` : ''
   }${errorHtml(ui, c.id)}${revert}</li>`;
 }

@@ -21,9 +21,13 @@
  *                          breaker), 502 failed
  *   GET  /proposals        ProposalsResponse (autonomy rung 0); { enabled: false, … } when off
  *   POST /proposals/:id/approve  { contentHash } → 200 { proposal, change }, 409 { error }
- *                          (hash mismatch, expired, not pending, changed since, apply failed)
+ *                          (hash mismatch, expired, not pending, changed since, apply failed),
+ *                          500 when an intent is recorded but not settled (values may be live;
+ *                          the hourly tick settles it from the live values)
  *   POST /proposals/:id/reject   { note? } → 200 { proposal }
- *   POST /changes/:id/revert     → 200 { change }, 409 when the live value moved
+ *   POST /changes/:id/revert     → 200 { change }, 409 when the live value moved or the
+ *                          write failed (the change then needs you), 500 when the revert is
+ *                          recorded but not settled (the tick finishes it)
  *                          (all three 404 { enabled: false } with proposals off; actor is
  *                          always the operator: only an admin reaches these routes)
  *

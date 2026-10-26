@@ -4,6 +4,10 @@
  * `<watcherDir>/self/`; `startAutonomyTimers` runs `tick` hourly (expiry,
  * promotion of queued proposals, guard checks and auto-rollback).
  *
+ * `createAutonomy` settles any change record a previous run left `applying` or
+ * `reverting` before its first call (`ready`), and every `tick` does the same
+ * first (`ChangeLedger.recover`, write-ahead: nothing is ever compensated).
+ *
  * `submit` is code-only: no route submits a proposal (rung 0 has no producer
  * besides tests). `approve` / `reject` / `revert` take `actor: 'operator'`,
  * which only the admin dashboard routes pass (`src/web/routes/watcher.ts`).
@@ -17,6 +21,7 @@ import { WATCHER_DEFAULTS, type WatcherConfig } from '../types';
 import { type GuardReader, createGuardReader } from './guards';
 import {
   ChangeLedger,
+  INTERMEDIATE_STATUSES,
   type LedgerEvent,
   type LedgerResult,
   type ValueAccess,
@@ -35,7 +40,7 @@ export type { AutonomyLog, DecisionResult, SubmitResult } from './proposals';
 export type { LedgerEvent, LedgerResult, ValueAccess } from './ledger';
 export type { GuardReader } from './guards';
 
-/** How much decided history `list` returns: decided proposals, and ended changes (live and revert-failed ones are always listed). */
+/** How much decided history `list` returns: decided proposals, and ended changes (live, settling and revert-failed ones are always listed). */
 export const LIST_HISTORY_LIMIT = 50;
 export const AUTONOMY_TICK_MS = 3_600_000;
 
@@ -67,8 +72,10 @@ export interface AutonomyApi {
   approve(id: string, opts: { contentHash: string; actor: 'operator' }): Promise<DecisionResult>;
   reject(id: string, opts: { actor: 'operator'; note?: string }): Promise<DecisionResult>;
   revert(changeId: string, opts: { actor: 'operator' }): Promise<LedgerResult>;
-  /** Expiry, promotion, guard checks. Never throws. */
+  /** Settling of intermediate change records, expiry, promotion, guard checks. Never throws. */
   tick(nowMs?: number): Promise<void>;
+  /** Resolves once the construction-time recovery of intermediate change records is done. */
+  ready(): Promise<void>;
 }
 
 function proposalSettings(config: Config) {
@@ -107,7 +114,9 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
     settings: () => proposalSettings(config),
     lockContext: () => ({ config }),
     apply: (p) => ledger.apply(p),
-    changeFor: (proposalId) => ledger.all().find((c) => c.proposalId === proposalId),
+    // An apply-failed change never went live: its proposal can be approved again.
+    changeFor: (proposalId) =>
+      ledger.all().find((c) => c.proposalId === proposalId && c.status !== 'apply-failed'),
     logger: opts.logger,
   });
 
@@ -118,6 +127,14 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
     return run;
   };
   const enabled = () => proposalSettings(config).enabled;
+  // Before anything else runs: settle what a previous run left half done.
+  const recovered = exclusive(async () => {
+    try {
+      await ledger.recover(now());
+    } catch (err) {
+      opts.logger?.warn({ err }, 'Autonomy: recovery failed');
+    }
+  });
 
   return {
     enabled,
@@ -133,9 +150,12 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
         )
         .sort(newestFirst((p: Proposal) => p.decidedAt ?? p.pendingAt ?? p.createdAt))
         .slice(0, LIST_HISTORY_LIMIT);
-      // A change the operator may still need to revert is never cut by the history limit.
+      // A change that is live, still settling or needs the operator is never cut by the history limit.
       const byApplied = ledger.all().sort(newestFirst((c: ChangeRecord) => c.appliedAt));
-      const open = (c: ChangeRecord) => c.status === 'applied' || c.status === 'revert-failed';
+      const open = (c: ChangeRecord) =>
+        c.status === 'applied' ||
+        c.status === 'revert-failed' ||
+        INTERMEDIATE_STATUSES.has(c.status);
       const kept = new Set([
         ...byApplied.filter(open),
         ...byApplied.filter((c) => !open(c)).slice(0, LIST_HISTORY_LIMIT),
@@ -159,6 +179,11 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
       exclusive(async () => {
         const at = nowMs ?? now();
         try {
+          await ledger.recover(at);
+        } catch (err) {
+          opts.logger?.warn({ err }, 'Autonomy: recovery failed');
+        }
+        try {
           store.refresh(at);
         } catch (err) {
           opts.logger?.warn({ err }, 'Autonomy: proposal refresh failed');
@@ -169,6 +194,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
           opts.logger?.warn({ err }, 'Autonomy: guard check failed');
         }
       }),
+    ready: () => recovered,
   };
 }
 

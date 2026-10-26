@@ -3,14 +3,29 @@
  * Every approved proposal is applied here, by code, and becomes a
  * `ChangeRecord` in `<watcherDir>/self/changes.jsonl` (append-only, last line
  * per id wins, readers never throw) with the live values right before and
- * right after. `apply` refuses when a live value is no longer what the
- * proposal saw. `revert` (the operator) writes the before-values back only
- * while the live values are still the ones it applied. `checkGuards` (hourly)
- * reads each live change's guard metric inside its window and, on a breach,
- * rolls it back by code; a rollback that cannot write, or that would clobber
- * a value someone changed since, is `revert-failed` and keeps its
- * before-values for the operator. Every outcome is a watcher log row. Never
- * throws.
+ * right after.
+ *
+ * Write-ahead, no compensation: no config value is ever written before an
+ * intent record says what is about to be written. Apply appends `applying`,
+ * writes the after-values, appends `applied`. Revert (the operator) and
+ * rollback (a breached guard, hourly) append `reverting` with its `cause`,
+ * write the before-values, append `reverted` / `rolled-back`. Nothing ever
+ * writes old values back on behalf of a record that failed to store: a record
+ * left `applying` or `reverting` is settled by `recover` (every tick, and at
+ * construction through `createAutonomy`) from the live values alone —
+ * `applying` with the after-values live → `applied`, with the before-values →
+ * `apply-failed`; `reverting` with the before-values live → finished, with the
+ * after-values → the before-values written and finished (whatever
+ * `guardUntil` says: a rollback intent is never abandoned); anything else →
+ * `revert-failed` with what was `found`, for the operator, and nothing
+ * written over someone else's edit. Every outcome is a watcher log row.
+ * Never throws.
+ *
+ * A before-value that was an env reference in the file (`raw`, such as
+ * `${CADENCE}`) goes back to the file as written, and live as the reference
+ * expanded with the current environment (`expandEnvReferences`, what
+ * `loadConfig` does); a reference whose variable is no longer set is not
+ * written and the change goes to the operator.
  *
  * Values go through a `ValueAccess`; `createConfigAccess` is the real one:
  * the live `Config` plus the config files on disk.
@@ -25,6 +40,7 @@ import {
   patchConfigFile,
   writeJsonFileAtomic,
 } from '../../config';
+import { parseDurationMs } from '../../core/duration';
 import { type GuardReader, breaches } from './guards';
 import { BOT_CADENCE, TUNABLES } from './locked';
 import {
@@ -64,10 +80,19 @@ export function changesFile(watcherDir: string): string {
 }
 
 const CHANGE_STATUSES: ReadonlySet<string> = new Set<ChangeStatus>([
+  'applying',
   'applied',
+  'apply-failed',
+  'reverting',
   'reverted',
   'rolled-back',
   'revert-failed',
+]);
+
+/** Recorded and not settled: `recover` finishes it from the live values. */
+export const INTERMEDIATE_STATUSES: ReadonlySet<ChangeStatus> = new Set<ChangeStatus>([
+  'applying',
+  'reverting',
 ]);
 
 function validChange(v: unknown): v is ChangeRecord {
@@ -98,15 +123,20 @@ export interface LedgerDeps {
   guards?: GuardReader;
   log?: AutonomyLog;
   now?: () => number;
-  /** After live values changed (apply, revert, rollback). A throw is logged, never propagated. */
+  /** After this ledger wrote live values (apply, revert, rollback). A throw is logged, never propagated. */
   onApplied?: (change: ChangeRecord, event: LedgerEvent) => void;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
-/** 500: the live values changed but the record of it could not be stored; `error` says what is live. */
+/** 500: an intent is recorded and not settled (values may be live); `error` says what is live. */
 export type LedgerResult =
   | { ok: true; change: ChangeRecord }
   | { ok: false; status: 403 | 404 | 409 | 500; error: string };
+
+/** `live: true`: an intent is recorded and not settled, values may be live: never "not applied" (500). */
+export type ApplyResult =
+  | { ok: true; change: ChangeRecord }
+  | { ok: false; error: string; live?: true };
 
 function show(v: unknown): string {
   if (v === undefined || v === null) return '(unset)';
@@ -122,6 +152,53 @@ const fmt = (n: number): string => String(Number(n.toFixed(4)));
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 const clone = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
+
+type Entry = ChangeRecord['before'][number];
+type Live = Array<{ path: string; value: unknown }>;
+
+/** `${NAME}` references in a raw value, at any depth. */
+function envNames(raw: unknown, out: string[] = []): string[] {
+  if (typeof raw === 'string') {
+    for (const m of raw.matchAll(/\$\{([^}]+)\}/g)) out.push(m[1]);
+  } else if (Array.isArray(raw)) {
+    for (const v of raw) envNames(v, out);
+  } else if (raw && typeof raw === 'object') {
+    for (const v of Object.values(raw)) envNames(v, out);
+  }
+  return out;
+}
+
+/** What a raw file value is live today: `loadConfig`'s expansion. Throws when a variable is not set. */
+function expandNow(path: string, raw: unknown): unknown {
+  if (raw === undefined || raw === null) return undefined;
+  const missing = envNames(raw).filter((n) => process.env[n] === undefined);
+  if (missing.length > 0) {
+    throw new Error(
+      `${path} goes back to ${show(raw)}, but ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not set, so I did not write it`
+    );
+  }
+  return expandEnvReferences(raw);
+}
+
+/** The writes that put the before-values back: raw references to the file, their current expansion live. */
+function restoreWrites(before: readonly Entry[]): ValueWrite[] {
+  return before.map((b) =>
+    Object.hasOwn(b, 'raw')
+      ? { path: b.path, value: expandNow(b.path, b.raw), raw: clone(b.raw) }
+      : { path: b.path, value: clone(b.value) }
+  );
+}
+
+/** Is `live` the before-value: the one recorded, or (for a raw reference) what it expands to now? */
+function isBefore(b: Entry, live: unknown): boolean {
+  if (sameValue(live, b.value)) return true;
+  if (!Object.hasOwn(b, 'raw')) return false;
+  try {
+    return sameValue(live, expandNow(b.path, b.raw));
+  } catch {
+    return false;
+  }
+}
 
 export class ChangeLedger {
   private readonly now: () => number;
@@ -139,9 +216,7 @@ export class ChangeLedger {
   }
 
   /** Apply an approved proposal. The caller (`ProposalStore.approve`) checked actor, hash and lock. */
-  async apply(
-    proposal: Proposal
-  ): Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string; live?: true }> {
+  async apply(proposal: Proposal): Promise<ApplyResult> {
     const before: ChangeRecord['before'] = [];
     for (const c of proposal.changes) {
       let live: unknown;
@@ -169,13 +244,8 @@ export class ChangeLedger {
       });
     }
     const after = proposal.changes.map((c) => ({ path: c.path, value: clone(c.to) }));
-    try {
-      await this.deps.access.write(after);
-    } catch (err) {
-      return { ok: false, error: `Could not write the change: ${errText(err)}` };
-    }
     const nowMs = this.now();
-    const change: ChangeRecord = {
+    const intent: ChangeRecord = {
       id: newId('c'),
       proposalId: proposal.id,
       before,
@@ -183,30 +253,55 @@ export class ChangeLedger {
       guard: { ...proposal.guard },
       appliedAt: new Date(nowMs).toISOString(),
       guardUntil: new Date(nowMs + proposal.guard.windowHours * HOUR_MS).toISOString(),
-      status: 'applied',
+      status: 'applying',
     };
-    if (!this.store(change)) {
-      // Without a record it could never be reverted: undo it now.
-      try {
-        await this.deps.access.write(before);
-      } catch (err) {
-        this.deps.logger?.warn(
-          { err, proposalId: proposal.id },
-          'Autonomy: could not undo an unrecorded change'
-        );
-        const error = `I applied it but could not record it, and undoing it failed (${errText(err)}): the new values are live with no change record (${describe(before, after)}). Set them back by hand`;
-        this.say('autonomy:apply-unrecorded', `${error}.`);
-        return { ok: false, error, live: true };
-      }
-      return { ok: false, error: 'Could not record the change, so I undid it: nothing changed' };
+    if (!this.store(intent)) {
+      return {
+        ok: false,
+        error: 'Could not record the change, so I did not apply it: nothing changed',
+      };
     }
-    const g = change.guard;
+    try {
+      await this.deps.access.write(after);
+    } catch (err) {
+      return this.applyWriteFailed(intent, errText(err));
+    }
+    const done: ChangeRecord = { ...intent, status: 'applied' };
+    if (!this.store(done)) {
+      const error = `I applied it as change ${intent.id} (${describe(before, after)}), but could not record that it finished. It is live; the next check records it from the live values, and it can be reverted then`;
+      this.say('autonomy:apply-unsettled', `${error}.`);
+      this.notify(intent, 'applied');
+      return { ok: false, error, live: true };
+    }
+    const g = done.guard;
     this.say(
       'autonomy:applied',
-      `I applied "${proposal.title}" as change ${change.id}: ${describe(before, after)}. I watch ${g.metric} (${g.direction === 'max' ? 'at most' : 'at least'} ${g.bound}) until ${change.guardUntil}.`
+      `I applied "${proposal.title}" as change ${done.id}: ${describe(before, after)}. I watch ${g.metric} (${g.direction === 'max' ? 'at most' : 'at least'} ${g.bound}) until ${done.guardUntil}.`
     );
-    this.notify(change, 'applied');
-    return { ok: true, change };
+    this.notify(done, 'applied');
+    return { ok: true, change: done };
+  }
+
+  /** The after-value write threw: what is live decides, nothing is written back. */
+  private applyWriteFailed(intent: ChangeRecord, error: string): ApplyResult {
+    const settled = this.settleApplying(intent, this.now(), error);
+    if (settled?.status === 'applied') {
+      this.notify(settled, 'applied');
+      return { ok: true, change: settled };
+    }
+    if (settled?.status === 'apply-failed') {
+      return { ok: false, error: `Could not write the change: ${error}. Nothing changed` };
+    }
+    if (settled?.status === 'revert-failed') {
+      return {
+        ok: false,
+        live: true,
+        error: `Writing the change failed (${error}) and the live values are neither the old nor the new ones (${describeLive(settled.found)}). Change ${intent.id} keeps both for you; set them by hand`,
+      };
+    }
+    const unsettled = `Writing the change failed (${error}) and I could not record the outcome; the next check settles change ${intent.id} from the live values`;
+    this.say('autonomy:apply-unsettled', `${unsettled}.`);
+    return { ok: false, live: true, error: unsettled };
   }
 
   /** The operator undoes a change. Refused when the live values are no longer the applied ones. */
@@ -216,6 +311,13 @@ export class ChangeLedger {
     }
     const change = this.get(id);
     if (!change) return { ok: false, status: 404, error: 'No such change' };
+    if (INTERMEDIATE_STATUSES.has(change.status)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `The change is still settling (${change.status}); the next check finishes it`,
+      };
+    }
     if (change.status !== 'applied' && change.status !== 'revert-failed') {
       return { ok: false, status: 409, error: `The change is ${change.status}` };
     }
@@ -227,38 +329,35 @@ export class ChangeLedger {
         error: `${moved} changed since the change was applied; I left it as it is`,
       };
     }
-    try {
-      await this.deps.access.write(change.before);
-    } catch (err) {
+    const intent: ChangeRecord = {
+      ...change,
+      status: 'reverting',
+      cause: 'operator',
+      endReason: 'Reverted by the operator',
+      guardReading: undefined,
+      endedAt: undefined,
+      found: undefined,
+    };
+    if (!this.store(intent)) {
       return {
         ok: false,
         status: 409,
-        error: `Could not write the old values back: ${errText(err)}`,
+        error: `Could not record the revert, so I did not start it: change ${change.id} is still ${change.status}`,
       };
     }
-    const ended: ChangeRecord = {
-      ...change,
-      status: 'reverted',
-      endedAt: new Date(this.now()).toISOString(),
-      endReason: 'Reverted by the operator',
-    };
-    if (!this.store(ended)) {
-      // A revert the ledger does not know about would leave a record that
-      // says applied over restored values: put the change back instead.
-      const failed = await this.reapply(change);
-      const error =
-        failed === undefined
-          ? `Could not record the revert, so I put change ${change.id} back: it is still applied. Try again`
-          : `I wrote the old values back but could not record the revert, and putting the change back failed (${failed}): the old values are live while change ${change.id} still shows as applied`;
-      this.say('autonomy:revert-unrecorded', `${error}.`);
-      return { ok: false, status: 500, error };
+    const outcome = await this.runRevert(intent, this.now());
+    if (outcome.kind === 'done') {
+      return { ok: true, change: outcome.change };
     }
-    this.say(
-      'autonomy:reverted',
-      `You reverted change ${change.id}: ${describe(change.after, change.before)}.`
-    );
-    this.notify(ended, 'reverted');
-    return { ok: true, change: ended };
+    if (outcome.kind === 'failed') {
+      return { ok: false, status: 409, error: outcome.change.endReason ?? 'The revert failed' };
+    }
+    const error =
+      outcome.kind === 'unsettled-written'
+        ? `I wrote the old values back but could not record that the revert finished; they are live, and the next check records change ${change.id} as reverted`
+        : `The revert of change ${change.id} failed and I could not record the outcome; the next check settles it from the live values`;
+    this.say('autonomy:revert-unsettled', `${error}.`);
+    return { ok: false, status: 500, error };
   }
 
   /** Roll back every live change whose guard breached inside its window. Returns the rolled-back ones. */
@@ -282,7 +381,7 @@ export class ChangeLedger {
         if (!breaches(change.guard, reading)) continue;
         const g = change.guard;
         const why = `${g.metric} read ${fmt(reading)}, past its ${g.direction === 'max' ? 'maximum' : 'minimum'} of ${g.bound}`;
-        const ended = await this.rollBack(change, why, nowMs);
+        const ended = await this.rollBack(change, why, reading, nowMs);
         if (ended?.status === 'rolled-back') rolled.push(ended);
       } catch (err) {
         this.deps.logger?.warn({ err, changeId: change.id }, 'Autonomy: guard check failed');
@@ -291,75 +390,261 @@ export class ChangeLedger {
     return rolled;
   }
 
+  /**
+   * Settle every record left `applying` or `reverting` (a record that could
+   * not be stored, a process that died between the steps), from the live
+   * values. `reverting` is finished whatever `guardUntil` says. Never throws.
+   */
+  async recover(nowMs: number = this.now()): Promise<void> {
+    for (const change of this.all()) {
+      try {
+        if (change.status === 'applying') {
+          if (!this.settleApplying(change, nowMs)) this.sayUnrecorded(change);
+        } else if (change.status === 'reverting') {
+          const outcome = await this.runRevert(change, nowMs, { recovering: true });
+          if (outcome.kind.startsWith('unsettled')) this.sayUnrecorded(change);
+        }
+      } catch (err) {
+        this.deps.logger?.warn({ err, changeId: change.id }, 'Autonomy: recovery failed');
+      }
+    }
+  }
+
   private async rollBack(
     change: ChangeRecord,
     why: string,
+    reading: number,
     nowMs: number
   ): Promise<ChangeRecord | undefined> {
-    const endedAt = new Date(nowMs).toISOString();
     const moved = this.movedSinceApply(change);
     if (moved) {
-      const failed: ChangeRecord = {
-        ...change,
-        status: 'revert-failed',
-        endedAt,
-        endReason: `${why}, but ${moved} changed since it was applied, so I left it; the old values are kept for you`,
-      };
-      this.storeFailed(failed);
+      const failed = this.needsOperator(
+        { ...change, cause: 'guard', guardReading: reading },
+        nowMs,
+        this.readLive(change),
+        `${why}, but ${moved} changed since it was applied, so I left it; the old values are kept for you`,
+        'autonomy:revert-failed'
+      );
+      if (!failed) {
+        this.say(
+          'autonomy:revert-failed',
+          `I could not roll back change ${change.id}: ${why}, but ${moved} changed since it was applied. I could not record this either: the change still shows as applied.`
+        );
+      }
       return failed;
     }
-    try {
-      await this.deps.access.write(change.before);
-    } catch (err) {
-      const failed: ChangeRecord = {
-        ...change,
-        status: 'revert-failed',
-        endedAt,
-        endReason: `${why}; writing the old values back failed (${errText(err)}); they are kept for you`,
-      };
-      this.storeFailed(failed);
-      return failed;
-    }
-    const ended: ChangeRecord = { ...change, status: 'rolled-back', endedAt, endReason: why };
-    if (!this.store(ended)) {
-      // Same as revert: never leave restored values under an "applied" record.
-      const failed = await this.reapply(change);
+    const intent: ChangeRecord = {
+      ...change,
+      status: 'reverting',
+      cause: 'guard',
+      guardReading: reading,
+      endReason: why,
+    };
+    if (!this.store(intent)) {
       this.say(
         'autonomy:rollback-unrecorded',
-        failed === undefined
-          ? `I rolled back change ${change.id} because ${why}, but could not record it, so I put the change back; it is still applied and I try again at the next check.`
-          : `I rolled back change ${change.id} because ${why}, but could not record it, and putting the change back failed (${failed}): the old values are live while the change still shows as applied.`
+        `I would roll back change ${change.id} because ${why}, but could not record it, so I changed nothing; it is still applied and I try again at the next check while its window lasts.`
       );
       return undefined;
     }
+    const outcome = await this.runRevert(intent, nowMs);
+    if (outcome.kind === 'done' || outcome.kind === 'failed') return outcome.change;
     this.say(
-      'autonomy:rolled-back',
-      `I rolled back change ${change.id} because ${why}: ${describe(change.after, change.before)}.`
+      'autonomy:rollback-unsettled',
+      outcome.kind === 'unsettled-written'
+        ? `I rolled back change ${change.id} because ${why}: the old values are live, but I could not record that it finished. The next check records it, whatever its window says.`
+        : `I tried to roll back change ${change.id} because ${why}, the write failed and I could not record the outcome; the next check settles it from the live values.`
     );
-    this.notify(ended, 'rolled-back');
-    return ended;
+    return undefined;
   }
 
-  /** Write a change's after-values again. The error text, or undefined when it worked. */
-  private async reapply(change: ChangeRecord): Promise<string | undefined> {
-    try {
-      await this.deps.access.write(change.after);
-      return undefined;
-    } catch (err) {
-      this.deps.logger?.warn({ err, changeId: change.id }, 'Autonomy: could not put a change back');
-      return errText(err);
+  /**
+   * Carry out a recorded `reverting` intent. Live = before → finished. Live =
+   * after (or each path one or the other) → the before-values are written,
+   * then finished; a write that fails is settled from the live values again
+   * (no second write). Anything else → the operator, nothing written.
+   */
+  private async runRevert(
+    intent: ChangeRecord,
+    nowMs: number,
+    opts: { recovering?: boolean } = {}
+  ): Promise<
+    { kind: 'done' | 'failed'; change: ChangeRecord } | { kind: 'unsettled-written' | 'unsettled' }
+  > {
+    const live = this.readLive(intent);
+    if (live && intent.before.every((b) => isBefore(b, liveAt(live, b.path)))) {
+      const done = this.finishRevert(intent, nowMs, opts.recovering === true);
+      return done ? { kind: 'done', change: done } : { kind: 'unsettled-written' };
     }
+    const ours =
+      live &&
+      intent.before.every((b) => {
+        const a = intent.after.find((x) => x.path === b.path);
+        return (
+          isBefore(b, liveAt(live, b.path)) || (!!a && sameValue(liveAt(live, a.path), a.value))
+        );
+      });
+    if (!ours) {
+      const failed = this.needsOperator(
+        intent,
+        nowMs,
+        live,
+        `${intentWhy(intent)}, but the live values are neither the old nor the new ones, so I left them; both are kept for you`,
+        'autonomy:needs-operator'
+      );
+      return failed ? { kind: 'failed', change: failed } : { kind: 'unsettled' };
+    }
+    let error: string | undefined;
+    try {
+      await this.deps.access.write(restoreWrites(intent.before));
+    } catch (err) {
+      error = errText(err);
+    }
+    if (error === undefined) {
+      const done = this.finishRevert(intent, nowMs, opts.recovering === true);
+      this.notify(done ?? intent, intent.cause === 'guard' ? 'rolled-back' : 'reverted');
+      return done ? { kind: 'done', change: done } : { kind: 'unsettled-written' };
+    }
+    const after = this.readLive(intent);
+    if (after && intent.before.every((b) => isBefore(b, liveAt(after, b.path)))) {
+      const done = this.finishRevert(intent, nowMs, opts.recovering === true);
+      return done ? { kind: 'done', change: done } : { kind: 'unsettled-written' };
+    }
+    const failed = this.needsOperator(
+      intent,
+      nowMs,
+      after,
+      `${intentWhy(intent)}; writing the old values back failed (${error}); they are kept for you`,
+      'autonomy:revert-failed'
+    );
+    return failed ? { kind: 'failed', change: failed } : { kind: 'unsettled' };
   }
 
-  /** A `revert-failed` record and its row; the row says so when even the record could not be stored. */
-  private storeFailed(failed: ChangeRecord): void {
-    const stored = this.store(failed);
-    this.say(
-      'autonomy:revert-failed',
-      stored
-        ? `I could not roll back change ${failed.id}: ${failed.endReason}.`
-        : `I could not roll back change ${failed.id}: ${failed.endReason}. I could not record this either: the change still shows as applied.`
+  /** The terminal record of a revert intent whose before-values are live, and its row. */
+  private finishRevert(
+    intent: ChangeRecord,
+    nowMs: number,
+    recovering: boolean
+  ): ChangeRecord | undefined {
+    const guard = intent.cause === 'guard';
+    const done: ChangeRecord = {
+      ...intent,
+      status: guard ? 'rolled-back' : 'reverted',
+      endedAt: new Date(nowMs).toISOString(),
+      endReason:
+        intent.endReason ?? (guard ? 'Rolled back by its guard' : 'Reverted by the operator'),
+      found: undefined,
+    };
+    if (!this.store(done)) return undefined;
+    const values = describe(intent.after, intent.before);
+    if (guard) {
+      this.say(
+        'autonomy:rolled-back',
+        recovering
+          ? `I finished rolling back change ${intent.id} because ${done.endReason}: ${values}.`
+          : `I rolled back change ${intent.id} because ${done.endReason}: ${values}.`
+      );
+    } else {
+      this.say(
+        'autonomy:reverted',
+        recovering
+          ? `I finished your revert of change ${intent.id}: ${values}.`
+          : `You reverted change ${intent.id}: ${values}.`
+      );
+    }
+    return done;
+  }
+
+  /** Settle an `applying` intent from the live values. Undefined when the outcome could not be stored. */
+  private settleApplying(
+    intent: ChangeRecord,
+    nowMs: number,
+    error?: string
+  ): ChangeRecord | undefined {
+    const live = this.readLive(intent);
+    if (live && intent.after.every((a) => sameValue(liveAt(live, a.path), a.value))) {
+      const done: ChangeRecord = { ...intent, status: 'applied' };
+      if (!this.store(done)) return undefined;
+      this.say(
+        'autonomy:applied',
+        `I recorded change ${intent.id} as applied: its new values are live (${describe(intent.before, intent.after)}). I watch ${intent.guard.metric} until ${intent.guardUntil}.`
+      );
+      return done;
+    }
+    const before =
+      live &&
+      intent.after.every((a) => {
+        const b = intent.before.find((x) => x.path === a.path);
+        return !!b && isBefore(b, liveAt(live, b.path));
+      });
+    if (before) {
+      const failed: ChangeRecord = {
+        ...intent,
+        status: 'apply-failed',
+        endedAt: new Date(nowMs).toISOString(),
+        endReason: error
+          ? `Writing the change failed (${error}); nothing changed`
+          : 'The change never reached the live config; nothing changed',
+      };
+      if (!this.store(failed)) return undefined;
+      this.say(
+        'autonomy:apply-failed',
+        `I could not apply change ${intent.id}: ${failed.endReason}.`
+      );
+      return failed;
+    }
+    return this.needsOperator(
+      intent,
+      nowMs,
+      live,
+      `${error ? `Writing the change failed (${error}) and the` : 'The'} live values are neither the old nor the new ones, so I left them; both are kept for you`,
+      'autonomy:needs-operator'
     );
+  }
+
+  /** `revert-failed` with what was found live, and its row. Never writes a value. */
+  private needsOperator(
+    change: ChangeRecord,
+    nowMs: number,
+    live: Live | undefined,
+    reason: string,
+    op: 'autonomy:needs-operator' | 'autonomy:revert-failed'
+  ): ChangeRecord | undefined {
+    const failed: ChangeRecord = {
+      ...change,
+      status: 'revert-failed',
+      endedAt: new Date(nowMs).toISOString(),
+      endReason: reason,
+      ...(live ? { found: live } : {}),
+    };
+    if (!this.store(failed)) return undefined;
+    this.say(
+      op,
+      op === 'autonomy:needs-operator'
+        ? `Change ${change.id} needs you: ${reason} (live ${describeLive(live)}).`
+        : `I could not ${change.cause === 'operator' ? 'revert' : 'roll back'} change ${change.id}: ${reason}.`
+    );
+    return failed;
+  }
+
+  private sayUnrecorded(change: ChangeRecord): void {
+    this.say(
+      'autonomy:settle-unrecorded',
+      `I could not record how change ${change.id} (${change.status}) settled; I try again at the next check.`
+    );
+  }
+
+  /** The live value of every path a change touches, in `before` order; undefined when one cannot be read. */
+  private readLive(change: ChangeRecord): Live | undefined {
+    const out: Live = [];
+    for (const b of change.before) {
+      try {
+        out.push({ path: b.path, value: clone(this.deps.access.read(b.path)) });
+      } catch {
+        return undefined;
+      }
+    }
+    return out;
   }
 
   /** The first path whose live value is no longer the applied one, if any. */
@@ -418,6 +703,19 @@ function describe(
     .join('; ');
 }
 
+/** What a revert intent was for, as the start of a sentence. */
+function intentWhy(intent: ChangeRecord): string {
+  if (intent.cause === 'guard') return intent.endReason ?? 'Its guard breached';
+  return 'You asked to revert it';
+}
+
+const liveAt = (live: Live, path: string): unknown => live.find((l) => l.path === path)?.value;
+
+function describeLive(live: Live | undefined): string {
+  if (!live) return 'unreadable';
+  return live.map((l) => `${l.path} ${show(l.value)}`).join('; ');
+}
+
 // ── the real value access: live config + config files ───────────────────
 
 const TUNABLE_PATHS: ReadonlySet<string> = new Set(TUNABLES.map((t) => t.path));
@@ -469,7 +767,9 @@ export interface ConfigAccessDeps {
  * the raw file value when it expands to the live one but is not it (an env
  * reference: `agentLoop.every: "${CADENCE}"`; a watcher tunable cannot be one,
  * `WatcherConfigSchema` takes numbers only), and a write with `raw` puts that
- * back in the file while the live config gets the expanded value. A watcher value is
+ * back in the file while the live config gets `value` (the ledger passes the
+ * reference expanded with the current environment, `restoreWrites`; a bot
+ * cadence going live must be a duration the agent loop parses). A watcher value is
  * written into config.json raw (its `${VAR}` references untouched, validated
  * with `WatcherConfigSchema` as `loadConfig` would see it, through
  * `patchConfigFile`); a bot's `agentLoop.every` into bots.json raw (never
@@ -516,6 +816,7 @@ export function createConfigAccess(deps: ConfigAccessDeps): ValueAccess {
         if (t.kind === 'watcher') watcherValues.push({ keys: t.keys, value: v.value, file });
         else {
           if (!bot(t.botId)) throw new Error(`No bot "${t.botId}" in the live config`);
+          validateCadence(v.path, v.value);
           botValues.push({ botId: t.botId, value: v.value, file });
         }
       }
@@ -545,6 +846,18 @@ export function createConfigAccess(deps: ConfigAccessDeps): ValueAccess {
       }
     },
   };
+}
+
+/** A live cadence is absent or a duration the agent loop parses (a restored `${VAR}` expansion included). */
+function validateCadence(path: string, value: unknown): void {
+  if (value === undefined || value === null) return;
+  if (typeof value !== 'string')
+    throw new Error(`${path} must be a duration like "6h", got ${show(value)}`);
+  try {
+    parseDurationMs(value);
+  } catch {
+    throw new Error(`${path} must be a duration like "6h", got ${show(value)}`);
+  }
 }
 
 function validateWatcher(watcher: unknown): void {

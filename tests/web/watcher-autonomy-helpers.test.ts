@@ -345,7 +345,8 @@ describe('proposalsPanelHtml (C3, C4, C7)', () => {
       endReason: 'Guard breached; the config write failed <EACCES>',
     });
     const html = proposalsPanelHtml(resp({ proposals: [], changes: [failed] }), { nowMs: NOW });
-    expect(html).toContain('Revert failed');
+    // write-ahead: revert-failed is every 'needs the operator' state, so its label says that
+    expect(html).toContain('Needs you');
     expect(html).toContain('the config write failed &lt;EACCES&gt;');
     expect(html).toContain('data-action="autonomy-revert"');
     expect(html).toContain('data-change-id="c-22222222"');
@@ -357,10 +358,33 @@ describe('proposalsPanelHtml (C3, C4, C7)', () => {
     expect(armed).toContain('Click again to revert');
   });
 
+  it('a settling change says so and has no Revert; a needs-you one shows what is live now', () => {
+    for (const status of ['applying', 'reverting']) {
+      const html = proposalsPanelHtml(resp({ proposals: [], changes: [change({ status })] }), {
+        nowMs: NOW,
+      });
+      expect(html).toContain('Settling…');
+      expect(html).toContain('settles at the next check');
+      expect(html).not.toContain('data-action="autonomy-revert"');
+    }
+    const odd = change({
+      status: 'revert-failed',
+      endedAt: iso(NOW - H),
+      endReason: 'the live values are neither the old nor the new ones',
+      found: [{ path: 'watcher.integrate.wakeSalience', value: 7 }],
+    });
+    const html = proposalsPanelHtml(resp({ proposals: [], changes: [odd] }), { nowMs: NOW });
+    expect(html).toContain('Needs you');
+    expect(html).toContain('Live now');
+    expect(html).toContain('wakeSalience</code>: 7</li>');
+    expect(html).toContain('data-action="autonomy-revert"');
+  });
+
   it('ended changes show their end reason and no Revert', () => {
     for (const [status, label] of [
       ['rolled-back', 'Rolled back by its guard'],
       ['reverted', 'Reverted by you'],
+      ['apply-failed', 'Could not apply'],
     ]) {
       const html = proposalsPanelHtml(
         resp({
