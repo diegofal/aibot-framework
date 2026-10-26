@@ -271,7 +271,7 @@ export interface WatcherConfig {
     relatedThreshold: number;
     /** Hard ceiling: past it, the oldest inactive neuron is archived at once. */
     maxNeurons: number;
-    /** O10: daily forgetting archives low-importance neurons until the live graph is this size. */
+    /** O10: above this size daily forgetting archives low-importance neurons past `forget.maxPerRun` until the live graph is this size. */
     targetNeurons?: number;
   };
   birth: { historyDays: number };
@@ -279,7 +279,12 @@ export interface WatcherConfig {
   /** O1 fast lane (`src/watcher/fast-lane.ts`); absent = `WATCHER_DEFAULTS.fastLane`. */
   fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
   /** O10 forgetting (`importance.ts`); absent = `WATCHER_DEFAULTS.forget`. */
-  forget?: { threshold: number; graceDays: number };
+  forget?: {
+    threshold: number;
+    graceDays: number;
+    /** Most neurons one daily run archives below the target; absent = 200. */
+    maxPerRun?: number;
+  };
   /** O10 nightly consolidation (`consolidate.ts`); absent = `WATCHER_DEFAULTS.consolidate`. */
   consolidate?: {
     enabled: boolean;
@@ -322,7 +327,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   birth: { historyDays: 30 },
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
-  forget: { threshold: 0.15, graceDays: 7 },
+  forget: { threshold: 0.15, graceDays: 7, maxPerRun: 200 },
   consolidate: {
     enabled: false,
     preview: true,

@@ -915,7 +915,7 @@ export const WatcherConfigSchema = z
         relatedThreshold: z.number().min(0).max(1).default(0.82),
         /** Hard ceiling: past it the oldest inactive neuron is archived at once. */
         maxNeurons: z.number().int().min(10).default(20_000),
-        /** O10: daily forgetting archives low-importance neurons until the live graph is this size. */
+        /** O10: above this size daily forgetting archives low-importance neurons past `forget.maxPerRun` until the live graph is this size. */
         targetNeurons: z.number().int().min(0).default(8000),
       })
       .default({}),
@@ -936,12 +936,14 @@ export const WatcherConfigSchema = z
     /**
      * O10 forgetting (`src/watcher/importance.ts`): daily, neurons with
      * importance below `threshold` and older than `graceDays` are archived,
-     * lowest first, until the live graph is at `graph.targetNeurons`.
+     * lowest first, at most `maxPerRun` a run whatever the graph size; above
+     * `graph.targetNeurons` as many as it takes to reach it.
      */
     forget: z
       .object({
         threshold: z.number().min(0).max(1).default(0.15),
         graceDays: z.number().min(0).default(7),
+        maxPerRun: z.number().int().min(0).default(200),
       })
       .default({}),
     /**

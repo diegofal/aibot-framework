@@ -309,6 +309,14 @@ describe('Graph.patchMeta (phase 3)', () => {
   test('unknown id is undefined', () => {
     expect(graph().patchMeta('n-nope', { a: 'b' })).toBeUndefined();
   });
+
+  test('removes the listed keys, and the removal persists', () => {
+    const g = graph();
+    const n = g.addNeuron(fact('A prediction', { meta: { brier: '0.6', happened: 'false' } }));
+    const next = g.patchMeta(n.id, { outcome: 'unknown' }, ['brier', 'happened']);
+    expect(next?.meta).toEqual({ outcome: 'unknown' });
+    expect(graph().get(n.id)?.meta).toEqual({ outcome: 'unknown' });
+  });
 });
 
 describe('Graph.addSupport (review 2026-10-24)', () => {

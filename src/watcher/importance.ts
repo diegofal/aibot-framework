@@ -12,7 +12,8 @@
  *
  * Protected (never forgotten nor consolidated): `entity`, `person`, `goal`;
  * anything with 👍; an insight whose broadcast a cycle served and what it
- * stands on; anything younger than `forget.graceDays`. Every score carries a
+ * stands on; an unresolved prediction and what it predicts about (`predicts`
+ * edges) until it resolves; anything younger than `forget.graceDays`. Every score carries a
  * code-written reason ("importance 0.12: never used, one bot, no consequence"),
  * which forgetting stores as `meta.archivedReason`.
  */
@@ -37,7 +38,7 @@ const DAY_MS = 86_400_000;
 
 export type ImportanceComponents = Record<keyof typeof IMPORTANCE_WEIGHTS, number>;
 /** Why a neuron is never forgotten: its kind, the operator's 👍, a served broadcast, its youth. */
-export type Protection = 'kind' | 'operator' | 'served' | 'grace';
+export type Protection = 'kind' | 'operator' | 'served' | 'pending' | 'grace';
 
 export interface ImportanceGraph {
   get(id: string): Neuron | undefined;
@@ -68,11 +69,26 @@ const PROTECTION_TEXT: Record<Protection, string> = {
   kind: 'an agent, a person or a goal',
   operator: 'the operator gave it 👍',
   served: 'behind a broadcast a cycle served',
+  pending: 'an open prediction, or what one predicts about',
   grace: 'too young to forget',
 };
 
 const isResolvedPrediction = (n: Neuron | undefined): boolean =>
   !!n && n.kind === 'prediction' && !!n.meta?.resolvedAt;
+
+const isOpenPrediction = (n: Neuron | undefined): boolean =>
+  !!n && n.kind === 'prediction' && !n.archivedAt && !n.meta?.resolvedAt;
+
+/**
+ * An unresolved prediction, or a neuron a live unresolved prediction points at
+ * (`predicts` edge): forgetting it would leave the prediction never scored.
+ */
+function behindOpenPrediction(n: Neuron, ctx: ImportanceContext): boolean {
+  if (isOpenPrediction(n)) return true;
+  return ctx.graph
+    .edgesOf(n.id)
+    .some((e) => e.rel === 'predicts' && e.to === n.id && isOpenPrediction(ctx.graph.get(e.from)));
+}
 
 interface Consequence {
   insight: boolean;
@@ -166,6 +182,7 @@ export function protectionOf(n: Neuron, ctx: ImportanceContext): Protection | nu
   if (PROTECTED_KINDS.includes(n.kind)) return 'kind';
   if (n.meta?.signal === 'up') return 'operator';
   if (consequenceOf(n, ctx).served) return 'served';
+  if (behindOpenPrediction(n, ctx)) return 'pending';
   const created = Date.parse(n.createdAt);
   if (!Number.isFinite(created) || ctx.nowMs - created < ctx.graceDays * DAY_MS) return 'grace';
   return null;
@@ -238,13 +255,15 @@ export interface ForgetPlan {
 
 /**
  * What forgetting archives: live, unprotected neurons with importance below
- * `threshold`, lowest first (older activation breaks ties), until the live
- * graph is at most `target` or none remain under the threshold. Pure.
+ * `threshold`, lowest first (older activation breaks ties). Whatever the size
+ * of the graph, at most `maxPerRun` of them (absent = all); above `target`,
+ * as many as it takes to get the live graph to `target` even past
+ * `maxPerRun`. Never a neuron at or above the threshold. Pure.
  */
 export function planForgetting(
   neurons: Iterable<Neuron>,
   ctx: ImportanceContext,
-  opts: { threshold: number; target: number }
+  opts: { threshold: number; target: number; maxPerRun?: number }
 ): ForgetPlan {
   const live: Neuron[] = [];
   for (const n of neurons) if (!n.archivedAt) live.push(n);
@@ -261,5 +280,10 @@ export function planForgetting(
       (a.neuron.id < b.neuron.id ? -1 : 1)
   );
   const excess = Math.max(0, live.length - Math.max(0, opts.target));
-  return { archive: candidates.slice(0, excess), live: live.length, under: candidates.length };
+  const batch = opts.maxPerRun === undefined ? candidates.length : Math.max(0, opts.maxPerRun);
+  return {
+    archive: candidates.slice(0, Math.max(batch, excess)),
+    live: live.length,
+    under: candidates.length,
+  };
 }

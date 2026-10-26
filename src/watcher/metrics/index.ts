@@ -270,10 +270,15 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
   });
 
   // 4. Calibration (Brier over predictions resolved in the window)
+  // A prediction the judge could not settle (`outcome: 'unknown'`) is counted apart, never scored.
+  const unknown = neurons.filter(
+    (n) => n.kind === 'prediction' && inWindow(n.meta?.resolvedAt) && n.meta?.outcome === 'unknown'
+  ).length;
   const resolved = neurons.filter(
     (n) =>
       n.kind === 'prediction' &&
       inWindow(n.meta?.resolvedAt) &&
+      n.meta?.outcome !== 'unknown' &&
       Number.isFinite(Number(n.meta?.brier)) &&
       n.meta?.brier !== undefined
   );
@@ -288,6 +293,7 @@ export function computeMetrics(records: MetricsRecords, window: MetricsWindow): 
     n: resolved.length,
     detail: {
       resolved: resolved.length,
+      unknown,
       frequencyBrier: resolved.length ? happenedRate * (1 - happenedRate) : 0.25,
       open: neurons.filter((n) => n.kind === 'prediction' && !n.meta?.resolvedAt).length,
     },

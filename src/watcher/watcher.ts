@@ -22,6 +22,7 @@ import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
 import type { ChannelStatus } from '../bot/telegram-errors';
 import type { ToolAuditEntry } from '../bot/tool-audit-log';
+import { toolTarget } from '../bot/tool-executor';
 import type { WatcherBroadcastSource, WatcherSelfStateSource } from '../bot/types';
 import type { UserDirectory } from '../bot/user-directory';
 import type { ChannelKind } from '../channel/types';
@@ -85,7 +86,14 @@ import {
   narrateSleep,
 } from './narration';
 import { type NoticeOutcome, Noticer, readNoticeLastRun, writeNoticeLastRun } from './notice';
-import { applyServed, duePredictions, resolvePredictions } from './outcomes';
+import {
+  type GroundTruthDeps,
+  type GroundTruthTool,
+  applyServed,
+  duePredictions,
+  resolvePredictions,
+  watcherLogLines,
+} from './outcomes';
 import { bufferFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
 import {
@@ -143,7 +151,7 @@ export const WATCHER_STOP_TIMEOUT_MS = 5_000;
 /** Neuron kinds the operator can 👍/👎 (contradictions: confirm or dismiss). */
 export const SIGNAL_KINDS: readonly NeuronKind[] = ['insight', 'contradiction', 'prediction'];
 /** O10: the forgetting defaults when the config predates them. */
-const FORGET_DEFAULTS = { threshold: 0.15, graceDays: 7 };
+const FORGET_DEFAULTS = { threshold: 0.15, graceDays: 7, maxPerRun: 200 };
 const TARGET_NEURONS_DEFAULT = 8000;
 /** A `forget:archive` row names at most this many neurons (the lowest). */
 const FORGET_ROW_IDS = 100;
@@ -248,6 +256,8 @@ export interface WatcherDeps {
   stopTimeoutMs?: number;
   /** O1 fast lane: tool names a bot used in `[sinceMs, nowMs]` (the tool audit). */
   toolsUsed?: (botId: string, sinceMs: number, nowMs: number) => string[];
+  /** The tool audit of a bot in `[sinceMs, nowMs]`, as the prediction judge reads it (ground truth). */
+  toolCalls?: (botId: string, sinceMs: number, nowMs: number) => GroundTruthTool[];
   /**
    * O10: true while no agent-loop cycle runs (`BotManager.getAgentLoopState`);
    * consolidation runs only then. Absent = never quiet (never consolidates).
@@ -1310,27 +1320,26 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       client: notice,
       log: this.log,
       now: this.now,
-      events: (from, to) => this.logLines(from, to),
+      events: (from, to) => watcherLogLines(this.log, from, to),
+      groundTruth: this.groundTruth(),
       logger: this.logger,
     });
   }
 
-  /** Code-written log lines between two instants (what prediction resolution reads). */
-  private logLines(fromMs: number, toMs: number): string[] {
-    const out: string[] = [];
-    const fromDay = new Date(fromMs).toISOString().slice(0, 10);
-    const toDay = new Date(toMs).toISOString().slice(0, 10);
-    for (const date of this.log.dates()) {
-      if (date < fromDay || date > toDay) continue;
-      for (const row of this.log.read(date)) {
-        const t = Date.parse(row.ts);
-        if (t < fromMs || t > toMs || row.op.startsWith('prediction:')) continue;
-        if (row.phase === 'sense' || row.phase === 'notice' || row.phase === 'integrate') {
-          out.push(`${row.ts} ${row.text}`);
-        }
-      }
-    }
-    return out.sort().slice(-40);
+  /** What the prediction judge reads as ground truth: every configured bot's tool audit and cycle log. */
+  groundTruth(): GroundTruthDeps {
+    const readCycles = this.deps.readCycles;
+    const toolCalls = this.deps.toolCalls;
+    return {
+      bots: () =>
+        (this.deps.config().bots ?? []).map((b) => ({
+          id: b.id,
+          name: this.botName(b.id),
+          ...(b.name ? { aliases: [b.name] } : {}),
+        })),
+      ...(toolCalls ? { tools: toolCalls } : {}),
+      ...(readCycles ? { cycles: (botId, from, to) => readCycles(botId, from, to) } : {}),
+    };
   }
 
   private writeTaste(): void {
@@ -1472,8 +1481,9 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
 
   /**
    * O10 forgetting: archive live neurons below `forget.threshold`, older than
-   * the grace and not protected, lowest importance first, until the live graph
-   * is at `graph.targetNeurons` (`planForgetting`). Each keeps its score text
+   * the grace and not protected, lowest importance first: at most
+   * `forget.maxPerRun` a run below `graph.targetNeurons`, and above it as many
+   * as it takes to reach the target (`planForgetting`). Each keeps its score text
    * in `meta.archivedReason`; one `forget:archive` row per batch. Returns how
    * many it archived.
    */
@@ -1484,6 +1494,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const plan = planForgetting(this.graph.list(), this.importanceContext(), {
       threshold: forget.threshold,
       target,
+      maxPerRun: forget.maxPerRun ?? FORGET_DEFAULTS.maxPerRun,
     });
     if (plan.archive.length === 0) return 0;
     for (const { neuron, score } of plan.archive) {
@@ -1787,6 +1798,31 @@ export function fleetBroadcastDelivery(
 }
 
 /**
+ * The fleet's tool audit of a bot in a window, as the prediction judge reads
+ * it (tool, ok or failed with its kind, target). A reader that throws = none.
+ */
+export function fleetToolCalls(
+  config: Config
+): (botId: string, sinceMs: number, nowMs: number) => GroundTruthTool[] {
+  return (botId, since, now) => {
+    try {
+      return readToolEntries(resolveStatsDirs(config).toolAudit, botId, since, now).map((e) => {
+        const target = toolTarget(e.args);
+        return {
+          ts: e.timestamp,
+          tool: e.toolName,
+          success: e.success,
+          ...(e.failureKind ? { failureKind: e.failureKind } : {}),
+          ...(target ? { target } : {}),
+        };
+      });
+    } catch {
+      return [];
+    }
+  };
+}
+
+/**
  * The fleet's watcher, or undefined when `watcher.enabled` is off (then nothing
  * new runs). Embeds with the shared Ollama client and `soul.search.embeddingModel`;
  * without a model there is no `embed` and the graph links nothing.
@@ -1829,6 +1865,7 @@ export function createFleetWatcher(
       return karma.getAllScores(ids).map((s) => s.current);
     },
     semaphore: getClaudeCliStats,
+    toolCalls: fleetToolCalls(config),
     toolsUsed: (botId, since, now) => {
       try {
         const entries = readToolEntries(resolveStatsDirs(config).toolAudit, botId, since, now);

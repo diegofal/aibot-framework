@@ -317,11 +317,13 @@ export class Graph {
     return this.compactPending ?? Promise.resolve();
   }
 
-  /** Merge attributes into a neuron's `meta` (signals, prediction resolutions). Not a firing. */
-  patchMeta(id: string, patch: Record<string, string>): Neuron | undefined {
+  /** Merge attributes into a neuron's `meta` (signals, prediction resolutions) and drop the `remove` keys. Not a firing. */
+  patchMeta(id: string, patch: Record<string, string>, remove: string[] = []): Neuron | undefined {
     const n = this.neurons.get(id);
     if (!n) return undefined;
-    const next: Neuron = { ...n, meta: { ...(n.meta ?? {}), ...patch } };
+    const meta: Record<string, string> = { ...(n.meta ?? {}), ...patch };
+    for (const k of remove) delete meta[k];
+    const next: Neuron = { ...n, meta };
     this.writeNeuron(next);
     return next;
   }

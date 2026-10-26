@@ -478,6 +478,11 @@ export function narratePredictionResolved(input: {
   return `My prediction ${quoteModelText(input.text)} ${how} (Brier ${Math.round(input.brier * 100) / 100}).`;
 }
 
+/** A prediction the records could not settle: resolved as unknown, never scored. */
+export function narratePredictionUnknown(input: { text: string }): string {
+  return `My prediction ${quoteModelText(input.text)} could not be settled from the records (unknown, not scored).`;
+}
+
 export function narrateBroadcast(input: {
   kind: 'wake' | 'directive' | 'goal' | 'question';
   bot: string;

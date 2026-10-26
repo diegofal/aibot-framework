@@ -217,6 +217,28 @@ describe('metric 4: calibration', () => {
     expect(m.baseline).toBe(0.25);
     expect(m.detail?.frequencyBrier).toBeCloseTo(0.25, 10);
   });
+
+  test('a prediction the judge could not settle (outcome unknown) is counted apart, never scored', () => {
+    const r = rec({
+      neurons: [
+        neuron({
+          kind: 'prediction',
+          meta: { resolvedAt: iso(NOW - H), brier: '0.04', happened: 'true', outcome: 'happened' },
+        }),
+        neuron({ kind: 'prediction', meta: { resolvedAt: iso(NOW - H), outcome: 'unknown' } }),
+        // a stale brier left on an unknown is still not scored
+        neuron({
+          kind: 'prediction',
+          meta: { resolvedAt: iso(NOW - H), outcome: 'unknown', brier: '0.64' },
+        }),
+      ],
+    });
+    const m = metric(r, 'calibration');
+    expect(m.n).toBe(1);
+    expect(m.value).toBeCloseTo(0.04, 10);
+    expect(m.detail?.resolved).toBe(1);
+    expect(m.detail?.unknown).toBe(2);
+  });
 });
 
 describe('metric 5: compounding and forgetting', () => {

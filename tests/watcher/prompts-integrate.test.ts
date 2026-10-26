@@ -53,6 +53,24 @@ function input(over: Partial<IntegratePromptInput> = {}): IntegratePromptInput {
 }
 
 describe('buildIntegratePrompt', () => {
+  test('a prediction the judge could not settle reads as unknown, never as did not happen', () => {
+    const { user } = buildIntegratePrompt(
+      input({
+        predictions: [
+          {
+            id: 'n-pred0003',
+            text: 'Scout stays idle',
+            dueAt: '2026-10-22T12:00:00.000Z',
+            resolved: { unknown: true },
+          },
+        ],
+      })
+    );
+    expect(user).toContain(
+      '- [n-pred0003] Scout stays idle (due 2026-10-22T12:00:00.000Z) · resolved: unknown (the records could not settle it)'
+    );
+  });
+
   test('has every section with ids', () => {
     const { system, user } = buildIntegratePrompt(input());
     expect(system).toContain('integration layer');
