@@ -25,20 +25,6 @@ function hasReset(w, nowMs) {
   return Number.isFinite(at) && at <= nowMs;
 }
 
-/** Older than this, the card tests the account again on its own. */
-export const LIMITS_STALE_MS = 30 * 60_000;
-
-/**
- * Should the card re-test this account? Never checked, a window reset since
- * the reading, or the reading is older than LIMITS_STALE_MS. Pure.
- */
-export function limitsStale(limits, nowMs = Date.now()) {
-  if (!limits) return true;
-  const checked = Date.parse(limits.checkedAt);
-  if (!Number.isFinite(checked) || nowMs - checked > LIMITS_STALE_MS) return true;
-  return hasReset(limits.fiveHour, nowMs) || hasReset(limits.sevenDay, nowMs);
-}
-
 function windowLine(label, w, nowMs) {
   if (!w || typeof w.utilization !== 'number') return '';
   if (hasReset(w, nowMs)) return `<div class="text-dim">${label}: reset since this check</div>`;
@@ -58,12 +44,12 @@ export function availabilityHtml(limits, nowMs = Date.now()) {
   if (!limits) return '<span class="text-dim text-sm">Not checked yet · press Test</span>';
   const checked = Date.parse(limits.checkedAt);
   const age = Number.isFinite(checked) ? `checked ${span(Math.max(0, nowMs - checked))} ago` : '';
-  // Blocked only while some window that was at its limit has not reset yet.
-  const windows = [limits.fiveHour, limits.sevenDay].filter(
-    (w) => w && typeof w.utilization === 'number'
+  // Blocked until a window known to be at its limit has reset; partial data
+  // (no window at its limit recorded) keeps the reading's own word for it.
+  const atLimit = [limits.fiveHour, limits.sevenDay].filter(
+    (w) => w && typeof w.utilization === 'number' && w.utilization >= 1
   );
-  const stillBlocked =
-    windows.length === 0 || windows.some((w) => w.utilization >= 1 && !hasReset(w, nowMs));
+  const stillBlocked = atLimit.length === 0 || atLimit.some((w) => !hasReset(w, nowMs));
   const blocked =
     limits.status === 'rejected' && stillBlocked
       ? '<div style="color:var(--warn)">Blocked: at its limit</div>'

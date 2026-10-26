@@ -3,11 +3,8 @@
  * fleet uses. Add, rename, test, log in again, switch, remove.
  * Login: the server runs `claude auth login`; the card shows the sign-in
  * link, you sign in and paste the code back.
- * Opening the card re-tests every logged-in account whose reading is stale
- * (never checked, a window reset since, or over 30 min old), one at a time,
- * so Available never shows a week-old number as current.
  */
-import { accountsHtml, limitsStale, loginPanelHtml } from './claude-accounts-helpers.js';
+import { accountsHtml, loginPanelHtml } from './claude-accounts-helpers.js';
 import { api, escapeHtml } from './shared.js';
 
 export async function mountClaudeAccounts(card) {
@@ -17,19 +14,7 @@ export async function mountClaudeAccounts(card) {
   const tests = {};
   let message = '';
 
-  // Typed but unsent input survives a repaint (a background re-test repaints the card).
-  // Each field is kept only for the same rename / login it was typed into.
-  const KEEP = ['ca-label', 'ca-rename-input', 'ca-code'];
-  const owner = (id) =>
-    id === 'ca-rename-input' ? `r:${editing}` : id === 'ca-code' ? `l:${login?.loginId}` : 'add';
-  let painted = {};
   const paint = () => {
-    const kept = {};
-    for (const id of KEEP) {
-      const el = card.querySelector(`#${id}`);
-      if (el instanceof HTMLInputElement && painted[id] === owner(id)) kept[id] = el.value;
-    }
-    const focused = document.activeElement?.id;
     card.innerHTML = `
       <div class="form-section-title">Claude accounts</div>
       <p class="text-dim text-sm mb-16">The account every bot uses for Claude. When one hits its limit, switch to another; the bots resume at once.</p>
@@ -43,13 +28,7 @@ export async function mountClaudeAccounts(card) {
       </div>`
       }
       <div id="ca-msg" class="text-sm" style="margin-top:8px">${escapeHtml(message)}</div>`;
-    painted = Object.fromEntries(KEEP.map((id) => [id, owner(id)]));
-    for (const [id, value] of Object.entries(kept)) {
-      const el = card.querySelector(`#${id}`);
-      if (el instanceof HTMLInputElement) el.value = value;
-    }
-    const refocus = KEEP.includes(focused) ? `#${focused}` : '#ca-rename-input';
-    card.querySelector(refocus)?.focus();
+    card.querySelector('#ca-rename-input')?.focus();
   };
 
   const refresh = async () => {
@@ -57,20 +36,6 @@ export async function mountClaudeAccounts(card) {
     if (res.error) message = res.error;
     accounts = res.accounts || accounts;
     paint();
-  };
-
-  const runTest = async (slug) => {
-    tests[slug] = { pending: true };
-    paint();
-    try {
-      tests[slug] = await api(`/api/claude-accounts/${encodeURIComponent(slug)}/test`, {
-        method: 'POST',
-      });
-    } catch (err) {
-      // Never leave the row on "Testing the connection…".
-      tests[slug] = { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-    return refresh();
   };
 
   const startLogin = async (body, relogin) => {
@@ -125,7 +90,14 @@ export async function mountClaudeAccounts(card) {
         return paint();
       }
       const testSlug = t.getAttribute('data-ca-test');
-      if (testSlug) return await runTest(testSlug);
+      if (testSlug) {
+        tests[testSlug] = { pending: true };
+        paint();
+        tests[testSlug] = await api(`/api/claude-accounts/${encodeURIComponent(testSlug)}/test`, {
+          method: 'POST',
+        });
+        return refresh();
+      }
       const relogin = t.getAttribute('data-ca-relogin');
       if (relogin) return startLogin({ slug: relogin }, true);
       const rename = t.getAttribute('data-ca-rename');
@@ -180,19 +152,7 @@ export async function mountClaudeAccounts(card) {
       card.querySelector('[data-ca-rename-save]')?.click();
   });
 
-  try {
-    await refresh();
-  } catch (err) {
+  await refresh().catch((err) => {
     card.innerHTML = `<div class="form-section-title">Claude accounts</div><p class="text-dim text-sm">Could not load accounts: ${escapeHtml(err instanceof Error ? err.message : String(err))}</p>`;
-    return;
-  }
-  // Re-test stale readings in the background, one CLI call at a time.
-  const stale = accounts.filter((a) => a.loggedIn && limitsStale(a.limits)).map((a) => a.slug);
-  (async () => {
-    for (const slug of stale) {
-      if (!card.isConnected) return;
-      if (tests[slug]?.pending) continue;
-      await runTest(slug).catch(() => {});
-    }
-  })();
+  });
 }

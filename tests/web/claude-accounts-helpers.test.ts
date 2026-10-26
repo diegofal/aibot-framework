@@ -151,7 +151,7 @@ describe('availability column', () => {
 });
 
 describe('stale readings', () => {
-  const { availabilityHtml, limitsStale } = require('../../web/pages/claude-accounts-helpers.js');
+  const { availabilityHtml } = require('../../web/pages/claude-accounts-helpers.js');
   const NOW = Date.parse('2026-10-23T09:15:00Z');
   // The reading the card showed on 2026-10-23: taken Oct 15, both windows long since reset.
   const OLD = {
@@ -180,16 +180,17 @@ describe('stale readings', () => {
     expect(html).toContain('Blocked');
   });
 
-  test('limitsStale: never checked, a window reset since, or older than 30 min', () => {
-    expect(limitsStale(undefined, NOW)).toBe(true);
-    expect(limitsStale(OLD, NOW)).toBe(true);
-    const fresh = {
-      checkedAt: '2026-10-23T09:00:00Z',
-      status: 'allowed',
-      fiveHour: { utilization: 0.1, resetsAt: '2026-10-23T12:00:00Z' },
-      sevenDay: { utilization: 0.2, resetsAt: '2026-10-29T21:00:00Z' },
-    };
-    expect(limitsStale(fresh, NOW)).toBe(false);
-    expect(limitsStale({ ...fresh, checkedAt: '2026-10-23T08:40:00Z' }, NOW)).toBe(true);
+  test('Blocked stays when the window that reset is not the one at its limit', () => {
+    // Rejected, and the only window recorded is a 5h one at 5 % that has reset:
+    // nothing shows the limiting window lifted.
+    const html = availabilityHtml(
+      {
+        checkedAt: '2026-10-23T09:00:00Z',
+        status: 'rejected',
+        fiveHour: { utilization: 0.05, resetsAt: '2026-10-23T09:10:00Z' },
+      },
+      NOW
+    );
+    expect(html).toContain('Blocked');
   });
 });
