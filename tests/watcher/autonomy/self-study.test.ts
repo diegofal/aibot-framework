@@ -252,6 +252,17 @@ describe('the digest (C8: numbers, ids and code names only)', () => {
   });
 });
 
+describe('the guard section of the prompt', () => {
+  test('names each guard metric with the minimum window the parser accepts', () => {
+    const config = testConfig(join(root, 'data'));
+    const text = guardsText(buildDigest({ config, readers: plantedReaders(), nowMs: t }));
+    const lines = text.split(/\r?\n/);
+    const line = (metric: string) => lines.find((l) => l.startsWith(`- ${metric}:`)) ?? '';
+    expect(line('watcher.costUsdPerDay')).toEndWith('windowHours 49..336');
+    expect(line('fleet.errorCycleShare')).toEndWith('windowHours 1..336');
+  });
+});
+
 describe('vetting what the model proposed', () => {
   const ids = new Set(['d-fleet', 'd-b1-cycles', uuid(3)]);
   const current = new Map<string, unknown>([['bots.b1.agentLoop.every', '2h']]);
@@ -649,7 +660,7 @@ describe('through the real proposal store', () => {
           support: ['d-watcher'],
           changes: [{ path: 'watcher.integrate.maxPerDay', to: 40 }],
           predicted: { effect: 'more' },
-          guard: { metric: 'watcher.costUsdPerDay', direction: 'max', bound: 9, windowHours: 24 },
+          guard: { metric: 'watcher.costUsdPerDay', direction: 'max', bound: 9, windowHours: 72 },
           rollback: 'back',
         },
       ],

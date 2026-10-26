@@ -42,7 +42,7 @@ import { isTenantBot } from '../../tenant/tenant-scoping';
 import { budgetFile } from '../budget';
 import { type InstrumentedClient, WATCHER_QUERY_BOT_ID, type WatcherRefusal } from '../llm';
 import { WATCHER_DEFAULTS, type WatcherConfig } from '../types';
-import { GUARD_METRICS } from './guards';
+import { GUARD_METRICS, GUARD_MIN_WINDOW_HOURS } from './guards';
 import { createConfigAccess } from './ledger';
 import { BOT_CADENCE, TUNABLES } from './locked';
 import { type AutonomyLog, autonomyDir } from './proposals';
@@ -651,9 +651,9 @@ export const SELF_STUDY_SYSTEM = [
 export function guardsText(d: FleetDigest): string {
   return [
     '## Guard metrics (each proposal names one; code rolls the change back if it regresses past the bound within the window)',
-    `- watcher.costUsdPerDay: the watcher's own spend per day, now ${usd(d.watcher.usdPerDay)}`,
-    `- fleet.errorCycleShare: share of fleet cycles that end in error, now ${d.fleet.errorShare}`,
-    `Known metrics: ${GUARD_METRICS.join(', ')}. direction "max" rolls back when the metric rises above bound, "min" when it falls below. windowHours 1..336.`,
+    `- watcher.costUsdPerDay: the watcher's own spend per day (whole UTC days after the change), now ${usd(d.watcher.usdPerDay)}; windowHours ${GUARD_MIN_WINDOW_HOURS['watcher.costUsdPerDay']}..336`,
+    `- fleet.errorCycleShare: share of fleet cycles that end in error, now ${d.fleet.errorShare}; windowHours ${GUARD_MIN_WINDOW_HOURS['fleet.errorCycleShare']}..336`,
+    `Known metrics: ${GUARD_METRICS.join(', ')}. direction "max" rolls back when the metric rises above bound, "min" when it falls below. A shorter window than the metric's minimum is refused.`,
   ].join('\n');
 }
 
