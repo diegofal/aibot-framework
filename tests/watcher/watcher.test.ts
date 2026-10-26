@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-loop-utils';
@@ -1617,7 +1617,7 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.stop();
   });
 
-  test('a stop during the maintenance backfill neither relays out nor persists positions', async () => {
+  test('a stop during the backfill maintenance left running neither relays out nor persists positions', async () => {
     let mode: 'down' | 'hang' = 'down';
     let calls = 0;
     let answer: ((v: number[]) => void) | undefined;
@@ -1636,16 +1636,19 @@ describe('Watcher: embedding what birth could not', () => {
     expect(watcher.state().linkStatus).toBe('no-embeddings');
     const positions = () =>
       JSON.stringify(watcher.graph.list().map((n) => [n.id, watcher.graph.get(n.id)?.pos]));
-    const before = positions();
     const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
-    const layoutsBefore = layouts();
     mode = 'hang';
     const seen = calls;
-    const maintenance = watcher.maintainNow();
+    // maintenance returns with the backfill still out (it never waits on an embed)
+    const out = await watcher.maintainNow();
+    expect(out?.linking).toBe(true);
+    expect(out?.link).toBeNull();
     expect(await until(() => calls > seen && !!answer)).toBe(true);
+    const before = positions();
+    const layoutsBefore = layouts();
     await watcher.stop();
     answer?.([1, 0, 0]);
-    await maintenance;
+    await new Promise((r) => setTimeout(r, 50));
     expect(layouts()).toBe(layoutsBefore);
     expect(positions()).toBe(before);
     // nothing persisted either: a fresh load sees the same positions
@@ -1658,6 +1661,101 @@ describe('Watcher: embedding what birth could not', () => {
       )
     ).toBe(before);
     await reloaded.watcher.stop();
+  });
+
+  test('a maintenance run a stop() left hanging is never shared with the next start', async () => {
+    let mode: 'down' | 'hang' = 'down';
+    let calls = 0;
+    let probed = false;
+    // every batch embed left hanging (the batch runs `concurrency` at a time)
+    const hanging: ((v: number[]) => void)[] = [];
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => {
+        calls++;
+        if (mode === 'down') return Promise.reject(new Error('ollama down'));
+        // the probe answers; the batch embeds that follow never do
+        if (!probed) {
+          probed = true;
+          return Promise.resolve([1, 0, 0]);
+        }
+        return new Promise<number[]>((r) => {
+          hanging.push(r);
+        });
+      },
+    });
+    const bounded = <T>(p: Promise<T>) =>
+      Promise.race([p, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000))]);
+    await watcher.start();
+    await watcher.idle();
+    mode = 'hang';
+    const seen = calls;
+    const stale = watcher.maintainNow();
+    expect(await until(() => calls > seen && hanging.length > 0)).toBe(true);
+    await watcher.stop();
+    // the embed calls outlive stop(); the same watcher starts again
+    mode = 'down';
+    expect(await bounded(watcher.start())).not.toBe('hung');
+    // a cancelled run is not "in flight": the route would answer 409 forever
+    const inFlightAfterRestart = watcher.maintenanceInFlight();
+    const fresh = watcher.maintainNow();
+    const sharedStale = fresh === stale;
+    const freshOutcome = await bounded(fresh);
+    const idleOutcome = await bounded(watcher.idle());
+    // let the stale calls settle whatever happened, so nothing leaks past the test
+    for (const r of hanging) r([1, 0, 0]);
+    await bounded(stale);
+    expect(sharedStale).toBe(false);
+    expect(inFlightAfterRestart).toBe(false);
+    expect(freshOutcome).not.toBe('hung');
+    expect(idleOutcome).not.toBe('hung');
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    await watcher.stop();
+  });
+
+  // Review 2026-10-26: a hanging embed kept the maintenance run in flight, every
+  // later daily run shared it, and forgetting never ran again until a restart.
+  test('an embed that never answers does not hold daily maintenance: it forgets, persists, and forgets again a day later', async () => {
+    await bornWithoutEmbeddings();
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => new Promise<number[]>(() => {}),
+    });
+    const bounded = <T>(p: Promise<T>) =>
+      Promise.race([p, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000))]);
+    await watcher.start();
+    const plant = (tag: string) =>
+      [1, 2].map((i) =>
+        watcher.graph.addNeuron({
+          kind: 'fact',
+          text: `forgettable ${tag} ${i}`,
+          support: { bots: ['b1'] },
+          createdBy: 'bot:b1',
+          activations: 1,
+        } as never)
+      );
+    const first = plant('a');
+    t += 10 * 86_400_000;
+    const out = await bounded(watcher.maintainNow());
+    expect(out).not.toBe('hung');
+    if (!out || out === 'hung') throw new Error('maintenance did not complete');
+    expect(out.forgotten).toBeGreaterThanOrEqual(2);
+    for (const n of first) expect(watcher.graph.get(n.id)?.archivedAt).toBeDefined();
+    const maintainFile = join(root, 'data', 'watcher', 'maintain.json');
+    expect(JSON.parse(readFileSync(maintainFile, 'utf-8')).lastMaintainAt).toBe(
+      new Date(t).toISOString()
+    );
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    // the next day: a run of its own, not the one stuck on the embed
+    const second = plant('b');
+    t += 10 * 86_400_000;
+    const again = await bounded(watcher.maintainNow());
+    expect(again).not.toBe('hung');
+    for (const n of second) expect(watcher.graph.get(n.id)?.archivedAt).toBeDefined();
+    expect(JSON.parse(readFileSync(maintainFile, 'utf-8')).lastMaintainAt).toBe(
+      new Date(t).toISOString()
+    );
+    await watcher.stop();
   });
 
   async function until(check: () => boolean, ms = 1000): Promise<boolean> {
@@ -2365,6 +2463,99 @@ describe('Watcher: salience-driven ticks (O2) and stakes (O3)', () => {
     expect(prompts[0]).toContain('from 60 to 54');
     const pass = watcher.log.recent(50).find((r) => r.op === 'integrate:pass');
     expect(pass?.drivenBy).toContain('fleetKarmaFalling');
+    await watcher.stop();
+  });
+});
+
+// Live 2026-10-26: the daily maintenance timer counted from each start and
+// nothing was persisted, so restarts kept resetting it and forgetting never ran.
+describe('Watcher: daily maintenance survives restarts', () => {
+  const HOUR = 3_600_000;
+  const maintainFile = () => join(root, 'data', 'watcher', 'maintain.json');
+  const readMaintain = () =>
+    JSON.parse(readFileSync(maintainFile(), 'utf-8')) as { lastMaintainAt: string };
+
+  /** A born watcher, stopped: the next start is a re-wake. */
+  async function bornAndStopped() {
+    const first = make();
+    let runs = 0;
+    const original = first.watcher.maintainNow.bind(first.watcher);
+    first.watcher.maintainNow = () => {
+      runs++;
+      return original();
+    };
+    await first.watcher.start();
+    await first.watcher.idle();
+    await first.watcher.stop();
+    expect(runs).toBe(0);
+    return first;
+  }
+
+  function counted() {
+    const w = make();
+    const calls = { runs: 0 };
+    const original = w.watcher.maintainNow.bind(w.watcher);
+    w.watcher.maintainNow = () => {
+      calls.runs++;
+      return original();
+    };
+    return { ...w, calls };
+  }
+
+  test('birth never maintains at start; a re-wake with no record maintains once and records it', async () => {
+    await bornAndStopped();
+    expect(existsSync(maintainFile())).toBe(false);
+    t += 1000;
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(1);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
+    await second.watcher.stop();
+  });
+
+  test('a re-wake more than a day after the last maintenance maintains once at start', async () => {
+    await bornAndStopped();
+    writeFileSync(
+      maintainFile(),
+      JSON.stringify({ lastMaintainAt: new Date(t - 25 * HOUR).toISOString() })
+    );
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(1);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
+    await second.watcher.stop();
+  });
+
+  test('a re-wake within a day of the last maintenance does not maintain at start', async () => {
+    await bornAndStopped();
+    const last = new Date(t - 2 * HOUR).toISOString();
+    writeFileSync(maintainFile(), JSON.stringify({ lastMaintainAt: last }));
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(0);
+    expect(readMaintain().lastMaintainAt).toBe(last);
+    await second.watcher.stop();
+  });
+
+  test('maintainNow returns what it did, records the time, and shares a run in flight', async () => {
+    await bornAndStopped();
+    writeFileSync(maintainFile(), JSON.stringify({ lastMaintainAt: new Date(t).toISOString() }));
+    const { watcher } = make();
+    await watcher.start();
+    await watcher.idle();
+    t += 5 * HOUR;
+    const a = watcher.maintainNow();
+    expect(watcher.maintenanceInFlight()).toBe(true);
+    const b = watcher.maintainNow();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(rb).toBe(ra);
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    expect(ra).toMatchObject({ forgotten: 0, at: new Date(t).toISOString() });
+    expect(ra && 'link' in ra).toBe(true);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
     await watcher.stop();
   });
 });

@@ -246,6 +246,23 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     });
   });
 
+  /**
+   * Run daily maintenance now (forget, relayout, kick the embed-and-link
+   * backfill) and answer what it did: `{ forgotten, link, linking, at }`. Never
+   * waits on the backfill: `link` only when it settled at once, else
+   * `linking: true`. 409 while asleep or while a run is in flight; 500 when the
+   * run failed or a stop cancelled it.
+   */
+  app.post('/maintain', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    if (!w.state().running) return c.json({ error: 'The watcher is asleep' }, 409);
+    if (w.maintenanceInFlight()) return c.json({ error: 'Maintenance is already running' }, 409);
+    const out = await w.maintainNow();
+    if (!out) return c.json({ error: 'Maintenance did not complete (see the log)' }, 500);
+    return c.json(out);
+  });
+
   app.post('/introspect', async (c) => {
     const w = live();
     if (!w) return c.json(off, 404);

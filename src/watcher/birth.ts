@@ -266,12 +266,16 @@ const STAGES: Record<BirthStage, (ctx: StageCtx) => Promise<void> | void> = {
 function stageFleet(ctx: StageCtx): void {
   for (const bot of ctx.config.bots ?? []) {
     const key = `bot:${bot.id}`;
-    if (ctx.graph.findByKey(key)) continue;
+    const known = ctx.graph.findByKey(key);
     const soulDir = soulDirOf(ctx.config, bot);
     const loader = loaderFor(ctx, soulDir);
     // Same block rule as the relay's `readIdentityName`, so both agree on the name.
     const identityRaw = loader.readIdentity();
     const name = parseIdentityName(identityRaw) ?? bot.name ?? bot.id;
+    if (known) {
+      renameEntity(ctx, known, name);
+      continue;
+    }
     const vibe = parseIdentityField(identityRaw, 'vibe');
     const purpose =
       bot.description || vibe || firstCoreDrive(loader.readMotivations()) || undefined;
@@ -303,6 +307,21 @@ function stageFleet(ctx: StageCtx): void {
       }
     );
   }
+}
+
+/**
+ * A bot whose display name changed (a rename, or an entity met before the
+ * IDENTITY name fix kept "** Name") gets its entity neuron renamed: the
+ * `name` meta and the name at the head of the text. The purpose stays.
+ */
+function renameEntity(ctx: StageCtx, n: Neuron, name: string): void {
+  const previous = n.meta?.name;
+  if (!previous || previous === name) return;
+  const text = n.text.startsWith(previous) ? `${name}${n.text.slice(previous.length)}` : n.text;
+  ctx.graph.setText(n.id, text, { name });
+  ctx.log.say('birth', `${ctx.mode}:fleet`, `${previous} is now called ${name}.`, {
+    neuronIds: [n.id],
+  });
 }
 
 interface PersonDraft {
@@ -868,6 +887,12 @@ export async function linkUnembedded(
     edges: 0,
     pending: pending.length,
   };
+  // A neuron in the snapshot that maintenance archived (or that went away)
+  // since: never embedded, stored or linked.
+  const isLive = (id: string) => {
+    const n = graph.get(id);
+    return !!n && !n.archivedAt;
+  };
   const done = () => {
     result.status =
       graph.embeddedIds().length === 0 ? 'no-embeddings' : result.stopped ? 'partial' : 'ok';
@@ -886,6 +911,7 @@ export async function linkUnembedded(
     const batch = pending.slice(i, i + EMBED_BATCH);
     let failure: unknown;
     let batchEmbedded = 0;
+    let batchGone = 0;
     // An embed failed (or returned no vector) and none has succeeded since.
     let missSinceSuccess = false;
     let queue = batch;
@@ -902,9 +928,18 @@ export async function linkUnembedded(
           heldBack.push(n);
           return;
         }
+        if (!isLive(n.id)) {
+          batchGone++;
+          return;
+        }
         try {
           const vec = await embed(`${n.kind}: ${n.text}`);
           if (deps.isCancelled?.()) return;
+          // Archived while its embed was in flight: the vector is dropped.
+          if (!isLive(n.id)) {
+            batchGone++;
+            return;
+          }
           if (Array.isArray(vec) && vec.length > 0) {
             graph.setEmbedding(n.id, vec);
             result.embedded++;
@@ -932,12 +967,14 @@ export async function linkUnembedded(
       result.failure ??= 'the embedder returned no vectors';
       result.stopped = true;
     } else {
-      result.skipped += batch.length - batchEmbedded;
+      result.skipped += batch.length - batchEmbedded - batchGone;
     }
     const edgeIds: string[] = [];
-    for (const n of batch) {
+    const liveBatch = batch.filter((n) => isLive(n.id));
+    for (const n of liveBatch) {
       const vec = graph.getEmbedding(n.id);
       if (!vec) continue;
+      // findSimilarEmbedding already skips archived neighbours.
       const hits = graph.findSimilarEmbedding(vec, threshold).filter((h) => h.neuron.id !== n.id);
       for (const h of hits.slice(0, RELATED_PER_NEURON)) {
         const before = graph.edgeCount();
@@ -952,7 +989,7 @@ export async function linkUnembedded(
       }
     }
     result.edges += edgeIds.length;
-    if (batchEmbedded > 0) opts.onBatch?.(batch, edgeIds);
+    if (batchEmbedded > 0) opts.onBatch?.(liveBatch, edgeIds);
     if (result.stopped) return done();
   }
   return done();

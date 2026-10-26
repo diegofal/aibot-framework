@@ -10135,9 +10135,26 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
     top: auto;
     bottom: 96px;
   }
-  .watcher-legend,
   .watcher-hint {
     display: none;
+  }
+  /* Narrow screens: the legend's kind buttons stay usable as one
+     horizontally scrollable row; the origin key row is dropped. */
+  .watcher-overlay-bottom > #watcher-legend {
+    flex: 1 1 auto;
+  }
+  .watcher-legend .watcher-legend-row:first-child {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 0 6px;
+    scrollbar-width: none;
+  }
+  .watcher-legend .watcher-legend-row:not(:first-child) {
+    display: none;
+  }
+  .watcher-legend-kind {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
   .watcher-row {
     grid-template-columns: auto 1fr;

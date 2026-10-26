@@ -476,6 +476,38 @@ describe('resync', () => {
     );
     expect(ctx.graph.findByKey('bot:b3')?.pos).toBeDefined();
   });
+
+  test('renames an entity neuron whose bot now has another display name (persisted, emitted)', async () => {
+    const ctx = await born();
+    const old = ctx.graph.findByKey('bot:b2');
+    expect(old?.meta?.name).toBe('Scout');
+    writeFileSync(join(root, 'souls', 'b2', 'IDENTITY.md'), '**Name:** Scout Prime\n');
+    const changes: string[] = [];
+    ctx.graph.onChange = (c) => {
+      if (c.type === 'neuron') changes.push(c.neuron.id);
+    };
+    ctx.rows.length = 0;
+    const result = await runResync(ctx.d);
+    expect(result.bots).toBe(0);
+    const n = ctx.graph.findByKey('bot:b2');
+    expect(n?.id).toBe(old?.id);
+    expect(n?.meta?.name).toBe('Scout Prime');
+    expect(n?.text.startsWith('Scout Prime')).toBe(true);
+    expect(n?.text).not.toContain('*');
+    expect(changes).toEqual([old?.id as string]);
+    expect(ctx.rows.map((r) => r.text)).toContain('Scout is now called Scout Prime.');
+    expect(ctx.graph.findSimilarText('Scout Prime', 0.5).map((x) => x.id)).toContain(old?.id);
+
+    const reread = new Graph(ctx.d.dir);
+    reread.load();
+    expect(reread.findByKey('bot:b2')?.meta?.name).toBe('Scout Prime');
+
+    changes.length = 0;
+    const rev = ctx.graph.getRev();
+    await runResync(ctx.d);
+    expect(changes).toEqual([]);
+    expect(ctx.graph.getRev()).toBe(rev);
+  });
 });
 
 describe('relayout', () => {
@@ -719,6 +751,80 @@ describe('linking: an embedder that is down', () => {
     });
     expect(res.embedded).toBeGreaterThan(0);
     expect(res.failure).toContain('ECONNREFUSED');
+  });
+
+  test('a neuron archived while its embed is pending gets no vector and no edges; a live one in the batch is linked', async () => {
+    const { d, graph } = await born();
+    // Everything already in the graph is embedded away from the test vectors.
+    for (const n of graph.list()) graph.setEmbedding(n.id, [0, 0, 1]);
+    const neighbour = graph.addNeuron({
+      kind: 'fact',
+      text: 'live neighbour',
+      support: [],
+      createdBy: 'watcher',
+    });
+    graph.setEmbedding(neighbour.id, [1, 0, 0]);
+    const doomed = graph.addNeuron({
+      kind: 'fact',
+      text: 'doomed fact',
+      support: [],
+      createdBy: 'watcher',
+    });
+    const live = graph.addNeuron({
+      kind: 'fact',
+      text: 'live fact',
+      support: [],
+      createdBy: 'watcher',
+    });
+    // The snapshot the start's backfill took before maintenance ran.
+    const pending = [doomed, live];
+    const res = await linkUnembedded(
+      {
+        ...d,
+        embed: async (text: string) => {
+          await new Promise((r) => setTimeout(r, 2));
+          // Maintenance archives the doomed neuron while its embed is in flight.
+          if (text.includes('doomed')) graph.archive(doomed.id, { archivedReason: 'forgotten' });
+          return [1, 0, 0];
+        },
+      },
+      { pending }
+    );
+    expect(graph.get(doomed.id)?.archivedAt).toBeTruthy();
+    expect(graph.getEmbedding(doomed.id)).toBeUndefined();
+    expect(graph.edgesOf(doomed.id)).toHaveLength(0);
+    expect(graph.getEmbedding(live.id)).toEqual([1, 0, 0]);
+    const liveEdges = graph.edgesOf(live.id);
+    expect(liveEdges.some((e) => e.rel === 'related' && e.to === neighbour.id)).toBe(true);
+    expect(res.embedded).toBe(1);
+    expect(res.edges).toBe(1);
+  });
+
+  test('a neuron archived before its embed starts is never sent to the embedder', async () => {
+    const { d, graph } = await born();
+    for (const n of graph.list()) graph.setEmbedding(n.id, [0, 0, 1]);
+    const gone = graph.addNeuron({
+      kind: 'fact',
+      text: 'gone fact',
+      support: [],
+      createdBy: 'watcher',
+    });
+    graph.archive(gone.id, { archivedReason: 'forgotten' });
+    const texts: string[] = [];
+    const res = await linkUnembedded(
+      {
+        ...d,
+        embed: async (text: string) => {
+          texts.push(text);
+          return [1, 0, 0];
+        },
+      },
+      { pending: [gone] }
+    );
+    expect(texts).toHaveLength(0);
+    expect(graph.getEmbedding(gone.id)).toBeUndefined();
+    expect(res.embedded).toBe(0);
+    expect(res.stopped).toBeUndefined();
   });
 
   test('linkMissing with the embedder refusing: the row names the real error and never claims a placement', async () => {
