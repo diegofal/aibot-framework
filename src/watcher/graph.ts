@@ -167,9 +167,10 @@ export class Graph {
       for (const e of readLines<Edge>(path)) if (validEdge(e)) this.putEdge(e);
     }
     for (const path of [rotated[2], this.files.embeddings]) {
-      for (const row of readLines<{ id: string; v: number[] }>(path)) {
-        if (row && typeof row.id === 'string' && Array.isArray(row.v))
-          this.embeddings.set(row.id, row.v);
+      for (const row of readLines<{ id: string; v: number[] | null }>(path)) {
+        if (!row || typeof row.id !== 'string') continue;
+        if (Array.isArray(row.v)) this.embeddings.set(row.id, row.v);
+        else if (row.v === null) this.embeddings.delete(row.id); // dropEmbedding's tombstone
       }
     }
     if (rotated.some((path) => existsSync(path))) this.compact();
@@ -330,8 +331,9 @@ export class Graph {
 
   /**
    * Rewrite a neuron's text (re-indexed for `findSimilarText`), merging `meta`
-   * in the same write. Not a firing; a no-op when nothing changes. The stored
-   * embedding is kept (a rename moves it very little).
+   * in the same write. Not a firing; a no-op when nothing changes. A changed
+   * text drops the stored embedding (it embedded the old text; a renamed
+   * entity kept its old name's vector), so the next backfill re-embeds it.
    */
   setText(id: string, text: string, meta: Record<string, string> = {}): Neuron | undefined {
     const n = this.neurons.get(id);
@@ -340,6 +342,7 @@ export class Graph {
     if (n.text === text && sameMeta) return n;
     const next: Neuron = { ...n, text, meta: { ...(n.meta ?? {}), ...meta } };
     this.writeNeuron(next);
+    if (n.text !== text) this.dropEmbedding(id);
     return next;
   }
 
@@ -574,6 +577,15 @@ export class Graph {
     if (!this.neurons.has(id)) return;
     this.embeddings.set(id, vec);
     this.append(this.files.embeddings, { id, v: vec });
+  }
+
+  /**
+   * Forget a neuron's vector: a `{ id, v: null }` tombstone in the append file
+   * (last line per id wins, like a vector); a compaction simply omits it.
+   */
+  private dropEmbedding(id: string): void {
+    if (!this.embeddings.delete(id)) return;
+    this.append(this.files.embeddings, { id, v: null });
   }
 
   getEmbedding(id: string): number[] | undefined {

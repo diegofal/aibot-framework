@@ -507,4 +507,30 @@ describe('POST /api/watcher/maintain', () => {
     expect(body.at).toBe(new Date(t).toISOString());
     await watcher.stop();
   });
+
+  it('answers promptly with the forget result while the embedding backfill hangs', async () => {
+    const born = setup();
+    if (!born.watcher) throw new Error('no watcher');
+    await born.watcher.start();
+    await born.watcher.idle();
+    await born.watcher.stop();
+    t += 1000;
+    const { config, watcher } = setup(true, {
+      stopTimeoutMs: 30,
+      embed: () => new Promise<number[]>(() => {}),
+    });
+    if (!watcher) throw new Error('no watcher');
+    await watcher.start();
+    const res = await Promise.race([
+      post(app(config, watcher, '__admin__'), '/api/watcher/maintain'),
+      new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000)),
+    ]);
+    if (res === 'hung') throw new Error('the route waited on the hanging embed');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { forgotten: number; link: unknown; at: string };
+    expect(typeof body.forgotten).toBe('number');
+    expect(body.link).toBeNull();
+    expect(body.at).toBe(new Date(t).toISOString());
+    await watcher.stop();
+  });
 });
