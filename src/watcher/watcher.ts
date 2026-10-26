@@ -300,8 +300,15 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     promise: Promise<LinkResult | undefined>;
     isCancelled: () => boolean;
   } | null = null;
-  /** The daily maintenance run in flight (`maintainNow`): a second caller shares it. */
-  private maintainRun: Promise<MaintainResult | undefined> | null = null;
+  /**
+   * The daily maintenance run in flight (`maintainNow`): a second caller shares
+   * it. Keyed to the run that started it, like `linkRun`: one that `stop()`
+   * cancelled (its backfill embed may never settle) is never shared.
+   */
+  private maintainRun: {
+    promise: Promise<MaintainResult | undefined>;
+    isCancelled: () => boolean;
+  } | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private lastSenseStateAt = 0;
@@ -1467,17 +1474,28 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * persists positions.
    */
   maintainNow(): Promise<MaintainResult | undefined> {
-    if (this.maintainRun) return this.maintainRun;
-    const run = this.runMaintenance().finally(() => {
-      if (this.maintainRun === run) this.maintainRun = null;
-    });
-    this.maintainRun = run;
-    return run;
+    const current = this.maintainRun;
+    if (current && !current.isCancelled()) return current.promise;
+    // Cancelled by the stop of the run that started it: a run started while
+    // asleep has no stop to cancel it (and no backfill to hang on).
+    const signal = this.stopCtrl.signal;
+    const live = this.running && !this.stopping;
+    const entry = {
+      isCancelled: () => live && signal.aborted,
+      promise: this.runMaintenance().finally(() => {
+        if (this.maintainRun === entry) this.maintainRun = null;
+      }),
+    };
+    this.maintainRun = entry;
+    return entry.promise;
   }
 
-  /** A maintenance run is in flight (`POST /api/watcher/maintain` answers 409). */
+  /**
+   * A maintenance run is in flight (`POST /api/watcher/maintain` answers 409).
+   * One a stop() cancelled is not: its leftover embed must not block the next.
+   */
   maintenanceInFlight(): boolean {
-    return this.maintainRun !== null;
+    return !!this.maintainRun && !this.maintainRun.isCancelled();
   }
 
   /** The start's overdue maintenance: skipped when the run it belongs to was stopped. */
