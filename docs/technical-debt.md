@@ -296,11 +296,6 @@ Each entry is a `###` heading with this table and these paragraphs:
 - **Decided by.** Diego, 2026-10-25 (https://github.com/diegofal/aibot-framework/pull/19#issuecomment-6399863647): merge with consolidation off (`watcher.consolidate.enabled: false`, `preview: true`), tune in preview against real summaries.
 - **Next.** Enable consolidation in preview on the live fleet, read a week of `consolidate:preview` rows, adjust the rule (split mixed-polarity clusters before summarising; compare claim pairs, not token sets), then enable.
 
-### Watcher page: UI polish from PR #20's fifth review round (2026-10-25)
-
-- **What.** Starting a replay clears the ball's kind filter but leaves the legend button pressed; "Show more" in the Mind list drops keyboard focus; the legend filter has no usable control on narrow screens. Also: resync does not rename an entity neuron created before the name fix (#14), so "** MyFirstMillion Bot" keeps its asterisks.
-- **Decided by.** Diego, 2026-10-25 (https://github.com/diegofal/aibot-framework/pull/20#issuecomment-6401782693): merge, fix in a small UI follow-up after a day of use.
-
 ### Watcher prediction judge: follow-ups from PR #21 (2026-10-25)
 
 - Cycle evidence lines carry plan text for completed cycles (the judge could read intent as outcome); overflow summaries drop per-target detail of unshown successes; the bots a prediction concerns are found by name matching in its text, because predictions store no structured bot association (integrate emits text + neuronIds). Declined on the PR with reasons; revisit if resolved predictions show misjudgments. The judge's evidence for web_fetch failures has no HTTP status code (`failed (blocked)`), so predictions about specific codes resolve `unknown`.

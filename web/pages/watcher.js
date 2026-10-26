@@ -56,6 +56,7 @@ import {
   kindFilterIds,
   mindCounts,
   mindListHtml,
+  mindMoreFocusIndex,
   mindRows,
   mindTabBlurb,
   mindTabState,
@@ -269,6 +270,24 @@ function drawMind() {
     neuronOf: (id) => page?.model.neurons.get(id) ?? null,
   });
   list.scrollTop = scrollTop;
+}
+
+/**
+ * "Show more": the pager button is replaced by the redraw, so move focus to
+ * the first newly shown row (its open button, else the row itself).
+ */
+function showMoreMind() {
+  const prev = page.mind.shown;
+  page.mind.shown += MIND_PAGE_SIZE;
+  drawMind();
+  const rows = page.el.querySelectorAll('#watcher-mind-list .watcher-mind-row');
+  const at = mindMoreFocusIndex(prev, rows.length);
+  if (at == null) return;
+  const row = rows[at];
+  const target = row.querySelector('button, a[href], [tabindex]');
+  if (target) return target.focus();
+  row.tabIndex = -1;
+  row.focus();
 }
 
 /**
@@ -755,6 +774,7 @@ async function startReplay({ date, birthOnly, label }) {
     return;
   }
   page.ball.clear();
+  if (page.kindFilter) setHighlight({ type: 'replay' });
   page.replay = {
     label,
     steps,
@@ -861,10 +881,7 @@ function wire(el, signal) {
         page.mind.shown = MIND_PAGE_SIZE;
         return drawMind();
       }
-      if (action === 'watcher-mind-more') {
-        page.mind.shown += MIND_PAGE_SIZE;
-        return drawMind();
-      }
+      if (action === 'watcher-mind-more') return showMoreMind();
       const legend = e.target.closest('[data-legend-kind]');
       if (legend) return toggleKindFilter(legend.dataset.legendKind);
       const mindOpen = e.target.closest('[data-mind-open]');

@@ -10,6 +10,7 @@ import {
   kindFilterIds,
   mindCounts,
   mindListHtml,
+  mindMoreFocusIndex,
   mindRows,
   mindTabBlurb,
   mindTabState,
@@ -473,6 +474,13 @@ describe('highlightState', () => {
       kindFilter: 'goal',
     });
   });
+
+  test('a replay start drops the legend kind (the replayed ball starts empty) and keeps the selection', () => {
+    expect(
+      highlightState({ ...none, kindFilter: 'goal', filterId: 'n-1' }, { type: 'replay' })
+    ).toEqual({ ...none, filterId: 'n-1' });
+    expect(highlightState(none, { type: 'replay' })).toEqual(none);
+  });
 });
 
 describe('refocusOnEffect', () => {
@@ -587,5 +595,18 @@ describe('Summaries tab', () => {
 
   test('no summaries yet says so', () => {
     expect(mindListHtml('summary', [], { nowMs: NOW })).toContain('No summaries yet.');
+  });
+});
+
+describe('mindMoreFocusIndex', () => {
+  test('after Show more, focus goes to the first newly shown row', () => {
+    expect(mindMoreFocusIndex(MIND_PAGE_SIZE, 120)).toBe(MIND_PAGE_SIZE);
+    expect(mindMoreFocusIndex(MIND_PAGE_SIZE * 2, 120)).toBe(MIND_PAGE_SIZE * 2);
+  });
+
+  test('nothing new shown (the list shrank) leaves focus alone', () => {
+    expect(mindMoreFocusIndex(MIND_PAGE_SIZE, MIND_PAGE_SIZE)).toBeNull();
+    expect(mindMoreFocusIndex(MIND_PAGE_SIZE, 10)).toBeNull();
+    expect(mindMoreFocusIndex(Number.NaN, 120)).toBeNull();
   });
 });

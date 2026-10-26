@@ -329,6 +329,21 @@ export class Graph {
   }
 
   /**
+   * Rewrite a neuron's text (re-indexed for `findSimilarText`), merging `meta`
+   * in the same write. Not a firing; a no-op when nothing changes. The stored
+   * embedding is kept (a rename moves it very little).
+   */
+  setText(id: string, text: string, meta: Record<string, string> = {}): Neuron | undefined {
+    const n = this.neurons.get(id);
+    if (!n) return undefined;
+    const sameMeta = Object.entries(meta).every(([k, v]) => n.meta?.[k] === v);
+    if (n.text === text && sameMeta) return n;
+    const next: Neuron = { ...n, text, meta: { ...(n.meta ?? {}), ...meta } };
+    this.writeNeuron(next);
+    return next;
+  }
+
+  /**
    * Union `bots` and `cycles` into a neuron's support (a later notice pass
    * recognised it from other bots). Not a firing; a no-op when nothing is new.
    */
