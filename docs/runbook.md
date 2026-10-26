@@ -1180,3 +1180,35 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/wat
 **Outcome.** Healthy; wake, resync, `maintain:link` embedded 5. Re-judge: 9 judged, 6 changed (3 → happened, 3 → unknown, 3 stay did_not_happen), all with evidence from the tool audit and cycle log; written with the watcher stopped (URL check passed), watcher restarted. Calibration: Brier 0.42 (old judge) → **0.129** over 6 resolved (frequency baseline 0.25), 3 unknown excluded. Forgetting now runs below the size target from the next daily maintenance (≤ 200/run).
 
 **Reversible?** Each re-judged neuron keeps `meta.previousHappened` and `meta.rejudgedAt`; rebuild from `667b9d3` for the code.
+
+### 2026-10-26 — Turn on watcher consolidation in preview mode
+
+```bash
+MSYS_NO_PATHCONV=1 docker cp aibot-framework-aibot-1:/app/config/config.json D:/tmp/live-config.json   # copy kept as live-config.before-consolidate.json
+# python: config.watcher.consolidate = { enabled: true, preview: true }
+MSYS_NO_PATHCONV=1 docker cp D:/tmp/live-config.json aibot-framework-aibot-1:/app/config/config.json
+docker compose restart aibot
+```
+
+**Who.** The session, on Diego's "proceed with what's pending". **Why.** First step toward enabling consolidation (PR #19 follow-up): nightly at 04:00 local while the fleet sleeps it calls the model and logs `consolidate:preview` rows (would-merge members, summary, coverage) without archiving or creating anything. **Outcome.** Healthy; config shows `consolidate: { enabled: true, preview: true }`. First preview expected 2026-10-27 04:00 local. Found while doing it: the daily maintenance (forgetting) is a 24 h timer from boot with nothing persisted, so restarts kept postponing it — it has never run; fix in `fix/watcher-ui-polish`. **Reversible?** Restore the before-consolidate copy and restart.
+
+### 2026-10-26 — Deploy maintenance-across-restarts, entity rename and page polish (PR #24, `ff34fef`), with PR #22 (watcher autonomy rung 0, another session)
+
+```bash
+docker compose up -d --build
+curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/maintain   # in the container
+```
+
+**Who.** The session, on Diego's "proceed with what's pending". **Outcome.** Healthy. Overdue maintenance ran at start (`maintain.json` written: `lastMaintainAt` 10:42Z); resync renamed "** MyFirstMillion Bot" and "** SelfImproveBot" to their clean names. `POST /api/watcher/maintain` → `{ forgotten: 0, linking: false }`: nothing is past the 7-day grace yet (birth 2026-10-23), so the first archiving is expected around 2026-10-30. Also shipped (merged by another session as PR #22): hard kill switch, monthly ceiling `watcher.autonomy.monthlyCeilingUsd` default **$90** (at ~$6/day the watcher would stop mid-month), approval queue and change ledger. **Reversible?** Rebuild from `ce41afb`.
+
+### 2026-10-26 — Deploy watcher autonomy rungs 0 + 2 (PRs #22, #25, #26), `2770dda`, and switch proposals + self-study on
+
+```bash
+bun scripts/docker/backup.ts backup
+docker exec -i aibot-framework-aibot-1 bun run - < D:/tmp/autonomy-docs/enable-autonomy.ts   # raw config: watcher.autonomy.proposals.enabled + selfStudy.enabled = true
+docker compose up -d --build
+docker exec aibot-framework-aibot-1 sh -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/proposals'     # and /self-study, /api/watcher
+docker exec aibot-framework-aibot-1 sh -c 'curl -s -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/watcher/self-study'
+```
+
+**Who.** The session, on Diego's "deploy" (09:31). **Outcome.** Backup at `D:\aibot-backups\aibot-backup-2026-10-26T12-31-59`. Config: `watcher.autonomy` was unset; now `{ proposals: { enabled: true }, selfStudy: { enabled: true } }` (defaults otherwise: ceiling $90, 3 pending, 72 h, weekly). Container healthy; the Telegram 401 at boot is the known revoked token (headless fallback). Routes live: proposals `enabled: true`, self-study scheduled 30 min after boot; watcher running, not killed, month $7.50 of $90; `watcher-autonomy-helpers.js` served 200 with the self-study card. First self-study run manually: 22 s, Haiku, $0.11, two pending proposals (`p-8478264f` jarvis-factory every 2h → 4h, ~$32/wk; `p-7bbffbba` default bot 6h → 12h, ~$16/wk; both guarded by `fleet.errorCycleShare` ≤ 0.2 over 168 h, expiring 2026-10-29). Nothing applied. **Reversible?** Turn the two switches off in the config file (or `AIBOT_WATCHER_KILL=1` / `<data>/watcher-kill` stops every watcher call); rebuild from `664b158`'s parent `a9dedc6` for the code.
