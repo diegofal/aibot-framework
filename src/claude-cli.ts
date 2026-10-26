@@ -253,6 +253,10 @@ export class ClaudeCliError extends Error {
 
 /** `resets 12:20pm`, `resets 9am`, `resets 14:20` — meridiem optional. */
 const RESETS_TIME_PATTERN = /resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+/** `resets Oct 24, 6pm` — the weekly limit names the day. */
+const RESETS_DATE_PATTERN =
+  /resets\s+([a-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 /** The IANA zone the CLI parenthesises after the time. */
 const RESETS_TZ_PATTERN = /resets[^(]*\(([^)]+)\)/i;
 
@@ -310,6 +314,48 @@ function zonedNextOccurrence(
   }
 }
 
+/**
+ * The instant the named zone's wall clock reads month/day hour:minute, in the
+ * year that puts it nearest `now` (a "Jan 2" seen on Dec 30 is next year's).
+ */
+function zonedDateInstant(
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string | undefined,
+  now: Date
+): Date | undefined {
+  try {
+    const offsetAt = (instant: Date) =>
+      timeZone ? timeZoneOffsetMs(instant, timeZone) : -instant.getTimezoneOffset() * 60_000;
+    const baseYear = new Date(now.getTime() + offsetAt(now)).getUTCFullYear();
+    let best: Date | undefined;
+    for (const year of [baseYear - 1, baseYear, baseYear + 1]) {
+      const wall = Date.UTC(year, month, day, hour, minute, 0, 0);
+      let ts = wall - offsetAt(now);
+      ts = wall - offsetAt(new Date(ts));
+      if (!best || Math.abs(ts - now.getTime()) < Math.abs(best.getTime() - now.getTime()))
+        best = new Date(ts);
+    }
+    return best;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 12-hour clock → 24-hour; `undefined` when the parts are out of range. */
+function toHour24(hour: number, minute: number, meridiem: string | undefined): number | undefined {
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return undefined;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return undefined;
+    if (meridiem === 'pm' && hour !== 12) return hour + 12;
+    if (meridiem === 'am' && hour === 12) return 0;
+    return hour;
+  }
+  return hour > 23 ? undefined : hour;
+}
+
 /** Same, on the host's local clock — used when no usable zone was given. */
 function localNextOccurrence(hour: number, minute: number, now: Date): Date {
   const at = new Date(now.getTime());
@@ -327,23 +373,27 @@ function localNextOccurrence(hour: number, minute: number, now: Date): Date {
 export function parseResetsAt(text: string, now: Date = new Date()): Date | undefined {
   try {
     if (!text) return undefined;
-    const match = RESETS_TIME_PATTERN.exec(text);
-    if (!match) return undefined;
+    const timeZone = RESETS_TZ_PATTERN.exec(text)?.[1]?.trim();
 
-    let hour = Number(match[1]);
-    const minute = match[2] ? Number(match[2]) : 0;
-    const meridiem = match[3]?.toLowerCase();
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute > 59) return undefined;
-
-    if (meridiem) {
-      if (hour < 1 || hour > 12) return undefined;
-      if (meridiem === 'pm' && hour !== 12) hour += 12;
-      if (meridiem === 'am' && hour === 12) hour = 0;
-    } else if (hour > 23) {
-      return undefined;
+    const dated = RESETS_DATE_PATTERN.exec(text);
+    if (dated) {
+      const month = MONTHS.indexOf(dated[1].slice(0, 3).toLowerCase());
+      const day = Number(dated[2]);
+      const minute = dated[4] ? Number(dated[4]) : 0;
+      const hour = toHour24(Number(dated[3]), minute, dated[5]?.toLowerCase());
+      if (month < 0 || day < 1 || day > 31 || hour === undefined) return undefined;
+      return (
+        (timeZone ? zonedDateInstant(month, day, hour, minute, timeZone, now) : undefined) ??
+        zonedDateInstant(month, day, hour, minute, undefined, now)
+      );
     }
 
-    const timeZone = RESETS_TZ_PATTERN.exec(text)?.[1]?.trim();
+    const match = RESETS_TIME_PATTERN.exec(text);
+    if (!match) return undefined;
+    const minute = match[2] ? Number(match[2]) : 0;
+    const hour = toHour24(Number(match[1]), minute, match[3]?.toLowerCase());
+    if (hour === undefined) return undefined;
+
     const zoned = timeZone ? zonedNextOccurrence(hour, minute, timeZone, now) : undefined;
     return zoned ?? localNextOccurrence(hour, minute, now);
   } catch {

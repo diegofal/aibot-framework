@@ -1083,7 +1083,7 @@
           <code>executeSingleBotWithRetry</code> wrapper with side-effect suppression. Hosts the
           <code>BackendCircuitBreaker</code>: a fleet-wide circuit per LLM backend that opens after
           <code>agentLoop.circuitBreaker.threshold</code> consecutive CONTEXTUAL (429/quota) failures for
-          <code>cooldownMs</code> (or <code>weeklyQuotaCooldownMs</code> on a "weekly usage limit" error),
+          <code>cooldownMs</code> (or <code>weeklyQuotaCooldownMs</code> on a "weekly usage limit" or Claude CLI "weekly limit" error),
           makes bots on that backend skip their cycle, lets a single half-open probe through after the
           cooldown, and &mdash; via <code>RetryEngineOpts.isCircuitOpen</code> &mdash; stops the retry
           ladder as soon as the circuit opens.

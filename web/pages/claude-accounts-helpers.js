@@ -19,8 +19,15 @@ function span(ms) {
   return `${m}m`;
 }
 
+/** A window whose reset time has passed: the reading says nothing about it now. */
+function hasReset(w, nowMs) {
+  const at = w?.resetsAt ? Date.parse(w.resetsAt) : Number.NaN;
+  return Number.isFinite(at) && at <= nowMs;
+}
+
 function windowLine(label, w, nowMs) {
   if (!w || typeof w.utilization !== 'number') return '';
+  if (hasReset(w, nowMs)) return `<div class="text-dim">${label}: reset since this check</div>`;
   const left = Math.max(0, Math.round((1 - w.utilization) * 100));
   const reset = w.resetsAt ? Date.parse(w.resetsAt) - nowMs : Number.NaN;
   const resets = Number.isFinite(reset) && reset > 0 ? ` · resets in ${span(reset)}` : '';
@@ -30,14 +37,21 @@ function windowLine(label, w, nowMs) {
 
 /**
  * The Available cell: what is left of the 5-hour and weekly windows at the
- * last Test, when each resets and how old the reading is. Pure.
+ * last Test, when each resets and how old the reading is. A window that has
+ * reset since says so instead of its old number. Pure.
  */
 export function availabilityHtml(limits, nowMs = Date.now()) {
   if (!limits) return '<span class="text-dim text-sm">Not checked yet · press Test</span>';
   const checked = Date.parse(limits.checkedAt);
   const age = Number.isFinite(checked) ? `checked ${span(Math.max(0, nowMs - checked))} ago` : '';
+  // Blocked until a window known to be at its limit has reset; partial data
+  // (no window at its limit recorded) keeps the reading's own word for it.
+  const atLimit = [limits.fiveHour, limits.sevenDay].filter(
+    (w) => w && typeof w.utilization === 'number' && w.utilization >= 1
+  );
+  const stillBlocked = atLimit.length === 0 || atLimit.some((w) => !hasReset(w, nowMs));
   const blocked =
-    limits.status === 'rejected'
+    limits.status === 'rejected' && stillBlocked
       ? '<div style="color:var(--warn)">Blocked: at its limit</div>'
       : '';
   return `<div class="text-sm">${blocked}${windowLine('5h', limits.fiveHour, nowMs)}${windowLine('Week', limits.sevenDay, nowMs)}<div class="text-dim">${age}</div></div>`;

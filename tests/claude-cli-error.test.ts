@@ -153,3 +153,35 @@ describe('createClaudeCliError — timeouts', () => {
     expect(err.message).toBe('Claude CLI exited with code 143: exit code 143');
   });
 });
+
+describe('parseResetsAt — dated hint', () => {
+  // Weekly limits name the day: "resets Oct 24, 6pm (zone)".
+  const NOW = new Date('2026-10-23T09:15:00Z'); // 06:15 in Buenos Aires
+
+  test('resolves month, day and time in the named zone', () => {
+    const at = parseResetsAt(
+      "You've hit your weekly limit · resets Oct 24, 6pm (America/Argentina/Buenos_Aires)",
+      NOW
+    );
+    expect(at?.toISOString()).toBe('2026-10-24T21:00:00.000Z');
+  });
+
+  test('minutes and a full month name work too', () => {
+    const at = parseResetsAt('resets October 24, 6:30pm (America/Argentina/Buenos_Aires)', NOW);
+    expect(at?.toISOString()).toBe('2026-10-24T21:30:00.000Z');
+  });
+
+  test('a date early next year rolls the year over', () => {
+    const at = parseResetsAt(
+      'resets Jan 2, 9am (America/Argentina/Buenos_Aires)',
+      new Date('2026-12-30T12:00:00Z')
+    );
+    expect(at?.toISOString()).toBe('2027-01-02T12:00:00.000Z');
+  });
+
+  test('an unknown month is unparseable, not a guess', () => {
+    expect(
+      parseResetsAt('resets Foo 24, 6pm (America/Argentina/Buenos_Aires)', NOW)
+    ).toBeUndefined();
+  });
+});

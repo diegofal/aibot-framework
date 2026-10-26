@@ -322,3 +322,21 @@ describe('BackendCircuitBreaker — resetsAt-driven cooldown', () => {
     expect(breaker.isOpen('claude-cli')).toBe(true);
   });
 });
+
+describe('Claude CLI weekly limit', () => {
+  // The exact text the CLI returned on 2026-10-22/23, when the breaker only held 30 min.
+  const CLI_WEEKLY = new Error(
+    `Claude CLI exited with code 1: {"api_error_status":429,"result":"You've hit your weekly limit · resets Oct 24, 6pm (America/Argentina/Buenos_Aires)"}`
+  );
+
+  test('"weekly limit" (Claude CLI wording) is a weekly quota', () => {
+    expect(isWeeklyQuotaError(CLI_WEEKLY)).toBe(true);
+    expect(isWeeklyQuotaError("You've hit your session limit · resets 2pm")).toBe(false);
+  });
+
+  test('holds the circuit for the weekly cooldown, not the 30 min default', () => {
+    const { breaker, clock } = makeBreaker({ threshold: 1 });
+    const state = breaker.recordFailure('claude-cli', CLI_WEEKLY);
+    expect(state.until).toBe(clock.now + DEFAULT_CIRCUIT_BREAKER_CONFIG.weeklyQuotaCooldownMs);
+  });
+});
