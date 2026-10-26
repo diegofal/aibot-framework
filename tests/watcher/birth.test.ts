@@ -476,6 +476,38 @@ describe('resync', () => {
     );
     expect(ctx.graph.findByKey('bot:b3')?.pos).toBeDefined();
   });
+
+  test('renames an entity neuron whose bot now has another display name (persisted, emitted)', async () => {
+    const ctx = await born();
+    const old = ctx.graph.findByKey('bot:b2');
+    expect(old?.meta?.name).toBe('Scout');
+    writeFileSync(join(root, 'souls', 'b2', 'IDENTITY.md'), '**Name:** Scout Prime\n');
+    const changes: string[] = [];
+    ctx.graph.onChange = (c) => {
+      if (c.type === 'neuron') changes.push(c.neuron.id);
+    };
+    ctx.rows.length = 0;
+    const result = await runResync(ctx.d);
+    expect(result.bots).toBe(0);
+    const n = ctx.graph.findByKey('bot:b2');
+    expect(n?.id).toBe(old?.id);
+    expect(n?.meta?.name).toBe('Scout Prime');
+    expect(n?.text.startsWith('Scout Prime')).toBe(true);
+    expect(n?.text).not.toContain('*');
+    expect(changes).toEqual([old?.id as string]);
+    expect(ctx.rows.map((r) => r.text)).toContain('Scout is now called Scout Prime.');
+    expect(ctx.graph.findSimilarText('Scout Prime', 0.5).map((x) => x.id)).toContain(old?.id);
+
+    const reread = new Graph(ctx.d.dir);
+    reread.load();
+    expect(reread.findByKey('bot:b2')?.meta?.name).toBe('Scout Prime');
+
+    changes.length = 0;
+    const rev = ctx.graph.getRev();
+    await runResync(ctx.d);
+    expect(changes).toEqual([]);
+    expect(ctx.graph.getRev()).toBe(rev);
+  });
 });
 
 describe('relayout', () => {

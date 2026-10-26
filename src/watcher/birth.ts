@@ -266,12 +266,16 @@ const STAGES: Record<BirthStage, (ctx: StageCtx) => Promise<void> | void> = {
 function stageFleet(ctx: StageCtx): void {
   for (const bot of ctx.config.bots ?? []) {
     const key = `bot:${bot.id}`;
-    if (ctx.graph.findByKey(key)) continue;
+    const known = ctx.graph.findByKey(key);
     const soulDir = soulDirOf(ctx.config, bot);
     const loader = loaderFor(ctx, soulDir);
     // Same block rule as the relay's `readIdentityName`, so both agree on the name.
     const identityRaw = loader.readIdentity();
     const name = parseIdentityName(identityRaw) ?? bot.name ?? bot.id;
+    if (known) {
+      renameEntity(ctx, known, name);
+      continue;
+    }
     const vibe = parseIdentityField(identityRaw, 'vibe');
     const purpose =
       bot.description || vibe || firstCoreDrive(loader.readMotivations()) || undefined;
@@ -303,6 +307,21 @@ function stageFleet(ctx: StageCtx): void {
       }
     );
   }
+}
+
+/**
+ * A bot whose display name changed (a rename, or an entity met before the
+ * IDENTITY name fix kept "** Name") gets its entity neuron renamed: the
+ * `name` meta and the name at the head of the text. The purpose stays.
+ */
+function renameEntity(ctx: StageCtx, n: Neuron, name: string): void {
+  const previous = n.meta?.name;
+  if (!previous || previous === name) return;
+  const text = n.text.startsWith(previous) ? `${name}${n.text.slice(previous.length)}` : n.text;
+  ctx.graph.setText(n.id, text, { name });
+  ctx.log.say('birth', `${ctx.mode}:fleet`, `${previous} is now called ${name}.`, {
+    neuronIds: [n.id],
+  });
 }
 
 interface PersonDraft {

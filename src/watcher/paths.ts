@@ -39,3 +39,8 @@ export function bufferFile(dir: string): string {
 export function noticeStateFile(dir: string): string {
   return join(dir, 'notice.json');
 }
+
+/** When daily maintenance last completed (`{ lastMaintainAt }`): the 24 h wait survives a restart. */
+export function maintainStateFile(dir: string): string {
+  return join(dir, 'maintain.json');
+}

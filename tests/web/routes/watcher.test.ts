@@ -471,3 +471,40 @@ describe('watcher routes: pass records (O6)', () => {
     expect(((await res.json()) as { enabled: boolean }).enabled).toBe(false);
   });
 });
+
+describe('POST /api/watcher/maintain', () => {
+  it('is 404 when off and for a tenant', async () => {
+    const off = setup(false);
+    expect((await post(app(off.config, undefined), '/api/watcher/maintain')).status).toBe(404);
+    const { config, watcher } = setup();
+    expect((await post(app(config, watcher, 't1'), '/api/watcher/maintain')).status).toBe(404);
+  });
+
+  it('is 409 while the watcher is asleep', async () => {
+    const { config, watcher } = setup();
+    const res = await post(app(config, watcher), '/api/watcher/maintain');
+    expect(res.status).toBe(409);
+  });
+
+  it('runs maintenance now and returns what it did; 409 while a run is in flight', async () => {
+    const { config, watcher } = setup();
+    if (!watcher) throw new Error('no watcher');
+    await watcher.start();
+    await watcher.idle();
+    const a = app(config, watcher, '__admin__');
+    const inFlight = watcher.maintainNow();
+    expect((await post(a, '/api/watcher/maintain')).status).toBe(409);
+    await inFlight;
+    const res = await post(a, '/api/watcher/maintain');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      forgotten: number;
+      link: unknown;
+      at: string;
+    };
+    expect(body.forgotten).toBe(0);
+    expect('link' in body).toBe(true);
+    expect(body.at).toBe(new Date(t).toISOString());
+    await watcher.stop();
+  });
+});

@@ -93,6 +93,7 @@ import {
   instrumented,
 } from './llm';
 import { WatcherLog } from './log';
+import { maintenanceDue, readLastMaintainAt, writeLastMaintainAt } from './maintain-state';
 import {
   narrateForgot,
   narrateIntrospection,
@@ -109,7 +110,7 @@ import {
   resolvePredictions,
   watcherLogLines,
 } from './outcomes';
-import { bufferFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
+import { bufferFile, maintainStateFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
 import {
   type Attention,
@@ -145,6 +146,16 @@ import {
 } from './types';
 
 const DAY_MS = 86_400_000;
+
+/** What one daily maintenance run did (`maintainNow`, `POST /api/watcher/maintain`). */
+export interface MaintainResult {
+  /** Neurons forgotten (archived by importance). */
+  forgotten: number;
+  /** The embed-and-link backfill; null when it did not run (birth unfinished, asleep). */
+  link: LinkResult | null;
+  /** When it completed; also written to `maintain.json`. */
+  at: string;
+}
 /** Throttle of the `watcher:state` a sense batch republishes ("last tick"). */
 export const SENSE_STATE_EVERY_MS = 5_000;
 /** How often the notice timer asks whether a pass should wake (`wakeNotice`: the age ceiling, the min gap). */
@@ -318,6 +329,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     promise: Promise<LinkResult | undefined>;
     isCancelled: () => boolean;
   } | null = null;
+  /** The daily maintenance run in flight (`maintainNow`): a second caller shares it. */
+  private maintainRun: Promise<MaintainResult | undefined> | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private noticeTimer: ReturnType<typeof setInterval> | null = null;
   private lastSenseStateAt = 0;
@@ -1133,7 +1146,13 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         // vectors now that an embedder may work, but an embedder that is down
         // never holds the phase nor the timers.
         const resync = this.runBackground(deps, () => runResync(deps).then(() => undefined));
-        this.background = resync.then(() => this.backfill(deps));
+        const backfilled = resync.then(() => this.backfill(deps));
+        // The daily timer counts from this start: a maintenance a day overdue
+        // (or never recorded) runs once now, after the backfill kick-off.
+        const overdue = maintenanceDue(readLastMaintainAt(maintainStateFile(this.dir)), this.now());
+        this.background = overdue
+          ? Promise.all([backfilled, resync.then(() => this.maintainAtStart(deps))])
+          : backfilled;
       }
       this.sense.attach(this.deps.activityStream, this.deps.hooks);
       this.startTimers();
@@ -1608,19 +1627,43 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
    * A run that `stop()` cancelled during the backfill neither relays out nor
    * persists positions.
    */
-  async maintainNow(): Promise<void> {
+  maintainNow(): Promise<MaintainResult | undefined> {
+    if (this.maintainRun) return this.maintainRun;
+    const run = this.runMaintenance().finally(() => {
+      if (this.maintainRun === run) this.maintainRun = null;
+    });
+    this.maintainRun = run;
+    return run;
+  }
+
+  /** A maintenance run is in flight (`POST /api/watcher/maintain` answers 409). */
+  maintenanceInFlight(): boolean {
+    return this.maintainRun !== null;
+  }
+
+  /** The start's overdue maintenance: skipped when the run it belongs to was stopped. */
+  private async maintainAtStart(deps: BirthDeps): Promise<void> {
+    if (!this.running || this.stopping || deps.isCancelled?.()) return;
+    await this.maintainNow();
+  }
+
+  private async runMaintenance(): Promise<MaintainResult | undefined> {
     try {
-      this.forgetNow();
+      const forgotten = this.forgetNow();
       let linked: LinkResult | undefined;
       if (readBirthRecord(this.dir)?.finishedAt && this.running && !this.stopping) {
         const deps = this.birthDeps();
         linked = await this.backfill(deps);
-        if (linked?.cancelled || deps.isCancelled?.()) return;
+        if (linked?.cancelled || deps.isCancelled?.()) return undefined;
       }
       // linkMissing relays out when it embedded: one layout broadcast, not two.
       if (!linked?.relaidOut) relayout(this.graph);
+      const at = new Date(this.now()).toISOString();
+      writeLastMaintainAt(maintainStateFile(this.dir), at);
+      return { forgotten, link: linked ?? null, at };
     } catch (err) {
       this.logger.warn({ err }, 'Watcher: daily maintenance failed');
+      return undefined;
     }
   }
 

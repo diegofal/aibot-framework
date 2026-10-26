@@ -176,7 +176,9 @@ export function kindFilterIds(neurons, kind) {
  * The ball's highlight has one source at a time: a neuron/row selection or a
  * legend kind, never both. Picking a kind clears the selection; selecting a
  * neuron or a log row clears the kind. A row inside a neuron filter keeps the
- * filter (the log stays narrowed to that neuron). Pure state transition:
+ * filter (the log stays narrowed to that neuron). A replay start drops the
+ * kind, so the legend never shows a filter the emptied ball is not applying.
+ * Pure state transition:
  * `{ kindFilter, selectedSeq, selectedIds, filterId }` in and out.
  */
 export function highlightState(state, action) {
@@ -203,6 +205,9 @@ export function highlightState(state, action) {
       };
     case 'clear':
       return { ...s, ...noRow, filterId: null };
+    case 'replay':
+      // A replay empties the ball, so a pressed legend kind would light nothing.
+      return { ...s, kindFilter: null };
     default:
       return s;
   }
@@ -475,6 +480,17 @@ const ROW = {
   broadcast: broadcastRow,
   contradiction: contradictionRow,
 };
+
+/**
+ * Where keyboard focus goes after "Show more": the first row the click
+ * revealed (`prevShown` rows were on screen before), or `null` when the list
+ * shrank in between and nothing new appeared.
+ */
+export function mindMoreFocusIndex(prevShown, rowCount) {
+  const prev = Number(prevShown);
+  if (!Number.isFinite(prev) || prev < 0) return null;
+  return Number(rowCount) > prev ? prev : null;
+}
 
 /**
  * A tab's list: `rows` from `mindRows`, the first `shown` of them, then

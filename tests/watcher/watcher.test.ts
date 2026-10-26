@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HUMAN_INBOUND_HOOK, OPERATOR_MESSAGE_HOOK } from '../../src/bot/agent-loop-utils';
@@ -2365,6 +2365,99 @@ describe('Watcher: salience-driven ticks (O2) and stakes (O3)', () => {
     expect(prompts[0]).toContain('from 60 to 54');
     const pass = watcher.log.recent(50).find((r) => r.op === 'integrate:pass');
     expect(pass?.drivenBy).toContain('fleetKarmaFalling');
+    await watcher.stop();
+  });
+});
+
+// Live 2026-10-26: the daily maintenance timer counted from each start and
+// nothing was persisted, so restarts kept resetting it and forgetting never ran.
+describe('Watcher: daily maintenance survives restarts', () => {
+  const HOUR = 3_600_000;
+  const maintainFile = () => join(root, 'data', 'watcher', 'maintain.json');
+  const readMaintain = () =>
+    JSON.parse(readFileSync(maintainFile(), 'utf-8')) as { lastMaintainAt: string };
+
+  /** A born watcher, stopped: the next start is a re-wake. */
+  async function bornAndStopped() {
+    const first = make();
+    let runs = 0;
+    const original = first.watcher.maintainNow.bind(first.watcher);
+    first.watcher.maintainNow = () => {
+      runs++;
+      return original();
+    };
+    await first.watcher.start();
+    await first.watcher.idle();
+    await first.watcher.stop();
+    expect(runs).toBe(0);
+    return first;
+  }
+
+  function counted() {
+    const w = make();
+    const calls = { runs: 0 };
+    const original = w.watcher.maintainNow.bind(w.watcher);
+    w.watcher.maintainNow = () => {
+      calls.runs++;
+      return original();
+    };
+    return { ...w, calls };
+  }
+
+  test('birth never maintains at start; a re-wake with no record maintains once and records it', async () => {
+    await bornAndStopped();
+    expect(existsSync(maintainFile())).toBe(false);
+    t += 1000;
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(1);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
+    await second.watcher.stop();
+  });
+
+  test('a re-wake more than a day after the last maintenance maintains once at start', async () => {
+    await bornAndStopped();
+    writeFileSync(
+      maintainFile(),
+      JSON.stringify({ lastMaintainAt: new Date(t - 25 * HOUR).toISOString() })
+    );
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(1);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
+    await second.watcher.stop();
+  });
+
+  test('a re-wake within a day of the last maintenance does not maintain at start', async () => {
+    await bornAndStopped();
+    const last = new Date(t - 2 * HOUR).toISOString();
+    writeFileSync(maintainFile(), JSON.stringify({ lastMaintainAt: last }));
+    const second = counted();
+    await second.watcher.start();
+    await second.watcher.idle();
+    expect(second.calls.runs).toBe(0);
+    expect(readMaintain().lastMaintainAt).toBe(last);
+    await second.watcher.stop();
+  });
+
+  test('maintainNow returns what it did, records the time, and shares a run in flight', async () => {
+    await bornAndStopped();
+    writeFileSync(maintainFile(), JSON.stringify({ lastMaintainAt: new Date(t).toISOString() }));
+    const { watcher } = make();
+    await watcher.start();
+    await watcher.idle();
+    t += 5 * HOUR;
+    const a = watcher.maintainNow();
+    expect(watcher.maintenanceInFlight()).toBe(true);
+    const b = watcher.maintainNow();
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(rb).toBe(ra);
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    expect(ra).toMatchObject({ forgotten: 0, at: new Date(t).toISOString() });
+    expect(ra && 'link' in ra).toBe(true);
+    expect(readMaintain().lastMaintainAt).toBe(new Date(t).toISOString());
     await watcher.stop();
   });
 });
