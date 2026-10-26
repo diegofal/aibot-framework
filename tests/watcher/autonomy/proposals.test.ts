@@ -564,4 +564,33 @@ describe('review round 3: proposals', () => {
     });
     expect(readFileSync(proposalsFile(dir), 'utf-8')).toBe(before);
   });
+
+  it('view takes one change lookup for the whole call: changeFor is never read per pending proposal', () => {
+    // Review PR #25 (proposals.ts:368): `list()` reads the ledger once and passes the lookup.
+    let perProposal = 0;
+    const config = testConfig(join(dir, 'data'));
+    const store = new ProposalStore({
+      watcherDir: dir,
+      now: () => t,
+      settings: () => ({ maxPending: 3, approvalTtlHours: 72 }),
+      lockContext: () => ({ config }),
+      apply: async () => ({ ok: false, error: 'unused' }),
+      changeFor: () => {
+        perProposal++;
+        return undefined;
+      },
+    });
+    for (const title of ['A', 'B', 'C']) {
+      if (!store.submit(proposalInput({ title })).ok) throw new Error('setup');
+    }
+    perProposal = 0;
+    const looked: string[] = [];
+    const viewed = store.view(t, (id) => {
+      looked.push(id);
+      return undefined;
+    });
+    expect(viewed.filter((p) => p.status === 'pending')).toHaveLength(3);
+    expect(looked).toHaveLength(3);
+    expect(perProposal).toBe(0);
+  });
 });

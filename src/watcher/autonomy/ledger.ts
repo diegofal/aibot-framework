@@ -366,8 +366,10 @@ export class ChangeLedger {
    * Roll back every live change whose guard breached inside its window, and
    * retry every rollback whose write failed (`revert-failed`, `cause: guard`,
    * the after-values still live) while its guard still breaches, inside or
-   * past its window: a rollback once decided is never abandoned. Returns the
-   * rolled-back ones.
+   * past its window: a rollback once decided is never abandoned. An operator
+   * revert whose write failed with the after-values still live stays under
+   * its guard inside its window: a breach rolls it back (`cause: guard`).
+   * Never over a hand edit (`movedSinceApply`). Returns the rolled-back ones.
    */
   async checkGuards(nowMs: number = this.now()): Promise<ChangeRecord[]> {
     const rolled: ChangeRecord[] = [];
@@ -376,7 +378,8 @@ export class ChangeLedger {
     for (const change of this.all()) {
       try {
         const retry = this.isRollbackRetry(change);
-        if (change.status !== 'applied' && !retry) continue;
+        const guarded = change.status === 'applied' || this.isFailedOperatorRevert(change);
+        if (!guarded && !retry) continue;
         const since = Date.parse(change.appliedAt);
         if (nowMs < since) continue;
         if (!retry && nowMs > Date.parse(change.guardUntil)) continue;
@@ -405,6 +408,15 @@ export class ChangeLedger {
     return (
       change.status === 'revert-failed' &&
       change.cause === 'guard' &&
+      this.movedSinceApply(change) === undefined
+    );
+  }
+
+  /** An operator revert whose write failed while the after-values stay live: still under its guard, inside its window. */
+  private isFailedOperatorRevert(change: ChangeRecord): boolean {
+    return (
+      change.status === 'revert-failed' &&
+      change.cause !== 'guard' &&
       this.movedSinceApply(change) === undefined
     );
   }
@@ -524,7 +536,9 @@ export class ChangeLedger {
     if (!this.store(intent)) {
       this.say(
         'autonomy:rollback-unrecorded',
-        `I would roll back change ${change.id} because ${why}, but could not record it, so I changed nothing; it is still applied and I try again at the next check while its window lasts.`
+        `I would roll back change ${change.id} because ${why}, but could not record it, so I changed nothing; it is still ${change.status} and I try again at the next check ${
+          this.isRollbackRetry(change) ? 'while its guard breaches' : 'while its window lasts'
+        }.`
       );
       return undefined;
     }

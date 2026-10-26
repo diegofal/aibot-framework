@@ -792,15 +792,69 @@ describe('review round 3: ledger', () => {
     expect(ledger.get(r.change.id)?.status).toBe('revert-failed');
   });
 
-  it('an operator revert whose write failed is for the operator to retry, never the guard', async () => {
+  it('an operator revert whose write failed, the new values still live: a breach inside its window rolls it back', async () => {
+    // Review PR #25 (ledger.ts:404): replaces "is for the operator to retry,
+    // never the guard". The live values are the applied ones, which is what
+    // the guard exists to undo.
     const { ledger, mem } = makeLedger({ 'watcher.notice.salienceBar': 0.4 }, () => 10);
     const r = await ledger.apply(proposal());
     if (!r.ok) throw new Error('setup');
     mem.failWrites(true);
     expect((await ledger.revert(r.change.id, { actor: 'operator' })).ok).toBe(false);
+    expect(ledger.get(r.change.id)?.cause).toBe('operator');
     mem.failWrites(false);
-    await ledger.checkGuards(t + HOUR);
+    const rolled = await ledger.checkGuards(t + HOUR);
+    expect(rolled.map((c) => c.id)).toEqual([r.change.id]);
+    const c = ledger.get(r.change.id);
+    expect(c?.status).toBe('rolled-back');
+    expect(c?.cause).toBe('guard');
+    expect(mem.values.get('watcher.notice.salienceBar')).toBe(0.4);
+  });
+
+  it('an operator revert whose write failed: past its window, or over a hand edit, the guard leaves it', async () => {
+    const past = makeLedger({ 'watcher.notice.salienceBar': 0.4 }, () => 10);
+    const r = await past.ledger.apply(proposal());
+    if (!r.ok) throw new Error('setup');
+    past.mem.failWrites(true);
+    await past.ledger.revert(r.change.id, { actor: 'operator' });
+    past.mem.failWrites(false);
+    expect(await past.ledger.checkGuards(t + 73 * HOUR)).toEqual([]);
+    expect(past.ledger.get(r.change.id)?.status).toBe('revert-failed');
+    expect(past.mem.values.get('watcher.notice.salienceBar')).toBe(0.6);
+
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    const edited = makeLedger({ 'watcher.notice.salienceBar': 0.4 }, () => 10);
+    const e = await edited.ledger.apply(proposal());
+    if (!e.ok) throw new Error('setup');
+    edited.mem.failWrites(true);
+    await edited.ledger.revert(e.change.id, { actor: 'operator' });
+    edited.mem.failWrites(false);
+    edited.mem.values.set('watcher.notice.salienceBar', 1.2); // a hand edit
+    expect(await edited.ledger.checkGuards(t + HOUR)).toEqual([]);
+    expect(edited.ledger.get(e.change.id)?.status).toBe('revert-failed');
+    expect(edited.mem.values.get('watcher.notice.salienceBar')).toBe(1.2);
+  });
+
+  it('a retried rollback whose intent cannot be stored says it is still revert-failed, not applied', async () => {
+    let restore: (() => void) | undefined;
+    let armed = false;
+    const { ledger, mem, log } = makeLedger({ 'watcher.notice.salienceBar': 0.4 }, () => {
+      if (armed && !restore) restore = breakFile(changesFile(dir));
+      return 10;
+    });
+    const r = await ledger.apply(proposal());
+    if (!r.ok) throw new Error('setup');
+    mem.failWrites(true);
+    await ledger.checkGuards(t + HOUR); // the guard's rollback write fails
+    mem.failWrites(false);
     expect(ledger.get(r.change.id)?.status).toBe('revert-failed');
+    armed = true;
+    await ledger.checkGuards(t + 2 * HOUR);
+    restore?.();
+    const row = log.rows.find((x) => x.op === 'autonomy:rollback-unrecorded');
+    expect(row?.text).toContain('it is still revert-failed');
+    expect(row?.text).not.toContain('still applied');
     expect(mem.values.get('watcher.notice.salienceBar')).toBe(0.6);
   });
 
