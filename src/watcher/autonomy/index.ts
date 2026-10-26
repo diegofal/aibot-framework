@@ -35,7 +35,7 @@ export type { AutonomyLog, DecisionResult, SubmitResult } from './proposals';
 export type { LedgerEvent, LedgerResult, ValueAccess } from './ledger';
 export type { GuardReader } from './guards';
 
-/** How much decided history `list` returns. */
+/** How much decided history `list` returns: decided proposals, and ended changes (live and revert-failed ones are always listed). */
 export const LIST_HISTORY_LIMIT = 50;
 export const AUTONOMY_TICK_MS = 3_600_000;
 
@@ -107,6 +107,7 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
     settings: () => proposalSettings(config),
     lockContext: () => ({ config }),
     apply: (p) => ledger.apply(p),
+    changeFor: (proposalId) => ledger.all().find((c) => c.proposalId === proposalId),
     logger: opts.logger,
   });
 
@@ -132,10 +133,14 @@ export function createAutonomy(opts: CreateAutonomyOptions): AutonomyApi {
         )
         .sort(newestFirst((p: Proposal) => p.decidedAt ?? p.pendingAt ?? p.createdAt))
         .slice(0, LIST_HISTORY_LIMIT);
-      const changes = ledger
-        .all()
-        .sort(newestFirst((c: ChangeRecord) => c.appliedAt))
-        .slice(0, LIST_HISTORY_LIMIT);
+      // A change the operator may still need to revert is never cut by the history limit.
+      const byApplied = ledger.all().sort(newestFirst((c: ChangeRecord) => c.appliedAt));
+      const open = (c: ChangeRecord) => c.status === 'applied' || c.status === 'revert-failed';
+      const kept = new Set([
+        ...byApplied.filter(open),
+        ...byApplied.filter((c) => !open(c)).slice(0, LIST_HISTORY_LIMIT),
+      ]);
+      const changes = byApplied.filter((c) => kept.has(c));
       return {
         enabled: true,
         proposals: [...pending, ...decided],

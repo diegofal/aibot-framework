@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   GUARD_METRICS,
+  GUARD_MIN_WINDOW_HOURS,
   breaches,
   createGuardReader,
   isGuardMetric,
@@ -75,13 +76,15 @@ describe('watcher.costUsdPerDay', () => {
     expect(readWatcherCostPerDay(dir, since, now)).toBeCloseTo(3, 6);
   });
 
-  it('counts only the share of the apply day after the change', () => {
-    // Applied at noon: half of 2026-10-20 (cost 4) counts, plus all of 10-21 (cost 2), over 1.5 days.
+  it('counts whole UTC days after the apply day only', () => {
+    // Applied at noon: 2026-10-20 (cost 4) is the apply day and never counts; 10-21 (cost 2) does.
     const since = Date.parse('2026-10-20T12:00:00Z');
     budgetDay('2026-10-20', 2, 2);
     budgetDay('2026-10-21', 1, 1);
-    const now = Date.parse('2026-10-22T00:00:00Z');
-    expect(readWatcherCostPerDay(dir, since, now)).toBeCloseTo((2 + 2) / 1.5, 6);
+    budgetDay('2026-10-22', 5, 5);
+    // 10-22 has not ended yet: not counted either.
+    const now = Date.parse('2026-10-22T18:00:00Z');
+    expect(readWatcherCostPerDay(dir, since, now)).toBeCloseTo(2, 6);
   });
 
   it('a missing day counts as zero spend once another day has a file', () => {
@@ -138,5 +141,36 @@ describe('createGuardReader', () => {
       await read('fleet.errorCycleShare', { sinceMs: since, nowMs: since + DAY })
     ).toBeUndefined();
     expect(await read('nope', { sinceMs: since, nowMs: since + DAY })).toBeUndefined();
+  });
+});
+
+describe('review round 1: cost guard', () => {
+  it('spend before the change on the apply day is never attributed to after it', () => {
+    // $12 before noon, the change at noon, nothing after.
+    const since = Date.parse('2026-10-20T12:00:00Z');
+    budgetDay('2026-10-20', 6, 6);
+    expect(readWatcherCostPerDay(dir, since, Date.parse('2026-10-20T18:00:00Z'))).toBeUndefined();
+    budgetDay('2026-10-21', 0, 0);
+    expect(readWatcherCostPerDay(dir, since, Date.parse('2026-10-22T00:00:00Z'))).toBe(0);
+  });
+
+  it('every guard metric declares a minimum window, and an hourly check inside it always reads', () => {
+    for (const m of GUARD_METRICS) expect(GUARD_MIN_WINDOW_HOURS[m]).toBeGreaterThan(0);
+    const win = GUARD_MIN_WINDOW_HOURS['watcher.costUsdPerDay'] * HOUR;
+    for (const date of ['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23']) {
+      budgetDay(date, 1, 1);
+    }
+    const dayStart = Date.parse('2026-10-20T00:00:00Z');
+    // Applied at any minute of the day, ticks at any phase of the hour.
+    for (let applyMin = 0; applyMin < 24 * 60; applyMin += 37) {
+      const since = dayStart + applyMin * 60_000 + 1;
+      for (const phaseMin of [1, 20, 59, 60]) {
+        let read = false;
+        for (let tick = since + phaseMin * 60_000; tick <= since + win; tick += HOUR) {
+          if (readWatcherCostPerDay(dir, since, tick) !== undefined) read = true;
+        }
+        expect(read).toBe(true);
+      }
+    }
   });
 });

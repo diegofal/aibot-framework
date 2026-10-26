@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { appendFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCKED_EXAMPLES } from '../../../src/watcher/autonomy/locked';
@@ -34,7 +34,9 @@ function makeStore(
   const config = testConfig(join(dir, 'data'));
   const log = rowLog();
   let applied = 0;
+  const changes: ChangeRecord[] = [];
   const store = new ProposalStore({
+    changeFor: (proposalId: string) => changes.find((c) => c.proposalId === proposalId),
     watcherDir: dir,
     log,
     now: () => t,
@@ -44,19 +46,18 @@ function makeStore(
       opts.apply ??
       (async (p) => {
         applied++;
-        return {
-          ok: true,
-          change: {
-            id: `c-0000000${applied}`,
-            proposalId: p.id,
-            before: [],
-            after: [],
-            guard: p.guard,
-            appliedAt: new Date(t).toISOString(),
-            guardUntil: new Date(t + p.guard.windowHours * HOUR).toISOString(),
-            status: 'applied',
-          },
+        const change: ChangeRecord = {
+          id: `c-0000000${applied}`,
+          proposalId: p.id,
+          before: [],
+          after: [],
+          guard: p.guard,
+          appliedAt: new Date(t).toISOString(),
+          guardUntil: new Date(t + p.guard.windowHours * HOUR).toISOString(),
+          status: 'applied',
         };
+        changes.push(change);
+        return { ok: true, change };
       }),
   });
   return { store, log, config, applied: () => applied };
@@ -366,5 +367,107 @@ describe('ProposalStore', () => {
 
   it('readers never throw on a missing dir', () => {
     expect(readProposals(join(dir, 'nope'))).toEqual([]);
+  });
+});
+
+/** Makes `path` unwritable for appends (a directory in its place); the returned function restores it. */
+function breakFile(path: string): () => void {
+  renameSync(path, `${path}.aside`);
+  mkdirSync(path);
+  return () => {
+    rmSync(path, { recursive: true, force: true });
+    renameSync(`${path}.aside`, path);
+  };
+}
+
+describe('review round 1: proposals', () => {
+  it('a cost guard window too short to ever read is rejected at parse', () => {
+    for (const windowHours of [1, 5, 24, 48]) {
+      const r = parseProposal(
+        proposalInput({
+          guard: { metric: 'watcher.costUsdPerDay', direction: 'max', bound: 3, windowHours },
+        }),
+        ctx()
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.locked).toBe(false);
+        expect(r.error).toContain('watcher.costUsdPerDay');
+      }
+    }
+    const ok = parseProposal(
+      proposalInput({
+        guard: { metric: 'watcher.costUsdPerDay', direction: 'max', bound: 3, windowHours: 49 },
+      }),
+      ctx()
+    );
+    expect(ok.ok).toBe(true);
+    const share = parseProposal(
+      proposalInput({
+        guard: { metric: 'fleet.errorCycleShare', direction: 'max', bound: 0.2, windowHours: 1 },
+      }),
+      ctx()
+    );
+    expect(share.ok).toBe(true);
+  });
+
+  it('an approval whose decision cannot be stored is not reported as approved, and is never applied twice', async () => {
+    let restore: (() => void) | undefined;
+    const { store, log, applied } = makeStore();
+    const r = store.submit(proposalInput());
+    if (!r.ok) throw new Error('setup');
+    // The ledger applies and records; then storing the decision fails.
+    const real = (store as unknown as { deps: { apply: (p: Proposal) => Promise<unknown> } }).deps;
+    const apply = real.apply;
+    real.apply = async (p) => {
+      const out = await apply(p);
+      restore = breakFile(proposalsFile(dir));
+      return out;
+    };
+    const res = await store.approve(r.proposal.id, {
+      contentHash: r.proposal.contentHash,
+      actor: 'operator',
+    });
+    restore?.();
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('c-00000001');
+    expect(applied()).toBe(1);
+    expect(log.ops()).not.toContain('autonomy:approved');
+    // Storage is back: the next read stores the decision for the change already made.
+    real.apply = apply;
+    const healed = store.all().find((p) => p.id === r.proposal.id);
+    expect(healed?.status).toBe('approved');
+    expect(healed?.changeId).toBe('c-00000001');
+    expect(healed?.decidedBy).toBe('operator');
+    const again = await store.approve(r.proposal.id, {
+      contentHash: r.proposal.contentHash,
+      actor: 'operator',
+    });
+    expect(again).toMatchObject({ ok: false, status: 409 });
+    expect(applied()).toBe(1);
+    expect(readProposals(dir).find((p) => p.id === r.proposal.id)?.status).toBe('approved');
+  });
+
+  it('while decisions still cannot be stored, approving again never applies twice', async () => {
+    const { store, applied } = makeStore();
+    const r = store.submit(proposalInput());
+    if (!r.ok) throw new Error('setup');
+    const s = store as unknown as { write: (p: Proposal) => boolean };
+    const write = s.write.bind(store);
+    const real = (store as unknown as { deps: { apply: (p: Proposal) => Promise<unknown> } }).deps;
+    const apply = real.apply;
+    real.apply = async (p) => {
+      const out = await apply(p);
+      s.write = () => false;
+      return out;
+    };
+    const opts = { contentHash: r.proposal.contentHash, actor: 'operator' as const };
+    expect(await store.approve(r.proposal.id, opts)).toMatchObject({ ok: false, status: 500 });
+    const again = await store.approve(r.proposal.id, opts);
+    expect(again).toMatchObject({ ok: false, status: 500 });
+    if (!again.ok) expect(again.error).toContain('already applied as change c-00000001');
+    expect(applied()).toBe(1);
+    s.write = write;
+    expect(store.get(r.proposal.id)?.status).toBe('approved');
   });
 });

@@ -39,11 +39,19 @@ import type { ChangeRecord, ChangeStatus, Proposal } from './types';
 
 const HOUR_MS = 3_600_000;
 
+/** One value to write; with an own `raw`, the persisted file gets `raw` and the live config `value`. */
+export type ValueWrite = { path: string; value: unknown; raw?: unknown };
+
 /** Reads and writes config values by dotted path. */
 export interface ValueAccess {
   read(path: string): unknown;
+  /**
+   * The value persisted for `path` when it is not the live one but expands to
+   * it (an env reference such as `${CADENCE}`); undefined otherwise.
+   */
+  readPersisted?(path: string): { value: unknown } | undefined;
   /** All or nothing as far as the implementation can; throws on failure. `undefined` removes the key. */
-  write(values: Array<{ path: string; value: unknown }>): Promise<void>;
+  write(values: ValueWrite[]): Promise<void>;
 }
 
 /** `undefined` and `null` are the same value (a missing key); otherwise canonical JSON equality. */
@@ -95,9 +103,10 @@ export interface LedgerDeps {
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
+/** 500: the live values changed but the record of it could not be stored; `error` says what is live. */
 export type LedgerResult =
   | { ok: true; change: ChangeRecord }
-  | { ok: false; status: 403 | 404 | 409; error: string };
+  | { ok: false; status: 403 | 404 | 409 | 500; error: string };
 
 function show(v: unknown): string {
   if (v === undefined || v === null) return '(unset)';
@@ -132,7 +141,7 @@ export class ChangeLedger {
   /** Apply an approved proposal. The caller (`ProposalStore.approve`) checked actor, hash and lock. */
   async apply(
     proposal: Proposal
-  ): Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string }> {
+  ): Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string; live?: true }> {
     const before: ChangeRecord['before'] = [];
     for (const c of proposal.changes) {
       let live: unknown;
@@ -147,7 +156,17 @@ export class ChangeLedger {
           error: `${c.path} changed since it was proposed: it is now ${show(live)}, the proposal saw ${show(c.from)}`,
         };
       }
-      before.push({ path: c.path, value: clone(live) });
+      let persisted: { value: unknown } | undefined;
+      try {
+        persisted = this.deps.access.readPersisted?.(c.path);
+      } catch {
+        persisted = undefined;
+      }
+      before.push({
+        path: c.path,
+        value: clone(live),
+        ...(persisted ? { raw: clone(persisted.value) ?? null } : {}),
+      });
     }
     const after = proposal.changes.map((c) => ({ path: c.path, value: clone(c.to) }));
     try {
@@ -175,8 +194,11 @@ export class ChangeLedger {
           { err, proposalId: proposal.id },
           'Autonomy: could not undo an unrecorded change'
         );
+        const error = `I applied it but could not record it, and undoing it failed (${errText(err)}): the new values are live with no change record (${describe(before, after)}). Set them back by hand`;
+        this.say('autonomy:apply-unrecorded', `${error}.`);
+        return { ok: false, error, live: true };
       }
-      return { ok: false, error: 'Could not record the change, so it was not applied' };
+      return { ok: false, error: 'Could not record the change, so I undid it: nothing changed' };
     }
     const g = change.guard;
     this.say(
@@ -220,7 +242,17 @@ export class ChangeLedger {
       endedAt: new Date(this.now()).toISOString(),
       endReason: 'Reverted by the operator',
     };
-    this.store(ended);
+    if (!this.store(ended)) {
+      // A revert the ledger does not know about would leave a record that
+      // says applied over restored values: put the change back instead.
+      const failed = await this.reapply(change);
+      const error =
+        failed === undefined
+          ? `Could not record the revert, so I put change ${change.id} back: it is still applied. Try again`
+          : `I wrote the old values back but could not record the revert, and putting the change back failed (${failed}): the old values are live while change ${change.id} still shows as applied`;
+      this.say('autonomy:revert-unrecorded', `${error}.`);
+      return { ok: false, status: 500, error };
+    }
     this.say(
       'autonomy:reverted',
       `You reverted change ${change.id}: ${describe(change.after, change.before)}.`
@@ -273,11 +305,7 @@ export class ChangeLedger {
         endedAt,
         endReason: `${why}, but ${moved} changed since it was applied, so I left it; the old values are kept for you`,
       };
-      this.store(failed);
-      this.say(
-        'autonomy:revert-failed',
-        `I could not roll back change ${change.id}: ${failed.endReason}.`
-      );
+      this.storeFailed(failed);
       return failed;
     }
     try {
@@ -289,21 +317,49 @@ export class ChangeLedger {
         endedAt,
         endReason: `${why}; writing the old values back failed (${errText(err)}); they are kept for you`,
       };
-      this.store(failed);
-      this.say(
-        'autonomy:revert-failed',
-        `I could not roll back change ${change.id}: ${failed.endReason}.`
-      );
+      this.storeFailed(failed);
       return failed;
     }
     const ended: ChangeRecord = { ...change, status: 'rolled-back', endedAt, endReason: why };
-    this.store(ended);
+    if (!this.store(ended)) {
+      // Same as revert: never leave restored values under an "applied" record.
+      const failed = await this.reapply(change);
+      this.say(
+        'autonomy:rollback-unrecorded',
+        failed === undefined
+          ? `I rolled back change ${change.id} because ${why}, but could not record it, so I put the change back; it is still applied and I try again at the next check.`
+          : `I rolled back change ${change.id} because ${why}, but could not record it, and putting the change back failed (${failed}): the old values are live while the change still shows as applied.`
+      );
+      return undefined;
+    }
     this.say(
       'autonomy:rolled-back',
       `I rolled back change ${change.id} because ${why}: ${describe(change.after, change.before)}.`
     );
     this.notify(ended, 'rolled-back');
     return ended;
+  }
+
+  /** Write a change's after-values again. The error text, or undefined when it worked. */
+  private async reapply(change: ChangeRecord): Promise<string | undefined> {
+    try {
+      await this.deps.access.write(change.after);
+      return undefined;
+    } catch (err) {
+      this.deps.logger?.warn({ err, changeId: change.id }, 'Autonomy: could not put a change back');
+      return errText(err);
+    }
+  }
+
+  /** A `revert-failed` record and its row; the row says so when even the record could not be stored. */
+  private storeFailed(failed: ChangeRecord): void {
+    const stored = this.store(failed);
+    this.say(
+      'autonomy:revert-failed',
+      stored
+        ? `I could not roll back change ${failed.id}: ${failed.endReason}.`
+        : `I could not roll back change ${failed.id}: ${failed.endReason}. I could not record this either: the change still shows as applied.`
+    );
   }
 
   /** The first path whose live value is no longer the applied one, if any. */
@@ -409,7 +465,11 @@ export interface ConfigAccessDeps {
 }
 
 /**
- * Values in the live `Config` and persisted to disk. A watcher value is
+ * Values in the live `Config` and persisted to disk. `readPersisted` reads
+ * the raw file value when it expands to the live one but is not it (an env
+ * reference: `agentLoop.every: "${CADENCE}"`; a watcher tunable cannot be one,
+ * `WatcherConfigSchema` takes numbers only), and a write with `raw` puts that
+ * back in the file while the live config gets the expanded value. A watcher value is
  * written into config.json raw (its `${VAR}` references untouched, validated
  * with `WatcherConfigSchema` as `loadConfig` would see it, through
  * `patchConfigFile`); a bot's `agentLoop.every` into bots.json raw (never
@@ -422,23 +482,41 @@ export interface ConfigAccessDeps {
 export function createConfigAccess(deps: ConfigAccessDeps): ValueAccess {
   const { config } = deps;
   const bot = (id: string) => (config.bots ?? []).find((b) => b.id === id);
+  const read = (path: string): unknown => {
+    const t = targetOf(path);
+    if (!t) return undefined;
+    if (t.kind === 'watcher') return getOwn(config.watcher, t.keys);
+    return getOwn(bot(t.botId)?.agentLoop, ['every']);
+  };
   return {
-    read(path) {
+    read,
+    readPersisted(path) {
       const t = targetOf(path);
-      if (!t) return undefined;
-      if (t.kind === 'watcher') return getOwn(config.watcher, t.keys);
-      return getOwn(bot(t.botId)?.agentLoop, ['every']);
+      if (!t || !deps.configPath) return undefined;
+      let raw: unknown;
+      try {
+        raw =
+          t.kind === 'watcher'
+            ? getOwn(readJsonObject(deps.configPath).watcher, t.keys)
+            : persistedBotEvery(deps.configPath, t.botId);
+      } catch {
+        return undefined;
+      }
+      const live = read(path);
+      if (sameValue(raw, live) || !sameValue(expandEnvReferences(raw), live)) return undefined;
+      return { value: raw };
     },
     async write(values) {
-      const watcherValues: Array<{ keys: string[]; value: unknown }> = [];
-      const botValues: Array<{ botId: string; value: unknown }> = [];
+      const watcherValues: Array<{ keys: string[]; value: unknown; file: unknown }> = [];
+      const botValues: Array<{ botId: string; value: unknown; file: unknown }> = [];
       for (const v of values) {
         const t = targetOf(v.path);
         if (!t) throw new Error(`${v.path} is not a tunable`);
-        if (t.kind === 'watcher') watcherValues.push({ keys: t.keys, value: v.value });
+        const file = Object.hasOwn(v, 'raw') ? v.raw : v.value;
+        if (t.kind === 'watcher') watcherValues.push({ keys: t.keys, value: v.value, file });
         else {
           if (!bot(t.botId)) throw new Error(`No bot "${t.botId}" in the live config`);
-          botValues.push({ botId: t.botId, value: v.value });
+          botValues.push({ botId: t.botId, value: v.value, file });
         }
       }
       // The live watcher block it would become must validate before anything is written.
@@ -451,7 +529,7 @@ export function createConfigAccess(deps: ConfigAccessDeps): ValueAccess {
         if (watcherValues.length > 0) {
           patchConfigFile(configPath, (raw) => {
             let watcher: unknown = raw.watcher;
-            for (const w of watcherValues) watcher = withValue(watcher, w.keys, w.value);
+            for (const w of watcherValues) watcher = withValue(watcher, w.keys, w.file);
             validateWatcher(expandEnvReferences(watcher));
             raw.watcher = watcher;
           });
@@ -480,9 +558,25 @@ function validateWatcher(watcher: unknown): void {
   }
 }
 
+function readJsonObject(path: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync(path, 'utf-8'));
+  return isObj(parsed) ? parsed : {};
+}
+
+/** A bot's raw `agentLoop.every` from bots.json, or config.json's inline `bots` when there is none. */
+function persistedBotEvery(configPath: string, botId: string): unknown {
+  const botsPath = botsPathFromConfigPath(configPath);
+  const bots: unknown = existsSync(botsPath)
+    ? JSON.parse(readFileSync(botsPath, 'utf-8'))
+    : readJsonObject(configPath).bots;
+  if (!Array.isArray(bots)) return undefined;
+  const b = bots.find((x) => isObj(x) && x.id === botId);
+  return getOwn(b, ['agentLoop', 'every']);
+}
+
 function persistBotCadence(
   configPath: string,
-  values: Array<{ botId: string; value: unknown }>
+  values: Array<{ botId: string; file: unknown }>
 ): void {
   const patch = (bots: unknown): unknown[] => {
     if (!Array.isArray(bots)) throw new Error('the bots file is not an array');
@@ -491,7 +585,7 @@ function persistBotCadence(
       const i = next.findIndex((b) => isObj(b) && b.id === v.botId);
       if (i < 0) throw new Error(`No bot "${v.botId}" in the bots file`);
       const b = next[i] as Record<string, unknown>;
-      b.agentLoop = withValue(b.agentLoop, ['every'], v.value);
+      b.agentLoop = withValue(b.agentLoop, ['every'], v.file);
     }
     return next;
   };

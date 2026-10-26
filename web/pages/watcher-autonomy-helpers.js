@@ -56,6 +56,31 @@ export function startBlockedByKill(state) {
   return !!state?.killed && !state?.running;
 }
 
+/** While the kill banner shows, the page re-reads `GET /api/watcher` this often. */
+export const KILL_POLL_MS = 10_000;
+
+/**
+ * Re-read the state on a timer? Only while the kill banner shows: nothing
+ * publishes `watcher:state` while the watcher is stopped, so without it
+ * clearing the switch leaves Start disabled until a reload. The re-read only
+ * updates the page; it never starts the watcher.
+ */
+export function needsKillPoll(state) {
+  return !!state?.killed && typeof state.killed === 'object';
+}
+
+/**
+ * The watcher-off screen plus the Proposals host (and the month spend, when
+ * the off answer carries one): proposals and the change ledger work without
+ * the watcher, so an applied change stays revertable from here.
+ */
+export function watcherOffHtml(offHtml, state) {
+  const month = monthSpendHtml(state?.month);
+  return `${offHtml}${
+    month ? `<div class="watcher-off-month">${month}</div>` : ''
+  }<section class="watcher-autonomy watcher-off-autonomy" id="watcher-proposals" aria-label="Proposals" hidden></section>`;
+}
+
 /** `{ text, tone: ok | warn | over, share }` for the month spend (C6), or null without one. */
 export function monthSpend(month) {
   if (!month || typeof month !== 'object') return null;
@@ -268,8 +293,10 @@ function changeRowHtml(c, { nowMs, ui, titleOf }) {
           guardLeftH > 0 ? ` · its guard watches ${guardLeftH} h more` : ' · guard window over'
         }`
       : `ended ${relTime(c.endedAt, nowMs)}`;
+  // A failed automatic rollback leaves the changed value live and its guard
+  // stops watching: only the operator's Revert can put it back.
   const revert =
-    c.status === 'applied'
+    c.status === 'applied' || c.status === 'revert-failed'
       ? `<div class="watcher-auto-actions"><button type="button" class="btn btn-sm${
           armed ? ' btn-danger' : ''
         }" data-action="autonomy-revert" data-change-id="${esc(c.id)}" data-focus-key="revert:${esc(

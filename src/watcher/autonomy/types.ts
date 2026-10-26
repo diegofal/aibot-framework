@@ -112,8 +112,12 @@ export interface ChangeRecord {
   /** `c-` + 8 hex. */
   id: string;
   proposalId: string;
-  /** The live values right before apply, per path. */
-  before: Array<{ path: string; value: unknown }>;
+  /**
+   * The live values right before apply, per path. `raw` (only when the config
+   * file held something else that expands to `value`, such as `${CADENCE}`;
+   * `null` = absent from the file) is what a revert writes back to the file.
+   */
+  before: Array<{ path: string; value: unknown; raw?: unknown }>;
   after: Array<{ path: string; value: unknown }>;
   guard: ProposalGuard;
   appliedAt: string;

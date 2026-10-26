@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Config } from '../../../src/config';
@@ -318,5 +327,125 @@ describe('createConfigAccess', () => {
     const { configPath, access } = files(config);
     await expect(access.write([{ path: 'watcher.enabled', value: false }])).rejects.toThrow();
     expect(JSON.parse(readFileSync(configPath, 'utf-8')).watcher.enabled).toBe(true);
+  });
+});
+
+/** Makes `path` unwritable for appends (a directory in its place); the returned function restores it. */
+function breakFile(path: string): () => void {
+  const had = existsSync(path);
+  if (had) renameSync(path, `${path}.aside`);
+  mkdirSync(path, { recursive: true });
+  return () => {
+    rmSync(path, { recursive: true, force: true });
+    if (had) renameSync(`${path}.aside`, path);
+  };
+}
+
+describe('review round 1: ledger', () => {
+  it('revert writes an env reference back to bots.json, and its expanded value to the live config', async () => {
+    process.env.AUTONOMY_TEST_CADENCE = '2h';
+    try {
+      const config = testConfig(join(dir, 'data'));
+      const configPath = join(dir, 'config.json');
+      writeFileSync(configPath, JSON.stringify({ watcher: { enabled: true } }));
+      const botsPath = join(dir, 'bots.json');
+      writeFileSync(
+        botsPath,
+        JSON.stringify([{ id: 'b1', name: 'b1', agentLoop: { every: '${AUTONOMY_TEST_CADENCE}' } }])
+      );
+      const ledger = new ChangeLedger({
+        watcherDir: dir,
+        access: createConfigAccess({ config, configPath }),
+        now: () => t,
+      });
+      const r = await ledger.apply(
+        proposal({
+          kind: 'fleet-cadence',
+          changes: [{ path: 'bots.b1.agentLoop.every', from: '2h', to: '6h' }],
+        })
+      );
+      if (!r.ok) throw new Error(r.error);
+      expect(JSON.parse(readFileSync(botsPath, 'utf-8'))[0].agentLoop.every).toBe('6h');
+      const back = await ledger.revert(r.change.id, { actor: 'operator' });
+      expect(back.ok).toBe(true);
+      expect(JSON.parse(readFileSync(botsPath, 'utf-8'))[0].agentLoop.every).toBe(
+        '${AUTONOMY_TEST_CADENCE}'
+      );
+      const live = config.bots.find((b) => b.id === 'b1');
+      expect(live?.agentLoop?.every).toBe('2h');
+    } finally {
+      Reflect.deleteProperty(process.env, 'AUTONOMY_TEST_CADENCE');
+    }
+  });
+
+  it('an unrecorded change that cannot be undone is reported as live, never as not applied', async () => {
+    const values = new Map<string, unknown>([['watcher.notice.salienceBar', 0.4]]);
+    let writes = 0;
+    const log = rowLog();
+    const ledger = new ChangeLedger({
+      watcherDir: dir,
+      log,
+      now: () => t,
+      access: {
+        read: (p) => values.get(p),
+        write: async (vs) => {
+          writes++;
+          if (writes > 1) throw new Error('disk full');
+          for (const v of vs) values.set(v.path, v.value);
+        },
+      },
+    });
+    const restore = breakFile(changesFile(dir));
+    const r = await ledger.apply(proposal());
+    restore();
+    expect(values.get('watcher.notice.salienceBar')).toBe(0.6);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).not.toContain('not applied');
+      expect(r.error).toContain('0.6');
+      expect(r.error).toContain('0.4');
+    }
+    expect(log.ops()).toContain('autonomy:apply-unrecorded');
+  });
+
+  it('a revert whose record cannot be stored is not reported as done, and the ledger still matches the live values', async () => {
+    const { ledger, mem, log, applied } = makeLedger({ 'watcher.notice.salienceBar': 0.4 });
+    const r = await ledger.apply(proposal());
+    if (!r.ok) throw new Error('setup');
+    let restore: (() => void) | undefined;
+    const write = mem.access.write;
+    mem.access.write = async (vs) => {
+      await write(vs);
+      restore ??= breakFile(changesFile(dir));
+    };
+    const back = await ledger.revert(r.change.id, { actor: 'operator' });
+    restore?.();
+    expect(back.ok).toBe(false);
+    expect(ledger.get(r.change.id)?.status).toBe('applied');
+    expect(mem.values.get('watcher.notice.salienceBar')).toBe(0.6);
+    expect(log.ops()).not.toContain('autonomy:reverted');
+    expect(applied).not.toContain(`reverted:${r.change.id}`);
+  });
+
+  it('a rollback whose record cannot be stored is not reported as rolled back', async () => {
+    const { ledger, mem, log, applied } = makeLedger(
+      { 'watcher.notice.salienceBar': 0.4 },
+      () => 10
+    );
+    const r = await ledger.apply(proposal());
+    if (!r.ok) throw new Error('setup');
+    let restore: (() => void) | undefined;
+    const write = mem.access.write;
+    mem.access.write = async (vs) => {
+      await write(vs);
+      restore ??= breakFile(changesFile(dir));
+    };
+    const rolled = await ledger.checkGuards(t + HOUR);
+    restore?.();
+    expect(rolled).toEqual([]);
+    expect(ledger.get(r.change.id)?.status).toBe('applied');
+    expect(mem.values.get('watcher.notice.salienceBar')).toBe(0.6);
+    expect(log.ops()).not.toContain('autonomy:rolled-back');
+    expect(applied).not.toContain(`rolled-back:${r.change.id}`);
   });
 });

@@ -20,7 +20,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WatcherLogExtra } from '../log';
 import type { WatcherPhase } from '../types';
-import { isGuardMetric } from './guards';
+import { GUARD_MIN_WINDOW_HOURS, isGuardMetric } from './guards';
 import { type LockContext, checkTunableChange } from './locked';
 import {
   type ChangeRecord,
@@ -206,6 +206,13 @@ function structure(raw: unknown): ProposalInput {
       `guard.windowHours must be ${PROPOSAL_LIMITS.windowHoursMin} to ${PROPOSAL_LIMITS.windowHoursMax}`
     );
   }
+  // A window the metric can never be read in is a change that can never roll back.
+  const minWindow = GUARD_MIN_WINDOW_HOURS[guard.metric];
+  if (windowHours < minWindow) {
+    throw new Error(
+      `guard.windowHours must be at least ${minWindow} for ${guard.metric}: a shorter window ends before the guard can read it`
+    );
+  }
   return {
     kind: kind as ProposalKind,
     title,
@@ -292,13 +299,15 @@ export type SubmitResult =
   | { ok: true; proposal: Proposal; deduped?: true }
   | { ok: false; error: string; proposal?: Proposal };
 
+/** 500: something was done that could not be recorded; `error` says what is live. */
 export type DecisionResult =
   | { ok: true; proposal: Proposal; change?: ChangeRecord }
-  | { ok: false; status: 403 | 404 | 409; error: string };
+  | { ok: false; status: 403 | 404 | 409 | 500; error: string };
 
+/** A failure with `live: true` changed the live values (and could not undo them): never "not applied". */
 export type ApplyFn = (
   proposal: Proposal
-) => Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string }>;
+) => Promise<{ ok: true; change: ChangeRecord } | { ok: false; error: string; live?: true }>;
 
 export interface ProposalStoreDeps {
   watcherDir: string;
@@ -309,6 +318,12 @@ export interface ProposalStoreDeps {
   lockContext: () => LockContext;
   /** The change ledger's apply. */
   apply: ApplyFn;
+  /**
+   * The ledger's change for a proposal, if one was applied. A pending
+   * proposal with a change was approved but its decision was not stored:
+   * it is recorded as approved, never applied again.
+   */
+  changeFor?: (proposalId: string) => ChangeRecord | undefined;
   logger?: { warn: (obj: object, msg: string) => void };
 }
 
@@ -403,15 +418,29 @@ export class ProposalStore {
     if (p.status !== 'pending') {
       return { ok: false, status: 409, error: `The proposal is ${p.status}, not pending` };
     }
-    if (p.expiresAt && Date.parse(p.expiresAt) <= this.now()) {
-      return { ok: false, status: 409, error: 'The proposal expired' };
-    }
     if (typeof opts.contentHash !== 'string' || opts.contentHash !== p.contentHash) {
       return {
         ok: false,
         status: 409,
         error: 'The proposal is not the one you reviewed (content hash mismatch)',
       };
+    }
+    const existing = this.changeOf(p.id);
+    if (existing) {
+      // Already applied by an approval whose decision was not stored: store it now.
+      const healed = this.healApproved(p, existing);
+      if (!healed) {
+        return {
+          ok: false,
+          status: 500,
+          error: `It was already applied as change ${existing.id}, and I still cannot store your decision`,
+        };
+      }
+      this.refresh();
+      return { ok: true, proposal: healed, change: existing };
+    }
+    if (p.expiresAt && Date.parse(p.expiresAt) <= this.now()) {
+      return { ok: false, status: 409, error: 'The proposal expired' };
     }
     // The stored content must still hash to what was approved, and still pass the lock.
     if (proposalHash(p) !== p.contentHash) {
@@ -425,7 +454,7 @@ export class ProposalStore {
     } catch (err) {
       applied = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    if (!applied.ok) return this.applyFailed(p, applied.error);
+    if (!applied.ok) return this.applyFailed(p, applied.error, applied.live === true);
     const decided: Proposal = {
       ...p,
       status: 'approved',
@@ -434,7 +463,17 @@ export class ProposalStore {
       changeId: applied.change.id,
       note: undefined,
     };
-    this.write(decided);
+    if (!this.write(decided)) {
+      // The change is live and in the ledger; only the decision is missing.
+      // Approving again (or the next refresh) stores it without applying twice.
+      const error = `I applied it as change ${applied.change.id}, but could not store your decision, so it still shows as pending. The change is live and can be reverted; approving again only records the decision.`;
+      this.say(
+        'integrate',
+        'autonomy:decision-unstored',
+        `You approved "${p.title}" and I applied it as change ${applied.change.id}, but I could not store your decision.`
+      );
+      return { ok: false, status: 500, error };
+    }
     this.say(
       'integrate',
       'autonomy:approved',
@@ -479,6 +518,12 @@ export class ProposalStore {
     let pending = 0;
     for (const p of all) {
       if (p.status !== 'pending') continue;
+      const existing = this.changeOf(p.id);
+      if (existing) {
+        // Approved, with its decision lost: record it, never expire it.
+        if (!this.healApproved(p, existing)) pending++;
+        continue;
+      }
       if (p.expiresAt && Date.parse(p.expiresAt) <= nowMs) {
         const expired: Proposal = { ...p, status: 'expired' };
         if (this.write(expired)) {
@@ -510,15 +555,46 @@ export class ProposalStore {
     }
   }
 
-  private applyFailed(p: Proposal, error: string): DecisionResult {
+  /** `live`: the values changed and could not be undone; the note says so instead of "could not apply". */
+  private applyFailed(p: Proposal, error: string, live = false): DecisionResult {
     const note = error.slice(0, PROPOSAL_LIMITS.text);
     this.write({ ...p, note });
     this.say(
       'integrate',
       'autonomy:apply-failed',
-      `You approved "${p.title}" but I could not apply it: ${note}. It is still pending.`
+      live
+        ? `You approved "${p.title}": ${note}. It is still pending.`
+        : `You approved "${p.title}" but I could not apply it: ${note}. It is still pending.`
     );
-    return { ok: false, status: 409, error };
+    return { ok: false, status: live ? 500 : 409, error };
+  }
+
+  private changeOf(proposalId: string): ChangeRecord | undefined {
+    try {
+      return this.deps.changeFor?.(proposalId);
+    } catch (err) {
+      this.deps.logger?.warn({ err, proposalId }, 'Autonomy: changeFor threw');
+      return undefined;
+    }
+  }
+
+  /** Store the approval a pending proposal's change shows it had. Undefined when it cannot be stored. */
+  private healApproved(p: Proposal, change: ChangeRecord): Proposal | undefined {
+    const decided: Proposal = {
+      ...p,
+      status: 'approved',
+      decidedAt: change.appliedAt,
+      decidedBy: 'operator',
+      changeId: change.id,
+      note: undefined,
+    };
+    if (!this.write(decided)) return undefined;
+    this.say(
+      'integrate',
+      'autonomy:approved',
+      `I stored your approval of "${p.title}", applied as change ${change.id} on ${change.appliedAt}.`
+    );
+    return decided;
   }
 
   private makePending(p: Proposal, nowMs: number): void {

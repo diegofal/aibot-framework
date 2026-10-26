@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   ARM_MS,
+  KILL_POLL_MS,
   armClick,
   expiresText,
   formatValue,
@@ -10,10 +11,12 @@ import {
   killBannerHtml,
   monthSpend,
   monthSpendHtml,
+  needsKillPoll,
   orderProposals,
   proposalsPanelHtml,
   shouldRedrawProposals,
   startBlockedByKill,
+  watcherOffHtml,
 } from '../../web/pages/watcher-autonomy-helpers.js';
 
 const NOW = Date.UTC(2026, 9, 25, 12, 0, 0);
@@ -86,6 +89,41 @@ describe('startBlockedByKill', () => {
     );
     expect(startBlockedByKill({ running: false })).toBe(false);
     expect(startBlockedByKill(null)).toBe(false);
+  });
+});
+
+describe('needsKillPoll (C1: clearing the switch re-enables Start without a reload)', () => {
+  it('re-reads the state on a timer only while the kill banner shows', () => {
+    const killed = { killed: { source: 'file', since: iso(NOW - H) } };
+    expect(KILL_POLL_MS).toBeGreaterThan(0);
+    expect(KILL_POLL_MS).toBeLessThanOrEqual(10_000);
+    expect(needsKillPoll(killed)).toBe(killBannerHtml(killed.killed, NOW) !== '');
+    expect(needsKillPoll(killed)).toBe(true);
+    expect(needsKillPoll({ running: true, ...killed })).toBe(true);
+    expect(needsKillPoll({ running: false })).toBe(false);
+    expect(needsKillPoll(null)).toBe(false);
+  });
+  it('a re-read without `killed` unblocks Start and stops the polling (never starts the watcher)', () => {
+    const before = { running: false, killed: { source: 'env', since: iso(NOW) } };
+    expect(startBlockedByKill(before)).toBe(true);
+    const after = { running: false };
+    expect(startBlockedByKill(after)).toBe(false);
+    expect(needsKillPoll(after)).toBe(false);
+  });
+});
+
+describe('watcherOffHtml (the Proposals panel survives watcher.enabled: false)', () => {
+  it('the off screen keeps a host for the Proposals panel', () => {
+    const html = watcherOffHtml('<div class="off-screen">off</div>');
+    expect(html).toContain('<div class="off-screen">off</div>');
+    expect(html).toContain('id="watcher-proposals"');
+    expect(html.indexOf('off-screen')).toBeLessThan(html.indexOf('id="watcher-proposals"'));
+  });
+  it('shows the month spend when the off answer carries one', () => {
+    expect(watcherOffHtml('x', { enabled: false })).not.toContain('watcher-auto-month');
+    expect(
+      watcherOffHtml('x', { enabled: false, month: { costUsd: 1, ceilingUsd: 90 } })
+    ).toContain('this month $1.00 of $90.00');
   });
 });
 
@@ -300,11 +338,29 @@ describe('proposalsPanelHtml (C3, C4, C7)', () => {
     expect(armed).toContain('Click again to revert');
   });
 
+  it('a failed automatic rollback keeps its reason and a two-step Revert (the ledger still accepts one)', () => {
+    const failed = change({
+      status: 'revert-failed',
+      endedAt: iso(NOW - H),
+      endReason: 'Guard breached; the config write failed <EACCES>',
+    });
+    const html = proposalsPanelHtml(resp({ proposals: [], changes: [failed] }), { nowMs: NOW });
+    expect(html).toContain('Revert failed');
+    expect(html).toContain('the config write failed &lt;EACCES&gt;');
+    expect(html).toContain('data-action="autonomy-revert"');
+    expect(html).toContain('data-change-id="c-22222222"');
+    expect(html).toContain('>Revert<');
+    const armed = proposalsPanelHtml(resp({ proposals: [], changes: [failed] }), {
+      nowMs: NOW,
+      ui: { armed: { key: 'revert:c-22222222', until: NOW + ARM_MS } },
+    });
+    expect(armed).toContain('Click again to revert');
+  });
+
   it('ended changes show their end reason and no Revert', () => {
     for (const [status, label] of [
       ['rolled-back', 'Rolled back by its guard'],
       ['reverted', 'Reverted by you'],
-      ['revert-failed', 'Revert failed'],
     ]) {
       const html = proposalsPanelHtml(
         resp({

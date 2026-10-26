@@ -17,19 +17,25 @@
  * Autonomy rung 0 (`watcher-autonomy-helpers.js`): the hard-kill banner and
  * the month spend in the header, and the Proposals panel under the ball
  * (`/api/watcher/proposals`, two-step Approve / Revert, inline Reject note).
+ * The panel also mounts on the watcher-off screen (the ledger works without
+ * the watcher); while the kill banner shows, the state is re-read every
+ * `KILL_POLL_MS` so clearing the switch re-enables Start without a reload.
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
 import { closeSheet, confirmDialog, openSheet, showToast, skeleton } from '../ui/index.js';
 import { api, escapeHtml, getAuthToken } from './shared.js';
 import {
+  KILL_POLL_MS,
   armClick,
   isAutonomyRow,
   killBannerHtml,
   monthSpendHtml,
+  needsKillPoll,
   proposalsPanelHtml,
   shouldRedrawProposals,
   startBlockedByKill,
+  watcherOffHtml,
 } from './watcher-autonomy-helpers.js';
 import { mountBall } from './watcher-ball.js';
 import {
@@ -116,6 +122,7 @@ export function destroyWatcher() {
   page.ball?.dispose();
   clearInterval(page.clock);
   clearInterval(page.slowClock);
+  clearInterval(page.killPoll);
   clearTimeout(page.replay?.timer);
   clearTimeout(page.graphRefetch);
   clearTimeout(page.mindTimer);
@@ -133,7 +140,46 @@ function showOff() {
   const el = page?.el;
   destroyWatcher();
   closeSheet();
-  if (el) el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
+  if (el) mountOff(el, null);
+}
+
+/** The proposals panel's state, the same on the live page and the off screen. */
+function newAutonomy() {
+  return {
+    resp: null,
+    html: null,
+    refetch: null,
+    disarm: null,
+    ui: { armed: null, errors: {}, rejecting: {}, busy: null },
+  };
+}
+
+/**
+ * The off screen (`watcher.enabled: false`). Proposals and the change ledger
+ * work without the watcher, so the Proposals panel mounts here too and an
+ * applied change stays revertable; re-read on the slow clock (no socket).
+ */
+function mountOff(el, state) {
+  destroyWatcher();
+  el.innerHTML = `${TITLE}${watcherOffHtml(watcherDisabledHtml(), state)}`;
+  // `stopped`: no socket, ball or graph here; an empty model keeps a late
+  // continuation of the live page harmless (its hosts are gone, it draws nothing).
+  page = {
+    el,
+    off: true,
+    stopped: true,
+    busy: false,
+    model: createWatcherModel({ state }),
+    listeners: new AbortController(),
+    autonomy: newAutonomy(),
+    clock: null,
+    slowClock: null,
+  };
+  wire(el, page.listeners.signal);
+  void refreshProposals();
+  page.slowClock = setInterval(() => {
+    if (page) void refreshProposals();
+  }, SLOW_CLOCK_MS);
 }
 
 /* ── Rendering ───────────────────────────────────────────────────── */
@@ -157,6 +203,7 @@ function drawState({ forceTiers = false } = {}) {
     host.innerHTML = stateHtml(state, Date.now(), opts);
     page.tierView = view;
     syncStartButton(host.querySelector('.watcher-state'));
+    syncKillPoll();
     return;
   }
   const parts = stateParts(state, Date.now(), opts);
@@ -169,6 +216,7 @@ function drawState({ forceTiers = false } = {}) {
   set('.watcher-notes', parts.notes);
   set('.watcher-embed', parts.embed);
   syncStartButton(bar);
+  syncKillPoll();
   const tiers = bar.querySelector('.watcher-tiers-host');
   const focused = !!tiers?.contains(document.activeElement);
   if (tiers && shouldRedrawTiers(page.tierView, view, focused, { force: forceTiers })) {
@@ -186,6 +234,33 @@ function syncStartButton(bar) {
   syncStateButton(button, state, { busy: page.busy || killed });
   const title = killed ? 'The hard kill is on: clear it first' : '';
   if (button.title !== title) button.title = title;
+}
+
+/**
+ * While the kill banner shows, re-read `GET /api/watcher` every `KILL_POLL_MS`
+ * (nothing publishes `watcher:state` while the watcher is stopped): clearing
+ * the switch re-enables Start without a reload. Only the page updates; the
+ * watcher is never started from here.
+ */
+function syncKillPoll() {
+  const want = needsKillPoll(page.model.state);
+  if (want && !page.killPoll) {
+    page.killPoll = setInterval(() => void pollKill(), KILL_POLL_MS);
+  } else if (!want && page.killPoll) {
+    clearInterval(page.killPoll);
+    page.killPoll = null;
+  }
+}
+
+async function pollKill() {
+  const mine = page;
+  if (!page || page.busy) return;
+  const res = await api('/api/watcher').catch(() => null);
+  if (page !== mine || !page || page.busy) return;
+  if (isWatcherOff(res)) return showOff();
+  if (!res || res.error) return;
+  page.model.state = mergeWatcherState(page.model.state, res);
+  drawState();
 }
 
 /** The kill banner above the state bar and the month spend under it (no controls: plain swaps). */
@@ -690,11 +765,12 @@ async function cleanGraph() {
 }
 
 async function sendSignal(id, signal) {
+  const mine = page;
   const res = await api(`/api/watcher/neurons/${encodeURIComponent(id)}/signal`, {
     method: 'POST',
     body: { signal },
   }).catch((err) => ({ error: err?.message || 'Request failed' }));
-  if (!page) return;
+  if (page !== mine || !page) return;
   if (!res || res.error) {
     showToast(`Could not save the signal: ${res?.error ?? 'no answer'}`, { tone: 'danger' });
     return;
@@ -1180,10 +1256,7 @@ export async function renderWatcher(el) {
     );
     return;
   }
-  if (isWatcherOff(state)) {
-    el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
-    return;
-  }
+  if (isWatcherOff(state)) return mountOff(el, state);
 
   const [graph, log, metrics, broadcasts, self] = await Promise.all([
     api('/api/watcher/graph').catch(() => null),
@@ -1193,10 +1266,7 @@ export async function renderWatcher(el) {
     api('/api/watcher/self').catch(() => null),
   ]);
   if (gen !== generation) return;
-  if (isWatcherOff(graph) || isWatcherOff(log)) {
-    el.innerHTML = `${TITLE}${watcherDisabledHtml()}`;
-    return;
-  }
+  if (isWatcherOff(graph) || isWatcherOff(log)) return mountOff(el, null);
   if (graph?.error) showToast(`Could not load the graph: ${graph.error}`, { tone: 'danger' });
 
   page = {
@@ -1233,13 +1303,8 @@ export async function renderWatcher(el) {
     mind: { tab: 'insight', query: '', shown: MIND_PAGE_SIZE, open: new Set() },
     mindTimer: null,
     kindFilter: null,
-    autonomy: {
-      resp: null,
-      html: null,
-      refetch: null,
-      disarm: null,
-      ui: { armed: null, errors: {}, rejecting: {}, busy: null },
-    },
+    autonomy: newAutonomy(),
+    killPoll: null,
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');

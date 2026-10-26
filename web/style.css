@@ -10708,6 +10708,18 @@ body:has(.fb-drawer.on) #ui-sheet-root .ui-sheet {
 .watcher-auto-empty {
   margin: var(--s1) 0 0;
 }
+/* The watcher-off screen keeps the panel (and the month spend) under its notice. */
+.watcher-off-autonomy {
+  margin-top: var(--s4);
+}
+.watcher-off-month {
+  text-align: center;
+}
+.watcher-off-month .watcher-auto-month {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
 @media (max-width: 700px) {
   .watcher-auto-field {
     grid-template-columns: 1fr;

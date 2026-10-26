@@ -6,11 +6,17 @@ import { Hono } from 'hono';
 import type { Config } from '../../../src/config';
 import {
   type AutonomyApi,
+  LIST_HISTORY_LIMIT,
   createAutonomy,
   startAutonomyTimers,
 } from '../../../src/watcher/autonomy';
-import type { ValueAccess } from '../../../src/watcher/autonomy/ledger';
-import type { ProposalsResponse } from '../../../src/watcher/autonomy/types';
+import { type ValueAccess, changesFile } from '../../../src/watcher/autonomy/ledger';
+import { appendJsonLine, autonomyDir } from '../../../src/watcher/autonomy/proposals';
+import type {
+  ChangeRecord,
+  ChangeStatus,
+  ProposalsResponse,
+} from '../../../src/watcher/autonomy/types';
 import { watcherRoutes } from '../../../src/web/routes/watcher';
 import { proposalInput, rowLog, testConfig } from './fixtures';
 
@@ -246,5 +252,34 @@ describe('proposal routes', () => {
     const { config, autonomy } = setup();
     const res = await app(config, autonomy, '__admin__').request('/api/watcher/proposals');
     expect(res.status).toBe(200);
+  });
+});
+
+describe('review round 1: list', () => {
+  it('a live or revert-failed change is always listed; only ended ones are capped', () => {
+    const { autonomy } = setup();
+    const watcherDir = join(root, 'watcher');
+    const HOUR = 3_600_000;
+    const rec = (id: string, status: ChangeStatus, at: number): ChangeRecord => ({
+      id,
+      proposalId: `p-${id.slice(2)}`,
+      before: [{ path: 'watcher.notice.salienceBar', value: 0.4 }],
+      after: [{ path: 'watcher.notice.salienceBar', value: 0.6 }],
+      guard: proposalInput().guard,
+      appliedAt: new Date(at).toISOString(),
+      guardUntil: new Date(at + 72 * HOUR).toISOString(),
+      status,
+    });
+    const put = (c: ChangeRecord) =>
+      appendJsonLine(changesFile(watcherDir), c, autonomyDir(watcherDir));
+    put(rec('c-aaaaaaa1', 'applied', t - 200 * HOUR));
+    put(rec('c-aaaaaaa2', 'revert-failed', t - 199 * HOUR));
+    for (let i = 0; i < LIST_HISTORY_LIMIT + 10; i++) {
+      put(rec(`c-${String(i).padStart(8, '0')}`, 'reverted', t - i * 60_000));
+    }
+    const ids = autonomy.list().changes.map((c) => c.id);
+    expect(ids).toContain('c-aaaaaaa1');
+    expect(ids).toContain('c-aaaaaaa2');
+    expect(ids.filter((id) => !id.startsWith('c-aaaaaaa')).length).toBe(LIST_HISTORY_LIMIT);
   });
 });

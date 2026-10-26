@@ -4,16 +4,21 @@
  * a reading is `undefined` whenever there is not enough data, and no data
  * never rolls a change back.
  *
- *   watcher.costUsdPerDay   mean USD-equivalent per day the watcher spent since
- *                           the change, from the budget files
- *                           (`<watcherDir>/budget-YYYY-MM-DD.json`). A day's
- *                           spend is assumed spread evenly over the part of the
- *                           day that has passed, so only the share after the
- *                           change counts; needs ≥ 6 h since the change and at
- *                           least one budget file in the range.
+ *   watcher.costUsdPerDay   mean USD-equivalent per day the watcher spent on
+ *                           the whole UTC days after the change, from the
+ *                           budget files (`<watcherDir>/budget-YYYY-MM-DD.json`,
+ *                           one per UTC day). The apply day never counts unless
+ *                           the change landed at its very start: its spend
+ *                           before the change is not the change's. Needs one
+ *                           whole day and at least one budget file among them
+ *                           (a missing day is zero spend).
  *   fleet.errorCycleShare   share of agent-loop cycles that ended `error` since
  *                           the change, across the fleet's bots
  *                           (`<data>/agent-cycles/<botId>/`); needs ≥ 5 cycles.
+ *
+ * `GUARD_MIN_WINDOW_HOURS`: the shortest guard window each metric can be read
+ * in, with the hourly check (`AUTONOMY_TICK_MS`); `parseProposal` rejects a
+ * shorter one, since a change whose guard can never read can never roll back.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { readAgentCycles } from '../../stats/readers/agent-cycles';
@@ -33,8 +38,16 @@ export type GuardReader = (
   range: { sinceMs: number; nowMs: number }
 ) => number | undefined | Promise<number | undefined>;
 
-/** Below this much time since the change the cost reading is too noisy to act on. */
-export const GUARD_MIN_ELAPSED_MS = 6 * 3_600_000;
+/**
+ * The shortest window a guard on each metric can be read in. Cost: a change
+ * applied just after midnight UTC has its first whole day end 48 h later,
+ * plus one hourly check to land after that. Error share: one hourly check.
+ */
+export const GUARD_MIN_WINDOW_HOURS: Readonly<Record<GuardMetric, number>> = Object.freeze({
+  'watcher.costUsdPerDay': 49,
+  'fleet.errorCycleShare': 1,
+});
+
 /** Fewer cycles than this since the change is no reading. */
 export const GUARD_MIN_CYCLES = 5;
 
@@ -64,31 +77,29 @@ function dayCost(watcherDir: string, date: string): number | undefined {
   }
 }
 
-/** Mean USD-equivalent per day the watcher spent in `[sinceMs, nowMs]`. Never throws. */
+/** Mean USD-equivalent per whole UTC day after `sinceMs` that ended by `nowMs`. Never throws. */
 export function readWatcherCostPerDay(
   watcherDir: string,
   sinceMs: number,
   nowMs: number
 ): number | undefined {
-  const elapsed = nowMs - sinceMs;
-  if (!Number.isFinite(elapsed) || elapsed < GUARD_MIN_ELAPSED_MS) return undefined;
+  if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) return undefined;
   let total = 0;
+  let days = 0;
   let files = 0;
   for (
-    let dayStart = Math.floor(sinceMs / DAY_MS) * DAY_MS;
-    dayStart <= nowMs;
+    let dayStart = Math.ceil(sinceMs / DAY_MS) * DAY_MS;
+    dayStart + DAY_MS <= nowMs;
     dayStart += DAY_MS
   ) {
-    const passed = Math.min(DAY_MS, nowMs - dayStart);
-    if (passed <= 0) continue;
+    days++;
     const cost = dayCost(watcherDir, new Date(dayStart).toISOString().slice(0, 10));
     if (cost === undefined) continue;
     files++;
-    const covered = Math.min(dayStart + DAY_MS, nowMs) - Math.max(dayStart, sinceMs);
-    total += cost * (covered / passed);
+    total += cost;
   }
-  if (files === 0) return undefined;
-  return total / (elapsed / DAY_MS);
+  if (days === 0 || files === 0) return undefined;
+  return total / days;
 }
 
 /** Share of `error` cycles across `botIds` started in `[sinceMs, nowMs]`. Never throws. */

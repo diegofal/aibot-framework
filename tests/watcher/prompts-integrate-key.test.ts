@@ -168,3 +168,22 @@ describe('integratePromptKey', () => {
     expect(key(input())).toBe(k);
   });
 });
+
+describe('integratePromptKey: content times', () => {
+  test('a time inside event text, knowledge or a due date is content, never masked', () => {
+    const at = '2026-10-23T10:00:00.000Z';
+    const deadline = (d: string) =>
+      key(input({ events: [event('b-11111111', at, 0.8, `The Acme bid is due ${d}`)] }));
+    expect(deadline('2026-10-25T10:00:00Z')).not.toBe(deadline('2026-10-26T10:00:00Z'));
+    const fact = (d: string) =>
+      key(input({ fresh: [neuron('n-fresh001', 'fact', `The operator flies out ${d}`)] }));
+    expect(fact('2026-10-25T10:00')).not.toBe(fact('2026-10-26T10:00'));
+    const due = (d: string) =>
+      key(input({ predictions: [{ id: 'n-pred0002', text: 'Scout finishes the map', dueAt: d }] }));
+    expect(due('2026-10-25T00:00:00.000Z')).not.toBe(due('2026-10-26T00:00:00.000Z'));
+    const salience = (what: string) => key(input({ events: [event('b-11111111', at, 0.8, what)] }));
+    expect(salience('budget salience 0.4 reached')).not.toBe(
+      salience('budget salience 0.9 reached')
+    );
+  });
+});
