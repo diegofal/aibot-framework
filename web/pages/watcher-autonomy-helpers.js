@@ -402,3 +402,83 @@ export function shouldRedrawProposals(prevHtml, nextHtml, { typing = false, forc
   if (typing) return false;
   return prevHtml !== nextHtml;
 }
+
+/* ── Self-study (autonomy rung 2) ────────────────────────────────── */
+
+/** The two-step key of "Run now". */
+export const SELF_STUDY_KEY = 'self-study:run';
+
+export const SELF_STUDY_HEAD = {
+  title: 'Self-study',
+  sub: 'Once a week the watcher reads a cost digest code computes from the fleet records (no tools, no web) and may propose up to 3 changes above. These are its notes, written by code.',
+};
+
+/** A `self-study:*` log row (the card and the proposals refetch on it). */
+export function isSelfStudyRow(row) {
+  const op = row?.op ?? row?.type;
+  return typeof op === 'string' && op.startsWith('self-study:');
+}
+
+/** "in 3 h", "in 2 d", "due now". */
+export function inText(iso, nowMs = Date.now()) {
+  const t = Date.parse(iso ?? '');
+  if (!Number.isFinite(t)) return '';
+  const left = t - nowMs;
+  if (left <= 60_000) return 'due now';
+  if (left < 3_600_000) return `in ${Math.round(left / 60_000)} min`;
+  if (left < 48 * 3_600_000) return `in ${Math.round(left / 3_600_000)} h`;
+  return `in ${Math.round(left / 86_400_000)} d`;
+}
+
+const OUTCOME_WORDS = { done: 'done', skipped: 'skipped', failed: 'failed' };
+
+/** One line about the last outcome, in words. */
+export function selfStudyOutcomeText(outcome) {
+  if (!outcome || typeof outcome !== 'object') return '';
+  const status = OUTCOME_WORDS[outcome.status] ?? String(outcome.status ?? '');
+  const n = (a) => (Array.isArray(a) ? a.length : 0);
+  if (outcome.status !== 'done') {
+    return `${status}${outcome.reason ? `: ${outcome.reason}` : ''}`;
+  }
+  const parts = [`${n(outcome.proposed)} proposed`];
+  if (n(outcome.rejected)) parts.push(`${n(outcome.rejected)} refused by the lock`);
+  if (n(outcome.dropped)) parts.push(`${n(outcome.dropped)} dropped by code`);
+  const cost = Number(outcome.costUsd);
+  return `${status}: ${parts.join(', ')}${Number.isFinite(cost) ? ` · cost ${money(cost)}` : ''}`;
+}
+
+/**
+ * The Self-study card: '' unless `status.enabled` (both switches on).
+ * `ui`: `{ armed, busy, error }`. "Run now" is two-step (`armClick` on
+ * `SELF_STUDY_KEY`), disabled while a run is in flight.
+ */
+export function selfStudyCardHtml(status, { nowMs = Date.now(), ui = {} } = {}) {
+  if (!status || typeof status !== 'object' || status.enabled !== true) return '';
+  const running = status.running === true || ui.busy === true;
+  const armed = !running && isArmed(ui.armed, SELF_STUDY_KEY, nowMs);
+  const last = status.lastRunAt
+    ? `last run ${relTime(status.lastRunAt, nowMs)}`
+    : 'it has not run yet';
+  const next = running
+    ? 'running now'
+    : status.nextRunAt
+      ? `next ${inText(status.nextRunAt, nowMs)}`
+      : '';
+  const outcome = selfStudyOutcomeText(status.lastOutcome);
+  const notes =
+    typeof status.notes === 'string' && status.notes.trim()
+      ? `<pre class="watcher-self-notes">${esc(status.notes)}</pre>`
+      : '<p class="watcher-auto-empty text-dim">No notes yet.</p>';
+  const error = ui.error
+    ? `<div class="watcher-auto-error" role="alert">${esc(ui.error)}</div>`
+    : '';
+  return `<div class="watcher-card-head"><div class="watcher-log-title">${esc(
+    SELF_STUDY_HEAD.title
+  )}</div><div class="watcher-card-sub">${esc(SELF_STUDY_HEAD.sub)}</div></div><div class="watcher-self-when text-dim">${esc(
+    [last, next].filter(Boolean).join(' · ')
+  )}</div>${outcome ? `<div class="watcher-auto-reason">Last outcome: ${esc(outcome)}</div>` : ''}${notes}${error}<div class="watcher-auto-actions"><button type="button" class="btn btn-sm${
+    armed ? ' btn-danger' : ''
+  }" data-action="self-study-run" data-focus-key="${SELF_STUDY_KEY}"${running ? ' disabled' : ''}>${
+    running ? 'Running…' : armed ? 'Click again to run' : 'Run now'
+  }</button></div>`;
+}

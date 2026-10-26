@@ -11,6 +11,7 @@ describe('watcher types', () => {
     expect(WATCHER_DEFAULTS.enabled).toBe(false);
     expect(WATCHER_DEFAULTS.notice.enabled).toBe(false);
     expect(WATCHER_DEFAULTS.integrate.enabled).toBe(false);
+    expect(WATCHER_DEFAULTS.autonomy?.selfStudy?.enabled).toBe(false);
   });
 
   test('emptyCounts has a zero for every neuron kind', () => {

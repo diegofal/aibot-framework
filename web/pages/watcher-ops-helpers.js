@@ -3,7 +3,7 @@
  * O5–O7). Pure: no DOM, no fetch.
  *
  *  - "What it saw": a pass row of the log (a model call: `source`
- *    `watcher:notice|integrate|introspect|consolidate` and a `durationMs`) matched to its
+ *    `watcher:notice|integrate|introspect|consolidate|self-study` and a `durationMs`) matched to its
  *    pass record (`GET /api/watcher/passes`) by caller, exact duration and
  *    end time — the record is written just before the row — and the fold
  *    that shows the record's prompt and response.
@@ -18,6 +18,7 @@ export const PASS_SOURCES = [
   'watcher:integrate',
   'watcher:introspect',
   'watcher:consolidate',
+  'watcher:self-study',
 ];
 /** A record ends at most this long before its row is written (the rest of the pass runs between). */
 const MATCH_WINDOW_MS = 10 * 60_000;

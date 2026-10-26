@@ -30,6 +30,9 @@
  *                          recorded but not settled (the tick finishes it)
  *                          (all three 404 { enabled: false } with proposals off; actor is
  *                          always the operator: only an admin reaches these routes)
+ *   GET  /self-study       { enabled, running, lastRunAt, lastOutcome, nextRunAt, notes } (rung 2)
+ *   POST /self-study       run the weekly self-study now: 200 { outcome, status }, 409 { error }
+ *                          (self-study or proposals off, asleep, killed, one already running)
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -374,6 +377,23 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     const r = await a.revert(c.req.param('id'), { actor: 'operator' });
     if (!r.ok) return c.json({ error: r.error }, r.status);
     return c.json({ change: r.change });
+  });
+
+  // ── Autonomy rung 2: the weekly self-study (fleet cost audit) ──────────
+  app.get('/self-study', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    return c.json(w.selfStudyStatus());
+  });
+
+  app.post('/self-study', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const r = await w.selfStudyNow();
+    if (r.status === 'unavailable') return c.json({ error: r.reason }, 409);
+    if (r.status === 'cancelled')
+      return c.json({ error: 'The watcher stopped during the run' }, 409);
+    return c.json({ outcome: r.outcome, status: w.selfStudyStatus() });
   });
 
   return app;

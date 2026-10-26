@@ -307,6 +307,8 @@ export interface WatcherConfig {
   autonomy?: {
     monthlyCeilingUsd: number;
     proposals: { enabled: boolean; maxPending: number; approvalTtlHours: number };
+    /** Rung 2: the weekly fleet cost audit (`autonomy/self-study.ts`); absent = defaults (off). */
+    selfStudy?: { enabled: boolean; everyHours: number; firstRunDelayMinutes: number };
   };
 }
 
@@ -352,6 +354,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   autonomy: {
     monthlyCeilingUsd: 90,
     proposals: { enabled: false, maxPending: 3, approvalTtlHours: 72 },
+    selfStudy: { enabled: false, everyHours: 168, firstRunDelayMinutes: 30 },
   },
 };
 
