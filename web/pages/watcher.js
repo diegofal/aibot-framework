@@ -470,6 +470,18 @@ function revertChange(button) {
   );
 }
 
+/** "Accept current values": two-step like Revert; ends a needs-you change as it is, writing nothing. */
+function acceptChange(button) {
+  const id = button?.dataset.changeId;
+  if (!id || !armedFire(`accept:${id}`)) return;
+  return autonomyAct(
+    id,
+    `/api/watcher/changes/${encodeURIComponent(id)}/accept`,
+    null,
+    'Accepted: the live values stay as they are.'
+  );
+}
+
 function openReject(id) {
   if (!id) return;
   const ui = page.autonomy.ui;
@@ -1217,6 +1229,8 @@ function wire(el, signal) {
           return approveProposal(e.target.closest('[data-action]'));
         case 'autonomy-revert':
           return revertChange(e.target.closest('[data-action]'));
+        case 'autonomy-accept':
+          return acceptChange(e.target.closest('[data-action]'));
         case 'autonomy-reject':
           return openReject(e.target.closest('[data-action]').dataset.proposalId);
         case 'autonomy-reject-send':

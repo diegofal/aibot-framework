@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -489,5 +489,102 @@ describe('write-ahead: an apply-failed change', () => {
         .changes.map((c) => c.status)
         .sort()
     ).toEqual(['applied', 'apply-failed']);
+  });
+});
+
+describe('review round 3: list and accept', () => {
+  async function approved(autonomy: AutonomyApi) {
+    const s = await autonomy.submit(proposalInput());
+    if (!s.ok) throw new Error('setup');
+    const a = await autonomy.approve(s.proposal.id, {
+      contentHash: s.proposal.contentHash,
+      actor: 'operator',
+    });
+    if (!a.ok || !a.change) throw new Error('setup');
+    return a.change;
+  }
+
+  it('list writes nothing (GET and Needs You stay read-only): an expired proposal shows expired, the tick stores it', async () => {
+    const { autonomy } = setup();
+    const s = await autonomy.submit(proposalInput());
+    if (!s.ok) throw new Error('setup');
+    const file = join(autonomyDir(join(root, 'watcher')), 'proposals.jsonl');
+    t += 73 * 3_600_000;
+    const before = readFileSync(file, 'utf-8');
+    expect(autonomy.list().proposals.find((p) => p.id === s.proposal.id)?.status).toBe('expired');
+    expect(readFileSync(file, 'utf-8')).toBe(before);
+    await autonomy.tick(t);
+    expect(readFileSync(file, 'utf-8')).not.toBe(before);
+    expect(autonomy.list().proposals.find((p) => p.id === s.proposal.id)?.status).toBe('expired');
+  });
+
+  it('a change keeps its title after its proposal left the decided history', async () => {
+    const { autonomy } = setup();
+    const change = await approved(autonomy);
+    const watcherDir = join(root, 'watcher');
+    for (let i = 0; i < LIST_HISTORY_LIMIT + 5; i++) {
+      t += 60_000;
+      const s = await autonomy.submit(proposalInput({ title: `Other ${i}` }));
+      if (!s.ok) throw new Error('setup');
+      await autonomy.reject(s.proposal.id, { actor: 'operator' });
+    }
+    const listed = autonomy.list();
+    expect(listed.proposals.some((p) => p.id === change.proposalId)).toBe(false);
+    expect(listed.changes.find((c) => c.id === change.id)?.title).toBe(proposalInput().title);
+    // a record from before the field: filled from the full store
+    const { title: _drop, ...old } = change;
+    appendJsonLine(changesFile(watcherDir), old, autonomyDir(watcherDir));
+    expect(autonomy.list().changes.find((c) => c.id === change.id)?.title).toBe(
+      proposalInput().title
+    );
+  });
+
+  it('a needs-you change carries the values live now; accept → 200 accepted, then it leaves the open list', async () => {
+    const { config, autonomy, values } = setup({ guard: () => 99 });
+    const change = await approved(autonomy);
+    values.set('watcher.notice.salienceBar', 1.2);
+    t += 3_600_000;
+    await autonomy.tick(t);
+    const listed = autonomy.list().changes.find((c) => c.id === change.id);
+    expect(listed?.status).toBe('revert-failed');
+    expect(listed?.live).toEqual([{ path: 'watcher.notice.salienceBar', value: 1.2 }]);
+    const a = app(config, autonomy);
+    expect((await post(a, `/api/watcher/changes/${change.id}/revert`)).status).toBe(409);
+    const res = await post(a, `/api/watcher/changes/${change.id}/accept`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.change.status).toBe('accepted');
+    expect(body.change.found).toEqual([{ path: 'watcher.notice.salienceBar', value: 1.2 }]);
+    expect(values.get('watcher.notice.salienceBar')).toBe(1.2);
+    expect((await post(a, `/api/watcher/changes/${change.id}/accept`)).status).toBe(409);
+    expect((await post(a, '/api/watcher/changes/c-00000000/accept')).status).toBe(404);
+    const after = autonomy.list().changes.find((c) => c.id === change.id);
+    expect(after?.status).toBe('accepted');
+    expect(after?.live).toBeUndefined();
+    // ended: subject to the history cap like any other ended change
+    const watcherDir = join(root, 'watcher');
+    for (let i = 0; i < LIST_HISTORY_LIMIT; i++) {
+      appendJsonLine(
+        changesFile(watcherDir),
+        {
+          ...after,
+          id: `c-${String(i).padStart(8, '0')}`,
+          appliedAt: new Date(t + i).toISOString(),
+        },
+        autonomyDir(watcherDir)
+      );
+    }
+    expect(autonomy.list().changes.some((c) => c.id === change.id)).toBe(false);
+  });
+
+  it('accept is 404 with proposals off and for a tenant', async () => {
+    const off = setup({ enabled: false });
+    expect(
+      (await post(app(off.config, off.autonomy), '/api/watcher/changes/c-1/accept')).status
+    ).toBe(404);
+    const on = setup();
+    expect(
+      (await post(app(on.config, on.autonomy, 't1'), '/api/watcher/changes/c-1/accept')).status
+    ).toBe(404);
   });
 });

@@ -40,6 +40,8 @@ export const PROPOSAL_LIMITS = Object.freeze({
   supportMin: 1,
   supportMax: 20,
   supportIdChars: 200,
+  /** A change's dotted config path. */
+  pathChars: 200,
   changesMin: 1,
   changesMax: 5,
   windowHoursMin: 1,
@@ -178,9 +180,14 @@ function structure(raw: unknown): ProposalInput {
   const seen = new Set<string>();
   const cleanChanges: ProposalChange[] = changes.map((c, i) => {
     if (!isObj(c) || typeof c.path !== 'string') throw new Error(`changes[${i}] needs a path`);
-    if (seen.has(c.path)) throw new Error(`changes name ${c.path} twice`);
-    seen.add(c.path);
-    return { path: c.path, from: jsonValue(c.from), to: jsonValue(c.to) };
+    // Length only: an empty or odd path is well-formed and the lock refuses it (stored for audit).
+    if (c.path.length > PROPOSAL_LIMITS.pathChars) {
+      throw new Error(`changes[${i}].path is longer than ${PROPOSAL_LIMITS.pathChars} characters`);
+    }
+    const path = c.path;
+    if (seen.has(path)) throw new Error(`changes name ${path} twice`);
+    seen.add(path);
+    return { path, from: jsonValue(c.from), to: jsonValue(c.to) };
   });
   const predicted = raw.predicted;
   if (!isObj(predicted)) throw new Error('predicted must be an object');
@@ -341,10 +348,28 @@ export class ProposalStore {
     this.now = deps.now ?? Date.now;
   }
 
-  /** Every proposal, oldest first, after expiry and promotion. */
+  /** Every proposal, oldest first, after expiry and promotion (writes: callers run it in the autonomy queue). */
   all(): Proposal[] {
     this.refresh();
     return readProposals(this.deps.watcherDir);
+  }
+
+  /**
+   * Every proposal as it reads now, oldest first, without writing anything:
+   * a pending one past `expiresAt` shows `expired`, one whose change is
+   * recorded (and not still `applying`) shows `approved`. `refresh` (every
+   * tick and every decision) stores the same transitions; queued proposals
+   * are promoted only there, so a slot freed by expiry is filled at the next
+   * tick. What `GET /api/watcher/proposals` and Needs You read.
+   */
+  view(nowMs: number = this.now()): Proposal[] {
+    return readProposals(this.deps.watcherDir).map((p) => {
+      if (p.status !== 'pending') return p;
+      const existing = this.changeOf(p.id);
+      if (existing) return existing.status === 'applying' ? p : approvedFrom(p, existing);
+      if (p.expiresAt && Date.parse(p.expiresAt) <= nowMs) return { ...p, status: 'expired' };
+      return p;
+    });
   }
 
   /** What the operator can review: pending only, oldest first. */
@@ -592,14 +617,7 @@ export class ProposalStore {
 
   /** Store the approval a pending proposal's change shows it had. Undefined when it cannot be stored. */
   private healApproved(p: Proposal, change: ChangeRecord): Proposal | undefined {
-    const decided: Proposal = {
-      ...p,
-      status: 'approved',
-      decidedAt: change.appliedAt,
-      decidedBy: 'operator',
-      changeId: change.id,
-      note: undefined,
-    };
+    const decided = approvedFrom(p, change);
     if (!this.write(decided)) return undefined;
     this.say(
       'integrate',
@@ -638,6 +656,18 @@ export class ProposalStore {
       // a log that throws never breaks a decision
     }
   }
+}
+
+/** The approval a pending proposal's recorded change shows it had. */
+function approvedFrom(p: Proposal, change: ChangeRecord): Proposal {
+  return {
+    ...p,
+    status: 'approved',
+    decidedAt: change.appliedAt,
+    decidedBy: 'operator',
+    changeId: change.id,
+    note: undefined,
+  };
 }
 
 export function newId(prefix: 'p' | 'c'): string {

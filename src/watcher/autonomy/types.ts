@@ -113,7 +113,12 @@ export interface Proposal extends ProposalInput {
  * and code undid it. `revert-failed`: needs the operator: undoing it failed,
  * or the live values are neither the before- nor the after-values (`found`
  * holds what was live); the before-values are still here and nothing was
- * written over what someone else set.
+ * written over what someone else set. A `revert-failed` rollback (`cause:
+ * guard`) whose after-values are still live is retried by code at every
+ * tick while its guard still breaches, inside or past its window.
+ * `accepted`: the operator accepted the live values of a `revert-failed`
+ * change that were not the after-values (`found` holds what was live at the
+ * click); nothing was written.
  */
 export type ChangeStatus =
   | 'applying'
@@ -122,12 +127,15 @@ export type ChangeStatus =
   | 'reverting'
   | 'reverted'
   | 'rolled-back'
-  | 'revert-failed';
+  | 'revert-failed'
+  | 'accepted';
 
 export interface ChangeRecord {
   /** `c-` + 8 hex. */
   id: string;
   proposalId: string;
+  /** The proposal's title at apply (a record from before the field has none: `list` fills it from the store). */
+  title?: string;
   /**
    * The live values right before apply, per path. `raw` (only when the config
    * file held something else that expands to `value`, such as `${CADENCE}`;
@@ -147,8 +155,10 @@ export interface ChangeRecord {
   cause?: 'operator' | 'guard';
   /** The guard reading that started a rollback. */
   guardReading?: number;
-  /** `revert-failed` from a settlement: the live values found, neither before nor after. */
+  /** `revert-failed` from a settlement: the live values found, neither before nor after; `accepted`: what was live when the operator accepted it. */
   found?: Array<{ path: string; value: unknown }>;
+  /** Never stored: `list` adds the values live now to a `revert-failed` change (the dashboard picks Revert or Accept from it). */
+  live?: Array<{ path: string; value: unknown }>;
 }
 
 /** `GET /api/watcher/proposals`. */

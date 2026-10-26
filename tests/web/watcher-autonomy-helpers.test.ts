@@ -204,7 +204,7 @@ describe('formatValue / guardText / expiresText', () => {
 });
 
 describe('orderProposals', () => {
-  it('pending (oldest first), queued, and decided; rejected-locked never shown', () => {
+  it('pending (oldest first) and decided; queued and rejected-locked never shown', () => {
     const out = orderProposals([
       proposal({ id: 'p-q', status: 'queued' }),
       proposal({ id: 'p-new', pendingAt: iso(NOW - H) }),
@@ -213,7 +213,8 @@ describe('orderProposals', () => {
       proposal({ id: 'p-rej', status: 'rejected', decidedAt: iso(NOW - H) }),
     ]);
     expect(out.pending.map((p) => p.id)).toEqual(['p-old', 'p-new']);
-    expect(out.queued.map((p) => p.id)).toEqual(['p-q']);
+    // the server never sends queued proposals: there is no queued section
+    expect(Object.keys(out).sort()).toEqual(['decided', 'pending']);
     expect(out.decided.map((p) => p.id)).toEqual(['p-rej']);
   });
 });
@@ -300,18 +301,6 @@ describe('proposalsPanelHtml (C3, C4, C7)', () => {
     });
     expect(html).toContain('The live value changed &lt;since&gt;');
     expect(html).toMatch(/data-action="autonomy-approve"[^>]*disabled/);
-  });
-
-  it('queued proposals wait for a review slot, without buttons', () => {
-    const html = proposalsPanelHtml(
-      resp({
-        proposals: [proposal(), proposal({ id: 'p-q', title: 'Later one', status: 'queued' })],
-      }),
-      { nowMs: NOW }
-    );
-    expect(html.indexOf('Raise the notice bar')).toBeLessThan(html.indexOf('Later one'));
-    expect(html).toContain('Waiting for a review slot');
-    expect(html).not.toContain('data-proposal-id="p-q"');
   });
 
   it('an applied change shows its status, values and a two-step Revert', () => {
@@ -468,5 +457,82 @@ describe('change timing', () => {
       nowMs: NOW,
     });
     expect(over).toContain('guard window over');
+  });
+});
+
+describe('review round 3: proposals panel', () => {
+  it('a pending proposal shows the stored reason its last approval failed', () => {
+    const html = proposalsPanelHtml(
+      resp({ proposals: [proposal({ note: 'watcher.notice.salienceBar changed <since>' })] }),
+      { nowMs: NOW }
+    );
+    expect(html).toContain('watcher.notice.salienceBar changed &lt;since&gt;');
+    expect(html).toContain('Your last approval did not apply');
+    // the in-page error of the same click replaces it, never both
+    const both = proposalsPanelHtml(resp({ proposals: [proposal({ note: 'stored note' })] }), {
+      nowMs: NOW,
+      ui: { errors: { 'p-11111111': 'fresh error' } },
+    });
+    expect(both).toContain('fresh error');
+    expect(both).not.toContain('stored note');
+  });
+
+  it('a change whose proposal left the history still shows its title', () => {
+    const html = proposalsPanelHtml(
+      resp({ proposals: [], changes: [change({ title: 'Wake integrate <later>' })] }),
+      { nowMs: NOW }
+    );
+    expect(html).toContain('Wake integrate &lt;later&gt;');
+    expect(html).not.toContain('<strong>p-99999999</strong>');
+  });
+
+  it('a needs-you change whose live values are neither old nor new gets a two-step Accept next to Revert', () => {
+    const odd = change({
+      status: 'revert-failed',
+      endedAt: iso(NOW - H),
+      found: [{ path: 'watcher.integrate.wakeSalience', value: 7 }],
+      live: [{ path: 'watcher.integrate.wakeSalience', value: 8 }],
+    });
+    const html = proposalsPanelHtml(resp({ proposals: [], changes: [odd] }), { nowMs: NOW });
+    expect(html).toContain('data-action="autonomy-accept"');
+    expect(html).toContain('>Accept current values<');
+    expect(html).toContain('data-action="autonomy-revert"');
+    // "Live now" reads the values live now, not the ones found back then
+    expect(html).toContain('wakeSalience</code>: 8</li>');
+    expect(html).not.toContain('confirm(');
+    const armed = proposalsPanelHtml(resp({ proposals: [], changes: [odd] }), {
+      nowMs: NOW,
+      ui: { armed: { key: 'accept:c-22222222', until: NOW + ARM_MS } },
+    });
+    expect(armed).toContain('Click again to accept');
+    expect(armed).toContain('>Revert<');
+  });
+
+  it('no Accept while the new values are live (a failed rollback: Revert is the action), nor on other statuses', () => {
+    const failedWrite = change({
+      status: 'revert-failed',
+      endedAt: iso(NOW - H),
+      found: [{ path: 'watcher.integrate.wakeSalience', value: 4 }],
+      live: [{ path: 'watcher.integrate.wakeSalience', value: 4 }],
+    });
+    for (const c of [
+      failedWrite,
+      change(),
+      change({ status: 'accepted', endedAt: iso(NOW - H), endReason: 'You accepted it' }),
+    ]) {
+      const html = proposalsPanelHtml(resp({ proposals: [], changes: [c] }), { nowMs: NOW });
+      expect(html).not.toContain('data-action="autonomy-accept"');
+    }
+    const accepted = proposalsPanelHtml(
+      resp({
+        proposals: [],
+        changes: [
+          change({ status: 'accepted', endedAt: iso(NOW - H), endReason: 'kept as found' }),
+        ],
+      }),
+      { nowMs: NOW }
+    );
+    expect(accepted).toContain('Accepted by you as found');
+    expect(accepted).not.toContain('data-action="autonomy-revert"');
   });
 });

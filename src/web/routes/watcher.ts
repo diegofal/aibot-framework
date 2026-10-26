@@ -28,7 +28,11 @@
  *   POST /changes/:id/revert     → 200 { change }, 409 when the live value moved or the
  *                          write failed (the change then needs you), 500 when the revert is
  *                          recorded but not settled (the tick finishes it)
- *                          (all three 404 { enabled: false } with proposals off; actor is
+ *   POST /changes/:id/accept     → 200 { change } (status accepted, `found` = what was live):
+ *                          a revert-failed change whose live values are not its new ones
+ *                          ends as it is, nothing written; 409 while the new values are
+ *                          live (revert it instead) or for any other status
+ *                          (all four 404 { enabled: false } with proposals off; actor is
  *                          always the operator: only an admin reaches these routes)
  *   GET  /self-study       { enabled, running, lastRunAt, lastOutcome, nextRunAt, notes } (rung 2)
  *   POST /self-study       run the weekly self-study now: 200 { outcome, status }, 409 { error }
@@ -375,6 +379,14 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     const a = autonomy();
     if (!a) return c.json(autonomyOff, 404);
     const r = await a.revert(c.req.param('id'), { actor: 'operator' });
+    if (!r.ok) return c.json({ error: r.error }, r.status);
+    return c.json({ change: r.change });
+  });
+
+  app.post('/changes/:id/accept', async (c) => {
+    const a = autonomy();
+    if (!a) return c.json(autonomyOff, 404);
+    const r = await a.accept(c.req.param('id'), { actor: 'operator' });
     if (!r.ok) return c.json({ error: r.error }, r.status);
     return c.json({ change: r.change });
   });

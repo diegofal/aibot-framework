@@ -87,6 +87,7 @@ const CHANGE_STATUSES: ReadonlySet<string> = new Set<ChangeStatus>([
   'reverted',
   'rolled-back',
   'revert-failed',
+  'accepted',
 ]);
 
 /** Recorded and not settled: `recover` finishes it from the live values. */
@@ -248,6 +249,7 @@ export class ChangeLedger {
     const intent: ChangeRecord = {
       id: newId('c'),
       proposalId: proposal.id,
+      title: proposal.title,
       before,
       after,
       guard: { ...proposal.guard },
@@ -360,16 +362,24 @@ export class ChangeLedger {
     return { ok: false, status: 500, error };
   }
 
-  /** Roll back every live change whose guard breached inside its window. Returns the rolled-back ones. */
+  /**
+   * Roll back every live change whose guard breached inside its window, and
+   * retry every rollback whose write failed (`revert-failed`, `cause: guard`,
+   * the after-values still live) while its guard still breaches, inside or
+   * past its window: a rollback once decided is never abandoned. Returns the
+   * rolled-back ones.
+   */
   async checkGuards(nowMs: number = this.now()): Promise<ChangeRecord[]> {
     const rolled: ChangeRecord[] = [];
     const read = this.deps.guards;
     if (!read) return rolled;
     for (const change of this.all()) {
       try {
-        if (change.status !== 'applied') continue;
+        const retry = this.isRollbackRetry(change);
+        if (change.status !== 'applied' && !retry) continue;
         const since = Date.parse(change.appliedAt);
-        if (!(nowMs >= since && nowMs <= Date.parse(change.guardUntil))) continue;
+        if (nowMs < since) continue;
+        if (!retry && nowMs > Date.parse(change.guardUntil)) continue;
         let reading: number | undefined;
         try {
           reading = await read(change.guard.metric, { sinceMs: since, nowMs });
@@ -388,6 +398,75 @@ export class ChangeLedger {
       }
     }
     return rolled;
+  }
+
+  /** A rollback that failed writing while the after-values stay live: the guard's to retry. */
+  private isRollbackRetry(change: ChangeRecord): boolean {
+    return (
+      change.status === 'revert-failed' &&
+      change.cause === 'guard' &&
+      this.movedSinceApply(change) === undefined
+    );
+  }
+
+  /**
+   * The operator accepts the live values of a `revert-failed` change that
+   * are not the after-values (a hand edit, a third value a settlement found):
+   * it ends `accepted` with what is live now in `found`. Nothing is written.
+   * Refused while the after-values are all live: Revert is the action then.
+   */
+  async accept(id: string, opts: { actor: 'operator' }): Promise<LedgerResult> {
+    if (opts?.actor !== 'operator') {
+      return { ok: false, status: 403, error: 'Only the operator can accept a change' };
+    }
+    const change = this.get(id);
+    if (!change) return { ok: false, status: 404, error: 'No such change' };
+    if (change.status !== 'revert-failed') {
+      return {
+        ok: false,
+        status: 409,
+        error: `The change is ${change.status}; only a change that needs you can be accepted as it is`,
+      };
+    }
+    const live = this.readLive(change);
+    if (!live) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'I could not read the live values, so I did not record them',
+      };
+    }
+    if (this.movedSinceApply(change) === undefined) {
+      return {
+        ok: false,
+        status: 409,
+        error: 'The new values are still live: revert the change instead',
+      };
+    }
+    const accepted: ChangeRecord = {
+      ...change,
+      status: 'accepted',
+      endedAt: new Date(this.now()).toISOString(),
+      endReason: `You accepted the live values as they are (${describeLive(live)})`,
+      found: live,
+    };
+    if (!this.store(accepted)) {
+      return {
+        ok: false,
+        status: 409,
+        error: `Could not record your decision: change ${change.id} still needs you`,
+      };
+    }
+    this.say(
+      'autonomy:accepted',
+      `You accepted the live values of change ${change.id} as they are: ${describeLive(live)}. I keep its old values on record and change nothing.`
+    );
+    return { ok: true, change: accepted };
+  }
+
+  /** The values live now for every path a change touches; undefined when one cannot be read. */
+  liveValues(change: ChangeRecord): Array<{ path: string; value: unknown }> | undefined {
+    return this.readLive(change);
   }
 
   /**
@@ -439,6 +518,8 @@ export class ChangeLedger {
       cause: 'guard',
       guardReading: reading,
       endReason: why,
+      endedAt: undefined,
+      found: undefined,
     };
     if (!this.store(intent)) {
       this.say(
