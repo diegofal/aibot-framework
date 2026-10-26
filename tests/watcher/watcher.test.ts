@@ -1617,7 +1617,7 @@ describe('Watcher: embedding what birth could not', () => {
     await watcher.stop();
   });
 
-  test('a stop during the maintenance backfill neither relays out nor persists positions', async () => {
+  test('a stop during the backfill maintenance left running neither relays out nor persists positions', async () => {
     let mode: 'down' | 'hang' = 'down';
     let calls = 0;
     let answer: ((v: number[]) => void) | undefined;
@@ -1636,16 +1636,19 @@ describe('Watcher: embedding what birth could not', () => {
     expect(watcher.state().linkStatus).toBe('no-embeddings');
     const positions = () =>
       JSON.stringify(watcher.graph.list().map((n) => [n.id, watcher.graph.get(n.id)?.pos]));
-    const before = positions();
     const layouts = () => events.filter((e) => e.type === 'watcher:layout').length;
-    const layoutsBefore = layouts();
     mode = 'hang';
     const seen = calls;
-    const maintenance = watcher.maintainNow();
+    // maintenance returns with the backfill still out (it never waits on an embed)
+    const out = await watcher.maintainNow();
+    expect(out?.linking).toBe(true);
+    expect(out?.link).toBeNull();
     expect(await until(() => calls > seen && !!answer)).toBe(true);
+    const before = positions();
+    const layoutsBefore = layouts();
     await watcher.stop();
     answer?.([1, 0, 0]);
-    await maintenance;
+    await new Promise((r) => setTimeout(r, 50));
     expect(layouts()).toBe(layoutsBefore);
     expect(positions()).toBe(before);
     // nothing persisted either: a fresh load sees the same positions
@@ -1707,6 +1710,51 @@ describe('Watcher: embedding what birth could not', () => {
     expect(freshOutcome).not.toBe('hung');
     expect(idleOutcome).not.toBe('hung');
     expect(watcher.maintenanceInFlight()).toBe(false);
+    await watcher.stop();
+  });
+
+  // Review 2026-10-26: a hanging embed kept the maintenance run in flight, every
+  // later daily run shared it, and forgetting never ran again until a restart.
+  test('an embed that never answers does not hold daily maintenance: it forgets, persists, and forgets again a day later', async () => {
+    await bornWithoutEmbeddings();
+    const { watcher } = make({
+      stopTimeoutMs: 30,
+      embed: () => new Promise<number[]>(() => {}),
+    });
+    const bounded = <T>(p: Promise<T>) =>
+      Promise.race([p, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 1000))]);
+    await watcher.start();
+    const plant = (tag: string) =>
+      [1, 2].map((i) =>
+        watcher.graph.addNeuron({
+          kind: 'fact',
+          text: `forgettable ${tag} ${i}`,
+          support: { bots: ['b1'] },
+          createdBy: 'bot:b1',
+          activations: 1,
+        } as never)
+      );
+    const first = plant('a');
+    t += 10 * 86_400_000;
+    const out = await bounded(watcher.maintainNow());
+    expect(out).not.toBe('hung');
+    if (!out || out === 'hung') throw new Error('maintenance did not complete');
+    expect(out.forgotten).toBeGreaterThanOrEqual(2);
+    for (const n of first) expect(watcher.graph.get(n.id)?.archivedAt).toBeDefined();
+    const maintainFile = join(root, 'data', 'watcher', 'maintain.json');
+    expect(JSON.parse(readFileSync(maintainFile, 'utf-8')).lastMaintainAt).toBe(
+      new Date(t).toISOString()
+    );
+    expect(watcher.maintenanceInFlight()).toBe(false);
+    // the next day: a run of its own, not the one stuck on the embed
+    const second = plant('b');
+    t += 10 * 86_400_000;
+    const again = await bounded(watcher.maintainNow());
+    expect(again).not.toBe('hung');
+    for (const n of second) expect(watcher.graph.get(n.id)?.archivedAt).toBeDefined();
+    expect(JSON.parse(readFileSync(maintainFile, 'utf-8')).lastMaintainAt).toBe(
+      new Date(t).toISOString()
+    );
     await watcher.stop();
   });
 

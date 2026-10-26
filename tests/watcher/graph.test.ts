@@ -136,6 +136,31 @@ describe('Graph', () => {
     expect(reloaded.findByKey('k')?.id).toBe(b.id);
   });
 
+  // Review 2026-10-26: a renamed entity kept the vector of its old name.
+  test('setText that changes the text drops the stored embedding, durably, so the backfill re-embeds it', () => {
+    const g = graph();
+    const a = g.addNeuron(fact('old name'));
+    const b = g.addNeuron(fact('untouched'));
+    g.setEmbedding(a.id, [1, 0]);
+    g.setEmbedding(b.id, [0, 1]);
+    // meta only: the text is the same, the vector stays
+    g.setText(a.id, 'old name', { name: 'x' });
+    expect(g.getEmbedding(a.id)).toEqual([1, 0]);
+    g.setText(a.id, 'new name');
+    expect(g.getEmbedding(a.id)).toBeUndefined();
+    expect(g.embeddedIds()).toEqual([b.id]);
+    // from the append files
+    expect(graph().getEmbedding(a.id)).toBeUndefined();
+    expect(graph().getEmbedding(b.id)).toEqual([0, 1]);
+    // and after a compaction
+    g.compact();
+    expect(graph().getEmbedding(a.id)).toBeUndefined();
+    expect(graph().getEmbedding(b.id)).toEqual([0, 1]);
+    // re-embedding it later sticks
+    g.setEmbedding(a.id, [0.6, 0.8]);
+    expect(graph().getEmbedding(a.id)).toEqual([0.6, 0.8]);
+  });
+
   test('compact preserves last-wins and empties the append files', () => {
     const g = graph();
     const a = g.addNeuron(fact('a'));
