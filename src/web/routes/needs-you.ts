@@ -1130,12 +1130,21 @@ function buildWatcherToolProblems(ctx: BuildContext, sources: NeedsYouSources): 
       title: truncate(`Tool problem: ${tool}${cls ? ` ${cls}` : ''} in ${bots.length} bots`),
       body: [
         `The same failure shows up in ${bots.length} bots this week, so it is the tool, not a habit. Failures per bot: ${counts.join(', ')}.`,
-        'No bot gets a lesson for it while this is open. Fix the tool, then dismiss it on the watcher page.',
+        'No bot gets a lesson for it while this is open. Fix the tool, then dismiss it here.',
       ].join('\n\n'),
       options: null,
       createdAt: toIso(ranAt, ctx.nowMs),
       urgency: 'low',
-      actions: [],
+      actions: [
+        {
+          id: 'dismiss',
+          label: 'Dismiss',
+          method: 'POST',
+          path: `/api/watcher/self-improve/tool-problems/${encodeURIComponent(p.classKey)}/dismiss`,
+          tone: 'muted',
+          confirm: 'Dismiss this tool problem? Bots whose loop is on may get lessons for it again.',
+        },
+      ],
       href: '#/watcher',
       meta: { toolProblem: p.classKey, tool },
     };

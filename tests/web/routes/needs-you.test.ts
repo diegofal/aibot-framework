@@ -1244,7 +1244,7 @@ describe('watcher tool problems (self-improvement, admin only)', () => {
   };
   const at = iso(NOW - 3 * H);
 
-  it('one item per tool problem for the admin, linking to the watcher page, no actions', async () => {
+  it('one item per tool problem for the admin, with a Dismiss action on the watcher route', async () => {
     const src = sources({ watcherToolProblems: () => ({ ranAt: at, toolProblems: [problem] }) });
     for (const tenant of [undefined, '__admin__']) {
       const body = await (await makeApp(src, tenant).request('/api/needs-you')).json();
@@ -1259,7 +1259,14 @@ describe('watcher tool problems (self-improvement, admin only)', () => {
       expect(item.body).toContain('Bot Two 16');
       expect(item.body).toContain('b9 11');
       expect(item.createdAt).toBe(at);
-      expect(item.actions).toEqual([]);
+      expect(item.actions).toHaveLength(1);
+      expect(item.actions[0]).toMatchObject({
+        id: 'dismiss',
+        method: 'POST',
+        path: '/api/watcher/self-improve/tool-problems/file_read%3Afile-not-found/dismiss',
+        tone: 'muted',
+      });
+      expect(item.actions[0].confirm).toBeTruthy();
       expect(item.meta).toEqual({
         toolProblem: 'file_read:file-not-found',
         tool: 'file_read',

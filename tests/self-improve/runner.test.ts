@@ -299,6 +299,37 @@ describe('runSelfImprove', () => {
     expect(store.read().lessons).toHaveLength(2);
   });
 
+  test('the audit read reaches back to the oldest lesson still being measured', async () => {
+    const created = new Date(NOW - 30 * DAY).toISOString();
+    new LessonStore(soulDir).write({
+      version: 1,
+      lessons: [lesson({ createdAt: created, updatedAt: created })],
+      suppressed: [],
+    });
+    const { d, readAudit } = deps([]);
+    await run(d);
+    const [since] = readAudit.mock.calls[0];
+    expect(since).toBeLessThanOrEqual(Date.parse(created));
+  });
+
+  test('only the lessons the prompt shows are measured', async () => {
+    // Two active lessons, cap lowered to 1: the older one is not in the prompt.
+    const older = lesson({ id: 'l-older000', createdAt: new Date(NOW - 7 * DAY).toISOString() });
+    const newer = lesson({
+      id: 'l-newer000',
+      classKey: 'manage_goals:note-too-long',
+      tool: 'manage_goals',
+      errorClass: 'note-too-long',
+      createdAt: new Date(NOW - 6 * DAY).toISOString(),
+    });
+    new LessonStore(soulDir).write({ version: 1, lessons: [older, newer], suppressed: [] });
+    const clean = Array.from({ length: 10 }, (_, i) => ok(NOW - 5 * DAY + i * HOUR));
+    const r = await run(deps(clean).d, { maxActive: 1 });
+    expect(r.changed?.map((c) => c.id)).not.toContain('l-older000');
+    const after = new LessonStore(soulDir).read().lessons.find((l) => l.id === 'l-older000');
+    expect(after?.status).toBe('active');
+  });
+
   describe('evaluation', () => {
     /** 10 file_read calls after the lesson, `failing` of them failing its class. */
     function callsAfter(failing: number): ToolAuditEntry[] {

@@ -91,16 +91,32 @@ export async function runSelfImprove(
   try {
     const nowMs = deps.nowMs();
     const nowIso = new Date(nowMs).toISOString();
-    // One read: the baseline window plus a measurement window that may have
-    // been extended once.
-    const entries = deps.readAudit(nowMs - (BASELINE_DAYS + 2 * cfg.measureDays) * DAY_MS, nowMs);
     const file = deps.store.read();
+    // Only lessons the prompt shows are measured: with the cap lowered below
+    // the active count, a lesson the bot never sees must not be proven.
+    const shownIds = new Set(
+      file.lessons
+        .filter(isLessonInPrompt)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, cfg.maxActive)
+        .map((l) => l.id)
+    );
+    // One audit read: the baseline window plus a measurement window that may
+    // have been extended once, reaching back to the oldest lesson still
+    // measured (a bot paused for weeks keeps the calls right after a lesson).
+    let sinceMs = nowMs - (BASELINE_DAYS + 2 * cfg.measureDays) * DAY_MS;
+    for (const l of file.lessons) {
+      if (l.status !== 'active' || !shownIds.has(l.id)) continue;
+      const created = Date.parse(l.createdAt);
+      if (Number.isFinite(created)) sinceMs = Math.min(sinceMs, created);
+    }
+    const entries = deps.readAudit(sinceMs, nowMs);
 
     // b) Measure every active lesson.
     const evaluations = new Map<string, LessonEvaluation>();
     let evaluated = 0;
     for (const l of file.lessons) {
-      if (l.status !== 'active') continue;
+      if (l.status !== 'active' || !shownIds.has(l.id)) continue;
       evaluated++;
       const result = evaluateLesson(l, entries, cfg, nowMs);
       if (result) evaluations.set(l.id, result);
