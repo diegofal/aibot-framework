@@ -286,6 +286,8 @@ export interface WatcherConfig {
   log: { senseSummaryEveryMs: number };
   /** O1 fast lane (`src/watcher/fast-lane.ts`); absent = `WATCHER_DEFAULTS.fastLane`. */
   fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
+  /** Self-improvement loop (`src/watcher/self-improve.ts`); absent = `WATCHER_DEFAULTS.selfImprove`. */
+  selfImprove?: { enabled: boolean; toolProblemBots: number; everyHours: number };
   /** O10 forgetting (`importance.ts`); absent = `WATCHER_DEFAULTS.forget`. */
   forget?: {
     threshold: number;
@@ -342,6 +344,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   birth: { historyDays: 30 },
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
+  selfImprove: { enabled: true, toolProblemBots: 3, everyHours: 24 },
   forget: { threshold: 0.15, graceDays: 7, maxPerRun: 200 },
   consolidate: {
     enabled: false,

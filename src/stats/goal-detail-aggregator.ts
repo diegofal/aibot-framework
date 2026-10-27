@@ -60,7 +60,7 @@ const DAY_MS = 86_400_000;
 const CYCLE_GAP_MS = 30 * 60_000;
 /** Rows land a little after the last LLM call of their cycle. */
 const WINDOW_SLACK_MS = 5_000;
-const AGENT_LOOP_CALLERS = new Set(['strategist', 'planner', 'executor']);
+const AGENT_LOOP_CALLERS = new Set(['strategist', 'planner', 'executor', 'self-improve']);
 const ORIGINS: GoalOrigin[] = [
   'operator',
   'agent',

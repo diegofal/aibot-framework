@@ -27,6 +27,8 @@ import { join } from 'node:path';
 import type { SelfStateInput } from '../bot/agent-loop-prompts';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
+import { resolveSelfImprove } from '../bot/self-improve/config';
+import { LessonStore } from '../bot/self-improve/store';
 import type { ChannelStatus } from '../bot/telegram-errors';
 import type { ToolAuditEntry } from '../bot/tool-audit-log';
 import { toolTarget } from '../bot/tool-executor';
@@ -120,6 +122,15 @@ import {
 } from './outcomes';
 import { bufferFile, maintainStateFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
+import {
+  type DismissResult,
+  type FleetSelfImproveBot,
+  SELF_IMPROVE_CHECK_MS,
+  type SelfImproveRunResult,
+  SelfImproveRunner,
+  type SelfImproveStatus,
+  watcherSelfImproveSettings,
+} from './self-improve';
 import {
   type Attention,
   type Interoception,
@@ -313,6 +324,8 @@ export interface WatcherDeps {
   killPollMs?: number;
   /** Rung 2: the self-study's record readers (tests). Default: the records on disk. */
   selfStudyReaders?: SelfStudyReaders;
+  /** Self-improvement: a bot's tool audit in `[sinceMs, nowMs]` (tests). Default: the audit on disk. */
+  selfImproveAudit?: (botId: string, sinceMs: number, nowMs: number) => ToolAuditEntry[];
 }
 
 /** The monthly ceiling of a watcher config (`watcher.autonomy.monthlyCeilingUsd`, else the default). */
@@ -397,6 +410,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private autonomy: SelfStudyAutonomy | undefined;
   /** Rung 2: the weekly fleet cost audit (`autonomy/self-study.ts`). */
   private readonly selfStudy: SelfStudy;
+  /** The fleet self-improvement loop (`self-improve.ts`): tool problems and lent lessons. */
+  private readonly selfImprove: SelfImproveRunner;
   /** C1: the stop the kill started, in flight. */
   private killStop: Promise<WatcherState> | null = null;
 
@@ -525,6 +540,66 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       now: this.now,
       logger: this.logger,
     });
+    this.selfImprove = new SelfImproveRunner({
+      watcherDir: this.dir,
+      settings: () => watcherSelfImproveSettings(this.cfg()),
+      bots: () => this.selfImproveBots(),
+      readAudit: (botId, since, now) =>
+        this.deps.selfImproveAudit
+          ? this.deps.selfImproveAudit(botId, since, now)
+          : readToolEntries(resolveStatsDirs(this.deps.config()).toolAudit, botId, since, now),
+      storeFor: (soulDir) => new LessonStore(soulDir),
+      log: (row) => this.log.say('integrate', row.op, row.text),
+      running: () => this.running && !this.stopping,
+      killed: () => this.readKill().killed,
+      now: this.now,
+      logger: this.logger,
+    });
+  }
+
+  /**
+   * The bots the self-improvement loop sees: enabled, not a customer tenant's,
+   * each with its soul dir and whether its own loop is on. Read live.
+   */
+  private selfImproveBots(): FleetSelfImproveBot[] {
+    const config = this.deps.config();
+    const out: FleetSelfImproveBot[] = [];
+    for (const bot of config.bots ?? []) {
+      if (!bot || bot.enabled === false || isTenantBot(bot, config)) continue;
+      out.push({
+        id: bot.id,
+        name: this.botName(bot.id),
+        soulDir: resolveBotPaths(config, bot).soulDir,
+        loopOn: resolveSelfImprove(config, bot).enabled,
+        maxActive: resolveSelfImprove(config, bot).maxActive,
+      });
+    }
+    return out;
+  }
+
+  /** Self-improvement: run the fleet loop now (`POST /api/watcher/self-improve`). Never throws. */
+  selfImproveNow(): Promise<SelfImproveRunResult> {
+    return this.selfImprove.run();
+  }
+
+  /** Self-improvement: `GET /api/watcher/self-improve`. */
+  selfImproveStatus(): SelfImproveStatus {
+    return this.selfImprove.status();
+  }
+
+  /** Self-improvement: the operator dismisses a tool problem. Never throws. */
+  dismissToolProblem(classKey: string): DismissResult {
+    return this.selfImprove.dismiss(classKey);
+  }
+
+  /** Self-improvement: the hourly timer's check (exposed for tests). True when it started a run. */
+  selfImproveTick(): boolean {
+    return this.selfImprove.tick();
+  }
+
+  /** Resolves when the self-improvement run in flight (if any) has finished. */
+  selfImproveIdle(): Promise<unknown> {
+    return this.selfImprove.current() ?? Promise.resolve();
   }
 
   /**
@@ -1300,6 +1375,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.releaseRun,
       this.consolidateRun,
       this.selfStudy.current(),
+      this.selfImprove.current(),
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
@@ -1603,15 +1679,17 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const nightly = setInterval(() => this.consolidateTick(), CONSOLIDATE_CHECK_MS);
     // Rung 2: the weekly self-study (checks every 10 min whether one is due).
     const selfStudy = setInterval(() => this.selfStudyTick(), SELF_STUDY_CHECK_MS);
+    // The fleet self-improvement loop (checks hourly whether a run is due).
+    const selfImprove = setInterval(() => this.selfImproveTick(), SELF_IMPROVE_CHECK_MS);
     // C1: the kill poll lives with the run (cleared by `stop` and `abandonStart`).
     const kill = setInterval(
       () => void this.checkKillSwitch(),
       this.deps.killPollMs ?? KILL_POLL_MS
     );
-    for (const t of [summary, daily, nightly, selfStudy, kill]) {
+    for (const t of [summary, daily, nightly, selfStudy, selfImprove, kill]) {
       (t as { unref?: () => void }).unref?.();
     }
-    this.timers = [summary, daily, nightly, selfStudy, kill];
+    this.timers = [summary, daily, nightly, selfStudy, selfImprove, kill];
   }
 
   /**

@@ -413,6 +413,58 @@ export function karmaBody(karma, nowMs = Date.now()) {
     .join('')}</div>`;
 }
 
+// ── Lessons (self-improvement, docs/plans/self-improve-plan.md) ─────────────
+
+export function lessonsUrl(botId) {
+  return `/api/agents/${encodeURIComponent(botId)}/lessons`;
+}
+
+const LESSON_TONE = { active: 'info', proven: 'ok', retired: 'muted', unproven: 'warn' };
+
+function ratePct(w) {
+  const r = Number(w?.rate);
+  return `${Math.round((Number.isFinite(r) ? r : 0) * 100)}%`;
+}
+
+/**
+ * Lessons card body from `GET /api/agents/:id/lessons` (`{ enabled, lessons, … }`,
+ * newest first, each with its `why`). The fold is the shared `whyPanel`.
+ */
+export function lessonsCardHtml(data, { nowMs = Date.now(), botId } = {}) {
+  if (data?.error) {
+    return `<div class="text-dim text-sm">Could not load the lessons: ${esc(data.error)}</div>`;
+  }
+  const lessons = Array.isArray(data?.lessons) ? data.lessons : [];
+  if (lessons.length === 0) {
+    return `<div class="text-dim text-sm">${
+      data?.enabled ? 'No lessons yet' : 'Self-improvement is off for this agent'
+    }</div>`;
+  }
+  const agentId = botId ?? data?.botId;
+  return `<div class="home-lessons">${lessons
+    .map((l) => {
+      const status = String(l?.status ?? 'active');
+      const rates = l?.measure
+        ? `baseline ${ratePct(l.baseline)} → now ${ratePct(l.measure)}`
+        : `baseline ${ratePct(l?.baseline)}`;
+      const meta = [
+        `${l?.tool ?? ''} · ${l?.errorClass ?? ''}`,
+        rates,
+        l?.source === 'borrowed' && l?.borrowedFrom?.botId
+          ? `borrowed from ${l.borrowedFrom.botId}`
+          : '',
+        ago(l?.createdAt, nowMs),
+      ].filter(Boolean);
+      return `<div class="home-lesson">
+        <div class="home-lesson-head"><span class="home-lesson-text">${esc(l?.text ?? '')}</span>
+          ${badge(status, LESSON_TONE[status] ?? 'muted')}</div>
+        <div class="text-dim text-sm">${meta.map((m) => esc(m)).join(' · ')}</div>
+        ${whyPanel(l?.why, { nowMs, botId: agentId })}
+      </div>`;
+    })
+    .join('')}</div>`;
+}
+
 // ── Keyboard (UX overhaul phase 5) ──────────────────────────────────────────
 
 const TYPING_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);

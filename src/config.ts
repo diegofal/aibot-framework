@@ -127,6 +127,36 @@ export const CuriosityConfigSchema = z
   .optional();
 export type CuriosityConfig = z.infer<typeof CuriosityConfigSchema>;
 
+/**
+ * Self-improvement loop of one bot (`docs/plans/self-improve-plan.md`,
+ * `src/bot/self-improve/`): a failure class (tool + error class) seen
+ * `minRepeats` times in 48 h becomes a lesson in the bot's prompts; after
+ * `measureCalls` calls of that tool or `measureDays` days the lesson stays
+ * only if the class's rate dropped by `minDrop`. Off by default.
+ */
+export const SelfImproveConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    minRepeats: z.number().int().min(2).max(50).default(3),
+    maxActive: z.number().int().min(1).max(10).default(5),
+    measureCalls: z.number().int().min(5).max(500).default(20),
+    measureDays: z.number().min(1).max(30).default(5),
+    minDrop: z.number().min(0.1).max(1).default(0.5),
+  })
+  .default({});
+
+/** Per-bot override: any field set wins over the global `agentLoop.selfImprove`. */
+export const BotSelfImproveOverrideSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    minRepeats: z.number().int().min(2).max(50).optional(),
+    maxActive: z.number().int().min(1).max(10).optional(),
+    measureCalls: z.number().int().min(5).max(500).optional(),
+    measureDays: z.number().min(1).max(30).optional(),
+    minDrop: z.number().min(0.1).max(1).optional(),
+  })
+  .optional();
+
 export const GlobalAgentLoopConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -187,6 +217,8 @@ export const GlobalAgentLoopConfigSchema = z
       .default({}),
     /** Fleet-wide curiosity DNA defaults; per-bot `agentLoop.curiosity` wins */
     curiosity: CuriosityConfigSchema,
+    /** Fleet-wide self-improvement defaults (off); per-bot `agentLoop.selfImprove` wins */
+    selfImprove: SelfImproveConfigSchema,
   })
   .default({});
 
@@ -252,6 +284,8 @@ export const BotAgentLoopOverrideSchema = z
       .optional(),
     /** Curiosity DNA for this bot: limit dials, explore budget, navigator, dispatch */
     curiosity: CuriosityConfigSchema,
+    /** Self-improvement loop for this bot; fields set here win over the global defaults */
+    selfImprove: BotSelfImproveOverrideSchema,
     /** Standing directives: ongoing behavioral instructions injected into strategist/planner/executor prompts */
     directives: z.array(z.string().max(500)).max(10).optional(),
     /** Preset directive bundles — predefined behavioral instruction sets */
@@ -926,6 +960,20 @@ export const WatcherConfigSchema = z
      * support goes out as a directive to the related third bots right after the
      * notice pass, without waiting for integrate (`src/watcher/fast-lane.ts`).
      */
+    /**
+     * The watcher's self-improvement loop (`src/watcher/self-improve.ts`):
+     * every `everyHours` it reads every bot's lessons, flags a failure class
+     * seen in ≥ `toolProblemBots` bots as a tool problem (no lessons for it),
+     * and lends a proven lesson to bots whose own loop is on. On by default;
+     * runs only while the watcher runs.
+     */
+    selfImprove: z
+      .object({
+        enabled: z.boolean().default(true),
+        toolProblemBots: z.number().int().min(2).default(3),
+        everyHours: z.number().min(1).max(168).default(24),
+      })
+      .default({}),
     fastLane: z
       .object({
         enabled: z.boolean().default(true),

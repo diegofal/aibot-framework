@@ -16,4 +16,8 @@ describe('isLoopCaller', () => {
   test('conversation callers are not', () => {
     expect(isLoopCaller('conversation')).toBe(false);
   });
+
+  test('the self-improve lesson writer runs inside a cycle', () => {
+    expect(isLoopCaller('self-improve')).toBe(true);
+  });
 });

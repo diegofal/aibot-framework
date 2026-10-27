@@ -148,6 +148,11 @@
               <td>~3,360</td>
               <td>Curiosity DNA package (knowledge map, frontier, navigator, directives, dispatch, taste). The loop only calls <code>beginCuriosityCycle</code> / <code>finishCuriosityCycle</code> from <code>curiosity/runner.ts</code>; neither can fail a cycle. See <a href="#curiosity">Curiosity DNA</a> and the per-file table in <a href="bot-core.html#curiosity">Bot Core Modules</a>.</td>
             </tr>
+            <tr>
+              <td><code>self-improve/</code></td>
+              <td>~900</td>
+              <td>Self-improvement loop (off by default, per bot). After each cycle <code>runSelfImproveStep</code> calls <code>runSelfImprove</code> (<code>self-improve/runner.ts</code>, bounded by <code>SELF_IMPROVE_TIMEOUT_MS</code>, never fails a cycle); active lessons reach the planner, continuous planner and executor prompts. See <a href="#self-improve">Self-Improvement Lessons</a>.</td>
+            </tr>
           </tbody>
         </table>
 
@@ -1260,6 +1265,32 @@ interface ResolvedPermission {
         </div>
 
         <!-- ============================================================ -->
+        <!-- 8b2. Self-Improvement Lessons -->
+        <!-- ============================================================ -->
+        <h2 id="self-improve">Self-Improvement Lessons</h2>
+        <p>
+          <span class="badge badge-yellow">2026-10-27</span> Plan: <code>docs/plans/self-improve-plan.md</code>.
+          A bot that keeps failing a tool the same way gets a short lesson in its prompts, and the lesson stays only
+          if code measures that the failure rate dropped. The strategist and reflection already change a bot, but
+          nothing measured whether those changes helped; lessons are the first loop that does.
+        </p>
+        <div class="module-section">
+          <h3>Bot loop (off by default)</h3>
+          <div class="file-path">src/bot/self-improve/ &middot; agentLoop.selfImprove (global) &middot; bots[].agentLoop.selfImprove</div>
+          <ol>
+            <li><strong>Detect</strong> (<code>classes.ts</code>, <code>detector.ts</code>, no LLM): charged failures (<code>isToolFailure</code>) in the last 48 h grouped by tool + error class (<code>classifyFailure</code>: file-not-found, read-a-directory, guessed-url, server-error, note-too-long, task-claimed, value-too-long, else <code>other:&lt;slug&gt;</code>). A class with <code>minRepeats</code> (3) failures is a candidate unless a lesson for it is in the prompt, was retired or unproven within <code>measureDays</code>, or the watcher suppressed it.</li>
+            <li><strong>Write</strong> (<code>writer.ts</code>): one call on the planner backend (caller <code>self-improve</code>, temperature 0.2) over a code-built digest of the failing and succeeding calls; the answer must cite only rows it was shown, else the fixed sentence for the class. At most one new lesson per cycle, at most <code>maxActive</code> (5) in the prompt.</li>
+            <li><strong>Use</strong>: <code>buildLessonsSection</code> &rarr; "## Lessons from your own mistakes" in the planner, continuous planner and executor prompts.</li>
+            <li><strong>Measure</strong> (<code>measure.ts</code>): baseline = the class rate per call of its tool in the 7 days before; after <code>measureCalls</code> (20) calls or <code>measureDays</code> (5) days, <code>proven</code> if the rate dropped by <code>minDrop</code> (50 %), <code>retired</code> if not, a second window if fewer than 5 calls, then <code>unproven</code>.</li>
+            <li><strong>Record</strong>: <code>&lt;soulDir&gt;/LESSONS.json</code> (<code>LessonStore</code>, travels with the export) and a soul-event row (op <code>lesson</code>) per change. <code>GET /api/agents/:id/lessons</code> and the Agent Home "Lessons" card show them with a Why panel (<code>lessonToWhy</code>).</li>
+          </ol>
+        </div>
+        <div class="module-section">
+          <h3>Watcher loop (on by default while the watcher runs)</h3>
+          <div class="file-path">src/watcher/self-improve.ts &middot; watcher.selfImprove</div>
+          <p>Every <code>everyHours</code> (24) it reads every non-tenant bot's lessons and tool audit. A named class present in <code>toolProblemBots</code> (3) or more bots is a tool problem, not a habit: it is suppressed in every bot whose loop is on and reported for the operator to fix in code (dismissable). A <code>proven</code> lesson is lent to other bots whose loop is on and that show the same class; the borrowed lesson is measured on its own. The weekly self-study digest gains a lessons block. Neither switch is proposable: <code>enabled</code> flags are locked in <code>src/watcher/autonomy/locked.ts</code>.</p>
+        </div>
+
         <!-- 8c. Karma Outcomes & Trait Policy -->
         <!-- ============================================================ -->
         <h2 id="karma-traits">Karma Outcomes &amp; Trait Policy</h2>

@@ -29,8 +29,9 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseLLMJson } from '../../bot/llm-json-parser';
+import { LessonStore } from '../../bot/self-improve/store';
 import { type Config, writeJsonFileAtomic, writeTextFileAtomic } from '../../config';
-import { resolveStatsDirs } from '../../stats/paths';
+import { resolveBotPaths, resolveStatsDirs } from '../../stats/paths';
 import { readAgentCycles } from '../../stats/readers/agent-cycles';
 import { readLlmEntries } from '../../stats/readers/llm-query-log';
 import {
@@ -41,6 +42,7 @@ import {
 import { isTenantBot } from '../../tenant/tenant-scoping';
 import { budgetFile } from '../budget';
 import { type InstrumentedClient, WATCHER_QUERY_BOT_ID, type WatcherRefusal } from '../llm';
+import { readSelfImproveState } from '../self-improve';
 import { WATCHER_DEFAULTS, type WatcherConfig } from '../types';
 import { GUARD_METRICS, GUARD_MIN_WINDOW_HOURS } from './guards';
 import { createConfigAccess } from './ledger';
@@ -123,12 +125,23 @@ export interface WatcherDay {
   integrate: { calls: number; costUsd: number };
 }
 
+/** A bot's lesson (`LESSONS.json`), reduced to what the lessons block counts. */
+export interface LessonRow {
+  status?: unknown;
+  source?: unknown;
+  createdAt?: unknown;
+}
+
 export interface SelfStudyReaders {
   llm(botId: string, sinceMs: number, nowMs: number): LlmRow[];
   cycles(botId: string, sinceMs: number, nowMs: number): CycleRow[];
   tools(botId: string, sinceMs: number, nowMs: number): ToolRow[];
   /** The watcher's budget files for these UTC dates (missing days left out). */
   watcherDays(dates: string[]): WatcherDay[];
+  /** Self-improvement: a bot's lessons. Absent (with `toolProblems`) → no lessons block. */
+  lessons?(botId: string): LessonRow[];
+  /** Self-improvement: the class keys of the last fleet run's tool problems (`self-improve.json`). */
+  toolProblems?(): unknown[];
 }
 
 function num(v: unknown): number {
@@ -160,6 +173,15 @@ export function createSelfStudyReaders(config: Config, watcherDir: string): Self
       }
       return out;
     },
+    lessons(botId) {
+      const bot = (config.bots ?? []).find((b) => b?.id === botId);
+      if (!bot) return [];
+      return new LessonStore(resolveBotPaths(config, bot).soulDir)
+        .read()
+        .lessons.map((l) => ({ status: l.status, source: l.source, createdAt: l.createdAt }));
+    },
+    toolProblems: () =>
+      (readSelfImproveState(watcherDir).last?.toolProblems ?? []).map((p) => p?.classKey),
   };
 }
 
@@ -254,6 +276,17 @@ export interface DigestBot {
   cost: CostRow;
   cycles: CyclesRow;
   tools: ToolsRow;
+  /** Self-improvement counts, only with the lessons readers. */
+  lessons?: LessonsRow;
+}
+export interface LessonsRow {
+  id: string;
+  active: number;
+  proven: number;
+  retired: number;
+  unproven: number;
+  /** Borrowed lessons created inside the digest window. */
+  borrowed: number;
 }
 export interface FleetDigest {
   sinceMs: number;
@@ -280,6 +313,46 @@ export interface FleetDigest {
     days: number;
     byCaller: Array<{ caller: string; calls: number; usd: number }>;
   };
+  /** Self-improvement: the last fleet run's tool problems, as code names; only with the readers. */
+  lessons?: { id: 'd-lessons'; toolProblems: string[] };
+}
+
+/** Tool-problem keys shown in the digest. */
+const TOP_TOOL_PROBLEMS = 10;
+
+/**
+ * A failure class key as a code name (C8): `tool:class`, with an
+ * `other:<slug>` class (free text from a result head) reduced to `other`,
+ * and anything that is not a code name to `other`.
+ */
+export function lessonClassName(v: unknown): string {
+  if (typeof v !== 'string' || v.startsWith('other:')) return 'other';
+  const i = v.indexOf(':');
+  if (i <= 0) return 'other';
+  const tool = codeName(v.slice(0, i), 64);
+  const cls = v.slice(i + 1);
+  if (tool === 'other') return 'other';
+  if (cls === 'other' || cls.startsWith('other:')) return `${tool}:other`;
+  return codeName(v, 96);
+}
+
+function lessonsRow(id: string, rows: LessonRow[], sinceMs: number): LessonsRow {
+  const out: LessonsRow = {
+    id: `d-${id}-lessons`,
+    active: 0,
+    proven: 0,
+    retired: 0,
+    unproven: 0,
+    borrowed: 0,
+  };
+  for (const l of rows) {
+    const status = l?.status;
+    if (status === 'active' || status === 'proven' || status === 'retired' || status === 'unproven')
+      out[status]++;
+    const created = typeof l?.createdAt === 'string' ? Date.parse(l.createdAt) : Number.NaN;
+    if (l?.source === 'borrowed' && Number.isFinite(created) && created >= sinceMs) out.borrowed++;
+  }
+  return out;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -318,11 +391,20 @@ export function buildDigest(input: DigestInput): FleetDigest {
   const days = input.days ?? SELF_STUDY_WINDOW_DAYS;
   const sinceMs = nowMs - days * DAY_MS;
   const globalEvery = (config.agentLoop as { every?: unknown } | undefined)?.every;
+  const withLessons = !!readers.lessons || !!readers.toolProblems;
   const bots: DigestBot[] = [];
   for (const bot of config.bots ?? []) {
     if (!bot || typeof bot.id !== 'string' || isTenantBot(bot, config)) continue;
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(bot.id)) continue;
-    bots.push(botDigest(bot, globalEvery, readers, sinceMs, nowMs));
+    const row = botDigest(bot, globalEvery, readers, sinceMs, nowMs);
+    if (withLessons) {
+      row.lessons = lessonsRow(
+        bot.id,
+        safeRows(() => readers.lessons?.(bot.id) ?? []),
+        sinceMs
+      );
+    }
+    bots.push(row);
   }
   bots.sort((a, b) => b.cost.usd - a.cost.usd || a.botId.localeCompare(b.botId));
   const sum = (f: (b: DigestBot) => number) => bots.reduce((s, b) => s + f(b), 0);
@@ -377,6 +459,16 @@ export function buildDigest(input: DigestInput): FleetDigest {
         .map(([caller, v]) => ({ caller, calls: v.calls, usd: round2(v.usd) }))
         .sort((a, b) => b.usd - a.usd || b.calls - a.calls),
     },
+    ...(withLessons
+      ? {
+          lessons: {
+            id: 'd-lessons' as const,
+            toolProblems: [
+              ...new Set(safeRows(() => readers.toolProblems?.() ?? []).map(lessonClassName)),
+            ].slice(0, TOP_TOOL_PROBLEMS),
+          },
+        }
+      : {}),
   };
 }
 
@@ -498,7 +590,7 @@ const pct = (n: number) => `${Math.round(n * 100)}%`;
 const classes = (list: Array<{ cls: string; count: number }>) =>
   list.map((c) => `${c.cls} ${c.count}`).join(', ');
 
-function botSection(b: DigestBot): string[] {
+function botSection(b: DigestBot, days: number): string[] {
   const cadence = b.every.own
     ? `every ${b.every.own} (its own)`
     : b.every.effective
@@ -530,6 +622,12 @@ function botSection(b: DigestBot): string[] {
         : 'none'
     }`,
   ];
+  if (b.lessons) {
+    const l = b.lessons;
+    lines.push(
+      `[${l.id}] lessons: ${l.active} active, ${l.proven} proven, ${l.retired} retired, ${l.unproven} unproven, ${l.borrowed} borrowed in ${days} days`
+    );
+  }
   return lines;
 }
 
@@ -557,13 +655,21 @@ export function renderDigest(d: FleetDigest, maxChars = DIGEST_MAX_CHARS): Rende
         ? `. By caller: ${w.byCaller.map((c) => `${c.caller} ${c.calls} ${usd(c.usd)}`).join('; ')}`
         : ''
     }`,
+    ...(d.lessons
+      ? [
+          `[${d.lessons.id}] tool problems (a class in several bots): ${
+            d.lessons.toolProblems.length ? d.lessons.toolProblems.join(', ') : 'none'
+          }`,
+        ]
+      : []),
     '',
   ].join('\n');
+  if (d.lessons) ids.add(d.lessons.id);
   let text = head;
   let omitted = 0;
   let omittedUsd = 0;
   for (const b of d.bots) {
-    const section = `${botSection(b).join('\n')}\n`;
+    const section = `${botSection(b, d.days).join('\n')}\n`;
     // Leave room for the omission line.
     if (omitted > 0 || text.length + section.length > maxChars - 80) {
       omitted++;
@@ -574,6 +680,7 @@ export function renderDigest(d: FleetDigest, maxChars = DIGEST_MAX_CHARS): Rende
     ids.add(b.cost.id);
     ids.add(b.cycles.id);
     ids.add(b.tools.id);
+    if (b.lessons) ids.add(b.lessons.id);
     for (const c of b.cycles.errorSamples) ids.add(c);
   }
   if (omitted > 0) {

@@ -15,6 +15,7 @@ import {
   buildTaskSchemaLines,
   buildWorkersSection,
 } from './agent-loop-tasks';
+import { type Lesson, isLessonInPrompt } from './self-improve/types';
 
 /** The raw GOALS.md plus the store tasks a prompt input carries. */
 export interface GoalsSource {
@@ -66,6 +67,8 @@ export interface PlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Lessons from the bot's own repeated tool failures (`buildLessonsSection`). */
+  lessons?: Array<Pick<Lesson, 'text' | 'status'>>;
   /** The conversation's latest replies to the operator (`buildConversationSection`). */
   chatReplies?: string[];
   /** Summary of recently active users for proactive engagement */
@@ -124,6 +127,8 @@ export interface ContinuousPlannerPromptInput {
   allowedWritePaths?: string[];
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Lessons from the bot's own repeated tool failures (`buildLessonsSection`). */
+  lessons?: Array<Pick<Lesson, 'text' | 'status'>>;
   /** The conversation's latest replies to the operator (`buildConversationSection`). */
   chatReplies?: string[];
   /** Summary of recently active users for proactive engagement */
@@ -180,6 +185,8 @@ export interface ExecutorPromptInput {
   documents?: { maxChars: number; docs: DocumentSize[] };
   /** Operator-assigned standing directives — ongoing behavioral instructions */
   directives?: string[];
+  /** Lessons from the bot's own repeated tool failures (`buildLessonsSection`). */
+  lessons?: Array<Pick<Lesson, 'text' | 'status'>>;
   /** The conversation's latest replies to the operator (`buildConversationSection`). */
   chatReplies?: string[];
   /** Whether productions are enabled for this bot (controls working directory and production rules sections) */
@@ -396,6 +403,19 @@ export function buildDirectivesSection(directives?: string[]): string {
   return `\n## Operator Directives\n\nYour operator has assigned these standing directives. These are ongoing behavioral instructions (not one-time goals). Factor them into your planning when relevant:\n\n${directives.map((d) => `- ${d}`).join('\n')}\n`;
 }
 
+/**
+ * "## Lessons from your own mistakes" (`src/bot/self-improve/`): '' when no
+ * lesson is in the prompt (active or proven).
+ */
+export function buildLessonsSection(lessons?: Array<Pick<Lesson, 'text' | 'status'>>): string {
+  const shown = (lessons ?? []).filter(isLessonInPrompt);
+  if (!shown.length) return '';
+  const bullets = shown.map(
+    (l) => `- ${l.text.replace(/\s+/g, ' ').trim()}${l.status === 'proven' ? ' (proven)' : ''}`
+  );
+  return `\n## Lessons from your own mistakes\n\nThese come from your own tool calls that kept failing the same way; each one is being measured to see whether it helps:\n\n${bullets.join('\n')}\n`;
+}
+
 /** One fleet-watcher broadcast as the planner sees it (`src/watcher/broadcast.ts`). */
 export interface FleetBroadcastItem {
   id: string;
@@ -548,7 +568,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildLessonsSection(input.lessons)}${buildConversationSection(input.chatReplies)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -690,7 +710,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}${
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildLessonsSection(input.lessons)}${buildConversationSection(input.chatReplies)}${
   input.curiosityBlock
     ? `
 ${input.curiosityBlock}
@@ -852,7 +872,7 @@ ${
   goalsText(input)
     ? `## Goals\n\n${goalsText(input)}`
     : `## Goals\n\n(No goals yet. Your FIRST priority should be to create initial goals using manage_goals with action "add", based on your identity and motivations. Add 2-5 concrete, actionable goals.)`
-}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildConversationSection(input.chatReplies)}
+}${buildOperatorGoalsSection(goalsSource(input))}${buildDirectivesSection(input.directives)}${buildLessonsSection(input.lessons)}${buildConversationSection(input.chatReplies)}
 
 Current date/time: ${input.datetime}
 

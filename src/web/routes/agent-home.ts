@@ -15,6 +15,7 @@
  *   GET /api/agents/:id/goals/detail?id=&title=&days=   one goal's history (cached 15 s)
  *   GET /api/agents/:id/cycles/:cycleId   one agent-loop cycle, the "Open cycle" sheet (cached 15 s)
  *   GET /api/agents/:id/memory-history?limit=   memory/soul edits (`soul-events.jsonl`), newest first, each with its why (not cached)
+ *   GET /api/agents/:id/lessons   self-improvement lessons (`LESSONS.json`), newest first, each with its why (not cached)
  *
  * Reads are tenant-scoped like /api/stats and never throw on missing data. The
  * writes go to the Active section through the goals tool's
@@ -27,6 +28,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import { writeGoalsFile } from '../../bot/goal-events';
+import { resolveSelfImprove } from '../../bot/self-improve/config';
+import { LessonStore } from '../../bot/self-improve/store';
+import type { Lesson, ResolvedSelfImprove, SuppressedClass } from '../../bot/self-improve/types';
 import { type SoulEvent, readSoulEvents } from '../../bot/soul-events';
 import type { Config } from '../../config';
 import { localDateStr } from '../../date-utils';
@@ -63,6 +67,7 @@ import {
   resolveGoalRef,
   setGoalStatus,
 } from '../../tools/goals';
+import { lessonToWhy } from '../../why/builders/lesson';
 import { soulEventToWhy } from '../../why/builders/soul-event';
 import { CycleIndex } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
@@ -80,6 +85,17 @@ export interface MemoryHistoryResponse {
   events: Array<SoulEvent & { why: Why }>;
   /** Rows in the log, before `limit`. */
   total: number;
+}
+
+export interface LessonsResponse {
+  botId: string;
+  /** The bot's self-improvement loop is on (`config.enabled`). */
+  enabled: boolean;
+  config: ResolvedSelfImprove;
+  /** Newest first (`createdAt`). */
+  lessons: Array<Lesson & { why: Why }>;
+  /** Classes the watcher flagged as tool problems: no lesson is written for them. */
+  suppressed: SuppressedClass[];
 }
 export const GOAL_NOTES_MAX = 600;
 const GOAL_PRIORITIES = ['low', 'medium', 'high'] as const;
@@ -325,6 +341,52 @@ export function agentHomeRoutes(deps: AgentHomeRouteDeps) {
     } catch (err) {
       deps.logger.warn({ err, botId: bot.id }, 'Memory history failed');
       return c.json({ error: 'Memory history failed' }, 500);
+    }
+  });
+
+  app.get('/:id/lessons', (c) => {
+    const bot = findBot(c);
+    if (!bot) return c.json({ error: 'Bot not found' }, 404);
+    try {
+      const config = resolveSelfImprove(deps.config, bot);
+      const file = new LessonStore(resolveBotPaths(deps.config, bot).soulDir).read();
+      const rows = [...file.lessons].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const withCycle = rows.filter((l) => l.cycleId);
+      const index = CycleIndex.for(
+        withCycle.length > 0
+          ? (b, s, u) => readAgentCycles(ctx.dirs.agentCycles, b, s, u)
+          : undefined,
+        withCycle.map((l) => ({ botId: bot.id, at: l.createdAt }))
+      );
+      const tenantId = getTenantId(c);
+      const nameOf = (id: string) => {
+        const other = deps.config.bots.find((b) => b.id === id);
+        return other && isBotAccessible(other, tenantId) ? other.name : undefined;
+      };
+      const lessons = rows.map((lesson) => {
+        const cycle = lesson.cycleId ? index.byId(bot.id, lesson.cycleId) : undefined;
+        const sourceBotName = lesson.borrowedFrom ? nameOf(lesson.borrowedFrom.botId) : undefined;
+        return {
+          ...lesson,
+          why: lessonToWhy(lesson, {
+            botId: bot.id,
+            minDrop: config.minDrop,
+            ...(sourceBotName ? { sourceBotName } : {}),
+            ...(cycle ? { cycle } : {}),
+          }),
+        };
+      });
+      const body: LessonsResponse = {
+        botId: bot.id,
+        enabled: config.enabled,
+        config,
+        lessons,
+        suppressed: file.suppressed,
+      };
+      return c.json(body);
+    } catch (err) {
+      deps.logger.warn({ err, botId: bot.id }, 'Lessons failed');
+      return c.json({ error: 'Lessons failed' }, 500);
     }
   });
 

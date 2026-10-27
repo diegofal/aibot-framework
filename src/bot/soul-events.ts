@@ -26,7 +26,13 @@ const SUMMARY_CHARS = 240;
 /** Past this size the log keeps its newest half. */
 export const SOUL_EVENTS_MAX_BYTES = 512 * 1024;
 
-export type SoulEventOp = 'consolidate' | 'consolidate-rejected' | 'facts-saved' | 'hygiene-fix';
+/** `lesson`: a self-improvement lesson was created, proven, retired, borrowed (`src/bot/self-improve/`). */
+export type SoulEventOp =
+  | 'consolidate'
+  | 'consolidate-rejected'
+  | 'facts-saved'
+  | 'hygiene-fix'
+  | 'lesson';
 export type SoulEventActor = 'system' | 'hygiene' | 'agent';
 /** What made a memory flush run. */
 export type FlushTrigger = 'proactive' | 'compaction' | 'conversation-end';

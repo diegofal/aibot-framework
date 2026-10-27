@@ -37,6 +37,12 @@
  *   GET  /self-study       { enabled, running, lastRunAt, lastOutcome, nextRunAt, notes } (rung 2)
  *   POST /self-study       run the weekly self-study now: 200 { outcome, status }, 409 { error }
  *                          (self-study or proposals off, asleep, killed, one already running)
+ *   GET  /self-improve     { enabled, running, ranAt, nextRunAt, last, dismissed } (fleet lessons)
+ *   POST /self-improve     run the fleet self-improvement now: 200 { result, status }, 409
+ *                          { error } (watcher.selfImprove off, asleep, killed, one already running)
+ *   POST /self-improve/tool-problems/:classKey/dismiss
+ *                          → 200 { dismissed, status }: never a tool problem again, its
+ *                          suppression lifted from loop-on bots; 400 for a malformed key
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -406,6 +412,29 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     if (r.status === 'cancelled')
       return c.json({ error: 'The watcher stopped during the run' }, 409);
     return c.json({ outcome: r.outcome, status: w.selfStudyStatus() });
+  });
+
+  // ── Self-improvement: tool problems and lent lessons (`watcher/self-improve.ts`) ──
+  app.get('/self-improve', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    return c.json(w.selfImproveStatus());
+  });
+
+  app.post('/self-improve', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const r = await w.selfImproveNow();
+    if (r.status === 'unavailable') return c.json({ error: r.reason }, 409);
+    return c.json({ result: r.result, status: w.selfImproveStatus() });
+  });
+
+  app.post('/self-improve/tool-problems/:classKey/dismiss', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const r = w.dismissToolProblem(c.req.param('classKey'));
+    if (!r.ok) return c.json({ error: r.error }, 400);
+    return c.json({ dismissed: r.dismissed, status: w.selfImproveStatus() });
   });
 
   return app;

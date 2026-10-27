@@ -1232,3 +1232,60 @@ describe('watcher proposals (autonomy rung 0, C7)', () => {
     expect(CLEAR_STALE_DEFAULT_KINDS).not.toContain('watcher');
   });
 });
+
+describe('watcher tool problems (self-improvement, admin only)', () => {
+  const problem = {
+    classKey: 'file_read:file-not-found',
+    bots: [
+      { id: 'b1', failures: 30 },
+      { id: 'b2', failures: 16 },
+      { id: 'b9', failures: 11 },
+    ],
+  };
+  const at = iso(NOW - 3 * H);
+
+  it('one item per tool problem for the admin, with a Dismiss action on the watcher route', async () => {
+    const src = sources({ watcherToolProblems: () => ({ ranAt: at, toolProblems: [problem] }) });
+    for (const tenant of [undefined, '__admin__']) {
+      const body = await (await makeApp(src, tenant).request('/api/needs-you')).json();
+      const items = body.items as NeedsYouItem[];
+      expect(items.map((i) => i.id)).toEqual(['watcher:tool-problem:file_read:file-not-found']);
+      const item = items[0];
+      expect(item.kind).toBe('watcher');
+      expect(item.href).toBe('#/watcher');
+      expect(item.botName).toBe('Watcher');
+      expect(item.title).toBe('Tool problem: file_read file-not-found in 3 bots');
+      expect(item.body).toContain('Bot One 30');
+      expect(item.body).toContain('Bot Two 16');
+      expect(item.body).toContain('b9 11');
+      expect(item.createdAt).toBe(at);
+      expect(item.actions).toHaveLength(1);
+      expect(item.actions[0]).toMatchObject({
+        id: 'dismiss',
+        method: 'POST',
+        path: '/api/watcher/self-improve/tool-problems/file_read%3Afile-not-found/dismiss',
+        tone: 'muted',
+      });
+      expect(item.actions[0].confirm).toBeTruthy();
+      expect(item.meta).toEqual({
+        toolProblem: 'file_read:file-not-found',
+        tool: 'file_read',
+      });
+      expect(body.byKind.watcher).toBe(1);
+    }
+  });
+
+  it('a tenant never sees them; a throwing source lists nothing and the rest renders', async () => {
+    const src = sources({ watcherToolProblems: () => ({ ranAt: at, toolProblems: [problem] }) });
+    const list = await (await makeApp(src, 't1').request('/api/needs-you')).json();
+    expect(list.items).toEqual([]);
+    const broken = sources({
+      asks: () => [ask('q1', 'b1', 1)],
+      watcherToolProblems: () => {
+        throw new Error('state unreadable');
+      },
+    });
+    const body = await (await makeApp(broken).request('/api/needs-you')).json();
+    expect(body.items.map((i: NeedsYouItem) => i.id)).toEqual(['ask:q1']);
+  });
+});
