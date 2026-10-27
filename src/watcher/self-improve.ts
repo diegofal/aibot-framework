@@ -503,9 +503,10 @@ export class SelfImproveRunner {
     return undefined;
   }
 
-  private nextAt(state: SelfImproveState): number {
+  /** When the next run is due; never ran = due now (the caller's now, read once). */
+  private nextAt(state: SelfImproveState, nowMs: number = this.now()): number {
     const ran = state.last ? Date.parse(state.last.ranAt) : Number.NaN;
-    if (!Number.isFinite(ran)) return this.now();
+    if (!Number.isFinite(ran)) return nowMs;
     return ran + this.settings().everyHours * HOUR_MS;
   }
 
@@ -530,7 +531,7 @@ export class SelfImproveRunner {
   /** The timer's check: starts a run when one is due. True when it started one. */
   tick(nowMs: number = this.now()): boolean {
     if (this.unavailable()) return false;
-    if (nowMs < this.nextAt(readSelfImproveState(this.deps.watcherDir))) return false;
+    if (nowMs < this.nextAt(readSelfImproveState(this.deps.watcherDir), nowMs)) return false;
     void this.run();
     return true;
   }

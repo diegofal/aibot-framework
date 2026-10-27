@@ -408,3 +408,27 @@ describe('the state file', () => {
     expect(readSelfImproveState(dir)).toEqual({ dismissed: [] });
   });
 });
+
+describe('SelfImproveRunner.tick', () => {
+  test('never ran: due at the tick even when the clock moves during the check', async () => {
+    const { SelfImproveRunner } = await import('../../src/watcher/self-improve');
+    let clock = NOW;
+    const runner = new SelfImproveRunner({
+      watcherDir: join(root, 'watcher'),
+      settings: () => ({ enabled: true, toolProblemBots: 3, everyHours: 24 }),
+      bots: () => [],
+      readAudit: () => [],
+      storeFor: (dir) => new LessonStore(dir),
+      log: () => {},
+      running: () => true,
+      killed: () => false,
+      // Every read of the clock is 5 ms later than the last.
+      now: () => {
+        clock += 5;
+        return clock;
+      },
+    });
+    expect(runner.tick(NOW)).toBe(true);
+    await runner.current();
+  });
+});
