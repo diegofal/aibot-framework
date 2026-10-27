@@ -69,9 +69,10 @@ export function lessonToWhy(lesson: Lesson, ctx: LessonWhyContext): Why {
     .filter((ref) => typeof ref === 'string' && ref.length > 0)
     .map((ref) => {
       const { at, tool } = splitRef(ref);
-      return { text: `${tool ?? lesson.tool} failed (${lesson.errorClass})`, at };
+      // A ref does not say how the call ended: the writer may cite a success.
+      return { text: `${tool ?? lesson.tool} call`, at };
     });
-  if (items.length > 0) why.related = { label: 'Calls that failed', items };
+  if (items.length > 0) why.related = { label: 'Calls the lesson cites', items };
 
   const outcome = [STATUS_WORDS[lesson.status] ?? `Status: ${lesson.status}.`];
   if (lesson.statusReason) outcome.push(lesson.statusReason);

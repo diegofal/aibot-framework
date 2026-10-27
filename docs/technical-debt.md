@@ -34,7 +34,7 @@ Each entry is a `###` heading with this table and these paragraphs:
 
 ## Open
 
-### A lesson hidden by a lowered cap is measured over its hidden time
+### A lesson out of the prompt for a while is measured over that time
 
 | | |
 | --- | --- |
@@ -42,13 +42,13 @@ Each entry is a `###` heading with this table and these paragraphs:
 | **Where** | `src/bot/self-improve/runner.ts`, `measure.ts` (`evaluateLesson` window) |
 | **Decided by** | agent building self-improvement (pre-PR pass round 3 on `feat/self-improve`) |
 
-**What was deferred.** Only the lessons the prompt shows (the newest `maxActive`) are measured. If the operator lowers `maxActive` below the active count and later raises it, a lesson that was hidden in between is measured over a window that includes calls made while the bot never saw it.
+**What was deferred.** Only the lessons the prompt shows (the newest `maxActive`) are measured. If the operator lowers `maxActive` below the active count and later raises it, or switches a bot's loop off and back on, a lesson that was out of the prompt in between is measured over a window that includes calls made while the bot never saw it.
 
 **Why it was the right call then.** It needs two config edits by the operator in sequence, and the worst outcome is an optimistic verdict (`proven`) for a lesson that stays visible; nothing is lost or hidden. Fixing it means a per-lesson window start reset whenever a lesson leaves the prompt, a new field in `LESSONS.json` and a third fix round on the same code.
 
 **What it costs while it stands.** A lesson can be marked proven on calls it did not influence, after an operator lowered and restored the cap.
 
-**The trigger.** The first time `maxActive` is lowered on a bot with more active lessons than the new cap, or lessons start leaving the prompt any other way (per-goal lessons, priorities).
+**The trigger.** The first time `maxActive` is lowered on a bot with more active lessons than the new cap, a bot's loop is switched off for more than a day while it has active lessons, or lessons start leaving the prompt any other way (per-goal lessons, priorities).
 
 **Estimated cost to pay.** Half a day: a `windowStart` on the lesson reset by the runner whenever a lesson is not shown, `evaluateLesson` reading it, tests.
 

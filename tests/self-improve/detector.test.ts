@@ -17,6 +17,8 @@ function entry(hoursAgo: number, over: Partial<ToolAuditEntry> = {}): ToolAuditE
     result: 'File not found: /app/productions/scout/x.md',
     durationMs: 3,
     retryAttempts: 0,
+    // A call made inside an agent-loop cycle: the only calls a lesson can reach.
+    cycleId: 'c-1',
     ...over,
   };
 }
@@ -128,5 +130,16 @@ describe('findCandidates', () => {
       'file_read:file-not-found',
       'file_read:read-a-directory',
     ]);
+  });
+});
+
+describe('only agent-loop calls count', () => {
+  test('conversation and worker failures never make a candidate', () => {
+    const outside = [
+      entry(1, { cycleId: undefined }),
+      entry(2, { cycleId: undefined }),
+      entry(3, { runId: 'wr-1' }),
+    ];
+    expect(run(outside)).toEqual([]);
   });
 });

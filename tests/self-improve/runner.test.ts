@@ -330,6 +330,18 @@ describe('runSelfImprove', () => {
     expect(after?.status).toBe('active');
   });
 
+  test('cancelled while the writer ran (timeout): nothing is saved', async () => {
+    let cancelled = false;
+    const generate = mock(async (system: string, prompt: string) => {
+      cancelled = true;
+      return goodGenerate(system, prompt);
+    });
+    const r = await run(deps(notFound(5), { generate, isCancelled: () => cancelled }).d);
+    expect(r.ok).toBe(false);
+    expect(r.created).toBeUndefined();
+    expect(new LessonStore(soulDir).read().lessons).toHaveLength(0);
+  });
+
   describe('evaluation', () => {
     /** 10 file_read calls after the lesson, `failing` of them failing its class. */
     function callsAfter(failing: number): ToolAuditEntry[] {

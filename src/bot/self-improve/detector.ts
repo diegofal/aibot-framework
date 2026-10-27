@@ -5,7 +5,7 @@
  */
 
 import type { ToolAuditEntry } from '../tool-audit-log';
-import { classifyFailure } from './classes';
+import { classifyFailure, isLoopCall } from './classes';
 import type { Candidate, FailureClass } from './types';
 import { DETECT_WINDOW_MS, EVIDENCE_MAX } from './types';
 
@@ -32,6 +32,7 @@ export function findCandidates(input: FindCandidatesInput): Candidate[] {
   const sinceMs = nowMs - DETECT_WINDOW_MS;
   const inWindow: Timed[] = [];
   for (const entry of input.entries) {
+    if (!isLoopCall(entry)) continue;
     const ms = Date.parse(entry.timestamp);
     if (Number.isFinite(ms) && ms >= sinceMs && ms <= nowMs) inWindow.push({ ms, entry });
   }

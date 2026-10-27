@@ -37,6 +37,11 @@ export interface SelfImproveDeps {
   /** Where `soul-events.jsonl` lives (the store's soul dir). */
   soulDir: string;
   newId?: () => string;
+  /**
+   * True once the caller gave up on this run (the agent loop's timeout): the
+   * run then saves nothing, so a lesson never lands after the cycle moved on.
+   */
+  isCancelled?: () => boolean;
 }
 
 export interface SelfImproveRunInput {
@@ -158,6 +163,7 @@ export async function runSelfImprove(
     }
 
     if (evaluations.size === 0 && !created) return { ok: true, evaluated, changed: [] };
+    if (deps.isCancelled?.()) return { ok: false, evaluated, error: 'cancelled' };
 
     // d) One write, applied to the file as it is now: a lesson someone else
     // already moved is left alone, and a class that got a lesson meanwhile

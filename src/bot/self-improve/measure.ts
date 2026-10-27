@@ -6,7 +6,7 @@
 
 import { isToolFailure } from '../../stats/readers/tool-audit';
 import type { ToolAuditEntry } from '../tool-audit-log';
-import { classifyFailure } from './classes';
+import { classifyFailure, isLoopCall } from './classes';
 import type { FailureClass, Lesson, LessonStatus, RateWindow, ResolvedSelfImprove } from './types';
 import { BASELINE_DAYS } from './types';
 
@@ -35,7 +35,7 @@ export function rateWindow(
   let calls = 0;
   let failures = 0;
   for (const e of entries) {
-    if (e.toolName !== cls.tool) continue;
+    if (e.toolName !== cls.tool || !isLoopCall(e)) continue;
     const ms = Date.parse(e.timestamp);
     if (!Number.isFinite(ms) || ms < sinceMs || ms >= untilMs) continue;
     if (e.success === true) {

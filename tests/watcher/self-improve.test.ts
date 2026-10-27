@@ -48,6 +48,7 @@ function fail(tool: string, result: string, agoMs = H): ToolAuditEntry {
     result,
     durationMs: 1,
     retryAttempts: 0,
+    cycleId: 'c-1',
   };
 }
 function ok(tool: string, agoMs = H): ToolAuditEntry {
@@ -430,5 +431,43 @@ describe('SelfImproveRunner.tick', () => {
     });
     expect(runner.tick(NOW)).toBe(true);
     await runner.current();
+  });
+});
+
+describe('SelfImproveRunner: a dismissal during a run (review #10)', () => {
+  test('stays dismissed: not in the saved result, no suppression left in the bots', async () => {
+    const { SelfImproveRunner } = await import('../../src/watcher/self-improve');
+    const bots = [bot('a'), bot('b'), bot('c')];
+    const audit: Record<string, ToolAuditEntry[]> = {
+      a: notFound(3),
+      b: notFound(3),
+      c: notFound(3),
+    };
+    let runner: InstanceType<typeof SelfImproveRunner>;
+    let dismissedMidRun = false;
+    runner = new SelfImproveRunner({
+      watcherDir: join(root, 'watcher'),
+      settings: () => ({ enabled: true, toolProblemBots: 3, everyHours: 24 }),
+      bots: () => bots,
+      // The operator dismisses while the run is reading the last bot.
+      readAudit: (id) => {
+        if (id === 'c' && !dismissedMidRun) {
+          dismissedMidRun = true;
+          runner.dismiss('file_read:file-not-found');
+        }
+        return audit[id] ?? [];
+      },
+      storeFor: (dir) => new LessonStore(dir),
+      log: () => {},
+      running: () => true,
+      killed: () => false,
+      now: () => NOW,
+    });
+    await runner.run();
+    expect(dismissedMidRun).toBe(true);
+    const status = runner.status();
+    expect(status.dismissed).toContain('file_read:file-not-found');
+    expect(status.last?.toolProblems ?? []).toEqual([]);
+    for (const b of bots) expect(read(b).suppressed).toEqual([]);
   });
 });

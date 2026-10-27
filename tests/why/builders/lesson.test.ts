@@ -37,10 +37,12 @@ describe('lessonToWhy', () => {
     expect(why.rule).toBe(
       'Kept only if the file-not-found failure rate of file_read drops by at least 50% after the lesson.'
     );
-    expect(why.related?.label).toBe('Calls that failed');
+    // Evidence can cite successful calls too (the writer is shown both), so
+    // the label never claims they all failed.
+    expect(why.related?.label).toBe('Calls the lesson cites');
     expect(why.related?.items).toEqual([
-      { text: 'file_read failed (file-not-found)', at: '2026-10-26T10:00:00.000Z' },
-      { text: 'file_read failed (file-not-found)', at: '2026-10-26T11:00:00.000Z' },
+      { text: 'file_read call', at: '2026-10-26T10:00:00.000Z' },
+      { text: 'file_read call', at: '2026-10-26T11:00:00.000Z' },
     ]);
     expect(why.outcome).toBe(
       'Active: in the prompt, being measured. Before: 40% (12 of 30 calls).'

@@ -88,6 +88,7 @@ function seedAuditFailures(): void {
       result: 'File not found: /app/productions/bot1/longlist.md',
       durationMs: 3,
       retryAttempts: 0,
+      cycleId: `c-prev-${i}`,
     });
   });
   for (const [i, line] of lines.entries()) {
@@ -96,7 +97,7 @@ function seedAuditFailures(): void {
   }
 }
 
-function makeLoop(opts: { enabled: boolean; mode?: string }) {
+function makeLoop(opts: { enabled: boolean; mode?: string; tenantFacade?: unknown }) {
   const soulLoader = {
     getDir: () => soulDir,
     readIdentity: () => 'id',
@@ -132,6 +133,7 @@ function makeLoop(opts: { enabled: boolean; mode?: string }) {
     id: 'bot1',
     name: 'Bot 1',
     agentLoop: { mode: opts.mode ?? 'periodic', selfImprove: { enabled: opts.enabled } },
+    ...(opts.tenantFacade ? { tenantId: 't1' } : {}),
   };
   const ctx: any = {
     config: {
@@ -165,6 +167,7 @@ function makeLoop(opts: { enabled: boolean; mode?: string }) {
     getSoulLoader: () => soulLoader,
     resolveBotId: (id: string) => id,
     activityStream: { publish: mock(() => {}) },
+    ...(opts.tenantFacade ? { tenantFacade: opts.tenantFacade } : {}),
   };
   const loop = new AgentLoop(
     ctx,
@@ -215,6 +218,21 @@ describe('agent loop: self-improvement', () => {
     expect(lessons[0]).toMatchObject({ classKey: 'file_read:file-not-found', cycleId });
     const entry = queryLog.find((e) => e.caller === 'self-improve');
     expect(entry).toMatchObject({ botId: 'bot1', cycleId, success: true });
+  });
+
+  test('a tenant bot: the lesson writer call is metered as one llm_request', async () => {
+    seedAuditFailures();
+    const recordUsage = mock(() => {});
+    const { loop } = makeLoop({
+      enabled: true,
+      tenantFacade: { isMultiTenant: () => true, checkQuota: () => true, recordUsage },
+    });
+    await loop.runOne('bot1');
+    const calls = recordUsage.mock.calls as unknown as unknown[][];
+    const metered = calls.filter((c) => c[2] === 'llm_request');
+    expect(metered).toHaveLength(1);
+    expect(metered[0].slice(0, 4)).toEqual(['t1', 'bot1', 'llm_request', 1]);
+    expect(metered[0][4]).toMatchObject({ caller: 'self-improve' });
   });
 
   test('off: nothing is written after the cycle', async () => {

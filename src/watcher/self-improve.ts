@@ -572,14 +572,34 @@ export class SelfImproveRunner {
       isDismissed: (k) => dismissed.has(k),
       previousToolProblems: state.last?.toolProblems.map((p) => p.classKey) ?? [],
     });
+    let saved = result;
     try {
-      // Re-read: a dismissal while the run read the fleet is kept.
+      // Re-read: a dismissal made while the run read the fleet wins. It leaves
+      // the saved result, and the suppression the run may have just written
+      // into the bots' files comes out again.
       const fresh = readSelfImproveState(this.deps.watcherDir);
-      writeSelfImproveState(this.deps.watcherDir, { dismissed: fresh.dismissed, last: result });
+      const late = fresh.dismissed.filter((k) => !dismissed.has(k));
+      if (late.length > 0) {
+        saved = {
+          ...result,
+          toolProblems: result.toolProblems.filter((p) => !late.includes(p.classKey)),
+        };
+        for (const b of bots) {
+          if (!b.loopOn) continue;
+          for (const k of late) {
+            try {
+              removeSuppression(this.deps.storeFor(b.soulDir), k);
+            } catch (err) {
+              this.deps.logger?.warn({ err, botId: b.id }, 'Watcher: could not lift a suppression');
+            }
+          }
+        }
+      }
+      writeSelfImproveState(this.deps.watcherDir, { dismissed: fresh.dismissed, last: saved });
     } catch (err) {
       this.deps.logger?.warn({ err }, 'Watcher: could not write self-improve.json');
     }
-    return { status: 'ran', result };
+    return { status: 'ran', result: saved };
   }
 
   /**

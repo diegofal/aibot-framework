@@ -79,7 +79,13 @@ describe('classifyFailure', () => {
     expect(
       classifyFailure(failed('exec', 'Command timed out after 30000 ms: npm run build --watch'))
         ?.key
-    ).toBe('exec:other:command-timed-out-after-ms-npm-ru');
+    ).toBe('exec:other:command-timed-out-after-ms-npm-run-bui');
+  });
+
+  test('numbers of different length do not split a class (digits go before the cut)', () => {
+    const a = classifyFailure(failed('exec', 'Command timed out after 30000 ms: npm run build'));
+    const b = classifyFailure(failed('exec', 'Command timed out after 3000000 ms: npm run build'));
+    expect(a?.key).toBe(b?.key as string);
   });
 
   test('two errors that differ only in numbers share a class', () => {

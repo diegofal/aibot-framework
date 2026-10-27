@@ -724,8 +724,19 @@ export class AgentLoop {
         botLogger
       );
       const abort = new AbortController();
+      // Tenant metering: one llm_request per writer call, answered or failed,
+      // like every curiosity call.
+      const meter = createTenantCallMeter({
+        botId,
+        getTenantId: () => this.ctx.config.bots.find((b) => b.id === botId)?.tenantId,
+        isMultiTenant: () => !!this.ctx.tenantFacade?.isMultiTenant(),
+        recordUsage: (tenantId, id, type, quantity, metadata) =>
+          this.ctx.tenantFacade?.recordUsage(tenantId, id, type, quantity, metadata),
+      });
       const generate = async (system: string, prompt: string): Promise<string> => {
         const startMs = Date.now();
+        const metered = (success: boolean) =>
+          meter(1, { caller: 'self-improve', success, ...(cycleId ? { cycleId } : {}) });
         const base = {
           botId,
           caller: SELF_IMPROVE_CALLER,
@@ -751,6 +762,7 @@ export class AgentLoop {
             durationMs: Date.now() - startMs,
             success: true,
           });
+          metered(true);
           return res.text;
         } catch (err) {
           this.appendQueryLog({
@@ -761,6 +773,7 @@ export class AgentLoop {
             success: false,
             error: err instanceof Error ? err.message : String(err),
           });
+          metered(false);
           throw err;
         }
       };
@@ -773,6 +786,7 @@ export class AgentLoop {
             nowMs: () => Date.now(),
             logger: botLogger,
             soulDir,
+            isCancelled: () => abort.signal.aborted,
           },
           { botId, cfg, ...(cycleId ? { cycleId } : {}) }
         ),

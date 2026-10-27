@@ -44,9 +44,11 @@ function namedClass(
 }
 
 function otherClass(result: string): string {
+  // Digits go before the cut: a longer number must not push different text
+  // into the slug and split one failure into two classes.
   const slug = result
-    .slice(0, SLUG_HEAD_CHARS)
     .replace(/\d/g, '')
+    .slice(0, SLUG_HEAD_CHARS)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
@@ -61,4 +63,14 @@ export function classifyFailure(
   const result = e.result ?? '';
   const errorClass = namedClass(result, e.failureKind) ?? otherClass(result);
   return { key: `${e.toolName}:${errorClass}`, tool: e.toolName, errorClass };
+}
+
+/**
+ * A call made inside an agent-loop cycle (`cycleId`, not a worker run): the
+ * only calls a lesson can reach, since lessons live in the planner and
+ * executor prompts. Conversation and worker calls never count, for detection
+ * or measurement.
+ */
+export function isLoopCall(e: Pick<ToolAuditEntry, 'cycleId' | 'runId'>): boolean {
+  return !!e.cycleId && !e.runId;
 }

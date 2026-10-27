@@ -39,6 +39,8 @@ function at(ms: number, over: Partial<ToolAuditEntry> = {}): ToolAuditEntry {
     result: NOT_FOUND,
     durationMs: 1,
     retryAttempts: 0,
+    // A call made inside an agent-loop cycle: the only calls a lesson can reach.
+    cycleId: 'c-1',
     ...over,
   };
 }
@@ -234,5 +236,26 @@ describe('evaluateLesson', () => {
     expect(
       evaluateLesson(lesson({ createdAt: 'yesterday' }), calls(CREATED, 0, 30), CFG, CREATED + DAY)
     ).toBeNull();
+  });
+});
+
+describe('only agent-loop calls are measured', () => {
+  test('conversation calls (no cycleId) and worker calls (runId) are left out of a rate', () => {
+    const cls = {
+      key: 'file_read:file-not-found',
+      tool: 'file_read',
+      errorClass: 'file-not-found',
+    };
+    const t0 = Date.parse('2026-10-20T00:00:00.000Z');
+    const entries = [
+      at(t0 + 1),
+      okAt(t0 + 2),
+      at(t0 + 3, { cycleId: undefined }),
+      at(t0 + 4, { cycleId: undefined, runId: 'wr-1' }),
+      at(t0 + 5, { runId: 'wr-2' }),
+    ];
+    const w = rateWindow(entries, cls, t0, t0 + 10);
+    expect(w.calls).toBe(2);
+    expect(w.failures).toBe(1);
   });
 });
