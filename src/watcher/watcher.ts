@@ -571,6 +571,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
         name: this.botName(bot.id),
         soulDir: resolveBotPaths(config, bot).soulDir,
         loopOn: resolveSelfImprove(config, bot).enabled,
+        maxActive: resolveSelfImprove(config, bot).maxActive,
       });
     }
     return out;

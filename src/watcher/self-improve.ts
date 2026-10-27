@@ -21,6 +21,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { classifyFailure } from '../bot/self-improve/classes';
+import { SELF_IMPROVE_DEFAULTS } from '../bot/self-improve/config';
 import { baselineFor } from '../bot/self-improve/measure';
 import {
   EVIDENCE_MAX,
@@ -59,6 +60,8 @@ export interface FleetSelfImproveBot {
   soulDir: string;
   /** The bot's own loop (`resolveSelfImprove(config, bot).enabled`). */
   loopOn: boolean;
+  /** Its prompt cap (`resolveSelfImprove(config, bot).maxActive`); absent = the default. */
+  maxActive?: number;
 }
 
 /** The part of `LessonStore` the run uses. */
@@ -304,6 +307,9 @@ export async function runFleetSelfImprove(
       if (taken.has(key) || problemKeys.has(key) || !present(v, key)) continue;
       if (suppressed.some((s) => s.classKey === key)) continue;
       if (hasRecentOrLive({ ...file, lessons: nextLessons }, key, nowMs)) continue;
+      // Never past the borrower's prompt cap: a lesson over it would be measured unseen.
+      const cap = v.bot.maxActive ?? SELF_IMPROVE_DEFAULTS.maxActive;
+      if (nextLessons.filter(isLessonInPrompt).length >= cap) continue;
       const row = v.failures.get(key);
       if (!row) continue;
       const ids = new Set(nextLessons.map((l) => l.id));

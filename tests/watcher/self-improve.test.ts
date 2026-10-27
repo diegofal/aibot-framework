@@ -310,6 +310,17 @@ describe('propagation', () => {
     expect(read(y).lessons).toHaveLength(1);
   });
 
+  test('never into a bot whose prompt is already at its maxActive', async () => {
+    const [x, y] = [bot('x'), { ...bot('y'), maxActive: 1 }];
+    seed(x, [lesson()]);
+    seed(y, [
+      lesson({ id: 'l-bbbbbbbb', classKey: 'manage_goals:note-too-long', status: 'active' }),
+    ]);
+    const r = await runFleetSelfImprove(deps([x, y], { y: notFound(3) }));
+    expect(r.borrowed).toEqual([]);
+    expect(read(y).lessons.map((l) => l.id)).toEqual(['l-bbbbbbbb']);
+  });
+
   test('never for a class suppressed in the borrower', async () => {
     const [x, y, b, c] = [bot('x'), bot('y'), bot('b'), bot('c')];
     seed(x, [lesson()]);

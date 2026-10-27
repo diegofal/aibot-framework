@@ -107,7 +107,8 @@ export async function runSelfImprove(
     }
     const afterEval = file.lessons.map((l) => {
       const e = evaluations.get(l.id);
-      return e ? { ...l, status: e.status } : l;
+      // Stamped now: a lesson retired in this run starts its cool-down now.
+      return e ? { ...l, status: e.status, updatedAt: nowIso } : l;
     });
 
     // c) Detect: at most one new lesson, only while there is room in the prompt.
@@ -165,7 +166,15 @@ export async function runSelfImprove(
           changed.push({ id: l.id, from: l.status, to: e.status, lesson: next });
         return next;
       });
-      if (created && !lessons.some((l) => isLessonInPrompt(l) && l.classKey === created.classKey)) {
+      // Re-checked on the file as it is now: the writer call may have taken a
+      // while, and the watcher may have suppressed the class or the prompt
+      // may have filled up meanwhile.
+      if (
+        created &&
+        !blockedClassKeys(lessons, cfg, nowMs).has(created.classKey) &&
+        !current.suppressed.some((sc) => sc.classKey === created.classKey) &&
+        lessons.filter(isLessonInPrompt).length < cfg.maxActive
+      ) {
         lessons.push(created);
         createdId = created.id;
       }

@@ -251,6 +251,54 @@ describe('runSelfImprove', () => {
     expect((await run(deps(notFound(5)).d)).created).toBeDefined();
   });
 
+  test('a lesson retired in this run cools its class down at once (old updatedAt)', async () => {
+    // Last touched 6 days ago, so its own updatedAt is outside the cool-down.
+    new LessonStore(soulDir).write({ version: 1, lessons: [lesson()], suppressed: [] });
+    const allFailing = Array.from({ length: 10 }, (_, i) => row(NOW - 5 * DAY + i * HOUR));
+    const r = await run(deps([...allFailing, ...notFound(5)]).d);
+    expect(r.changed?.map((c) => c.to)).toEqual(['retired']);
+    expect(r.created).toBeUndefined();
+    expect(new LessonStore(soulDir).read().lessons).toHaveLength(1);
+  });
+
+  test('a suppression written while the writer call is pending wins', async () => {
+    const store = new LessonStore(soulDir);
+    const generate = mock(async (system: string, prompt: string) => {
+      store.write({
+        version: 1,
+        lessons: [],
+        suppressed: [
+          { classKey: 'file_read:file-not-found', reason: 'tool problem', since: 'x', bots: [] },
+        ],
+      });
+      return goodGenerate(system, prompt);
+    });
+    const r = await run(deps(notFound(5), { generate }).d);
+    expect(r.created).toBeUndefined();
+    expect(store.read().lessons).toHaveLength(0);
+  });
+
+  test('the prompt filling up while the writer call is pending stops the new lesson', async () => {
+    const store = new LessonStore(soulDir);
+    const generate = mock(async (system: string, prompt: string) => {
+      store.write({
+        version: 1,
+        suppressed: [],
+        lessons: [1, 2].map((i) =>
+          lesson({
+            id: `l-0000000${i}`,
+            classKey: `manage_goals:x${i}`,
+            createdAt: new Date(NOW).toISOString(),
+          })
+        ),
+      });
+      return goodGenerate(system, prompt);
+    });
+    const r = await run(deps(notFound(5), { generate }).d, { maxActive: 2 });
+    expect(r.created).toBeUndefined();
+    expect(store.read().lessons).toHaveLength(2);
+  });
+
   describe('evaluation', () => {
     /** 10 file_read calls after the lesson, `failing` of them failing its class. */
     function callsAfter(failing: number): ToolAuditEntry[] {
