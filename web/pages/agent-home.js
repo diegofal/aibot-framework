@@ -18,6 +18,8 @@ import {
   homeKeyAction,
   homeTabs,
   karmaBody,
+  lessonsCardHtml,
+  lessonsUrl,
   needsYouStrip,
   presenceHeader,
   timelineBody,
@@ -376,6 +378,16 @@ async function mountMemoryHistory(box, id) {
   box.innerHTML = memoryHistoryBody(res, { botId: id });
 }
 
+/** Self-improvement lessons: their own request, like Memory history. */
+async function mountLessons(box, id) {
+  if (!box) return;
+  const res = await api(lessonsUrl(id)).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (!box.isConnected) return;
+  box.innerHTML = lessonsCardHtml(res, { nowMs: Date.now(), botId: id });
+}
+
 /** Active workers strip + task badges from `GET /api/agents/:id/workers`. */
 async function refreshWorkers(el, id) {
   const res = await api(`/api/agents/${encodeURIComponent(id)}/workers`).catch(() => null);
@@ -478,6 +490,14 @@ export async function renderAgentHome(el, id) {
           'Edits to its memory you did not make: consolidations, facts saved, hygiene fixes',
         body: `<div id="home-memory">${skeleton({ lines: 3 })}</div>`,
       })}
+    </div>
+    <div class="home-memory-row">
+      ${card({
+        title: 'Lessons',
+        subtitle:
+          'What it learned from its own repeated tool failures, and whether each lesson helped',
+        body: `<div id="home-lessons">${skeleton({ lines: 2 })}</div>`,
+      })}
     </div>`;
 
   wireActions(el, id, identity);
@@ -496,6 +516,7 @@ export async function renderAgentHome(el, id) {
   // request so a slow or missing curiosity state never holds the home back.
   mountMind(el.querySelector('#home-mind'), id);
   mountMemoryHistory(el.querySelector('#home-memory'), id);
+  mountLessons(el.querySelector('#home-lessons'), id);
   const startWorkersPoll = () => {
     if (!workersPoll) workersPoll = setInterval(() => refreshWorkers(el, id), WORKERS_POLL_MS);
   };

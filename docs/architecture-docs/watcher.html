@@ -103,6 +103,11 @@
         </div>
 
         <div class="card">
+          <h2>Self-improvement (on by default)</h2>
+          <p><code>src/watcher/self-improve.ts</code>, <code>watcher.selfImprove { enabled: true, toolProblemBots: 3, everyHours: 24 }</code>. Plan: <code>docs/plans/self-improve-plan.md</code>; the bot side is in <a href="agent-loop.html#self-improve">Agent Loop</a>. Checked hourly, run every <code>everyHours</code> while the watcher runs. Over every enabled, non-tenant bot's last 7 days of tool audit: a named failure class present (&ge; 2 failures) in <code>toolProblemBots</code> bots is a <strong>tool problem</strong> &mdash; a log row, a Needs You item (kind <code>watcher</code>, admin only) and a suppression in the <code>LESSONS.json</code> of every bot whose loop is on, so no bot learns to work around a bug; <code>other:*</code> classes never count. A <code>proven</code> own lesson is <strong>lent</strong> to other bots whose loop is on and that show the same class (once per bot and class in 7 days), measured on its own there. State in <code>self-improve.json</code> (<code>last</code>, <code>dismissed</code>). The weekly self-study digest gains per-bot lesson counts and the tool-problem keys (code names only). Routes: <code>GET</code> / <code>POST /api/watcher/self-improve</code>, <code>POST /api/watcher/self-improve/tool-problems/:classKey/dismiss</code>.</p>
+        </div>
+
+        <div class="card">
           <h2>State on disk (<code>&lt;paths.data&gt;/watcher/</code>)</h2>
           <pre><code>neurons.jsonl  edges.jsonl  embeddings.jsonl  graph.json   # append-only, compacted
 log/YYYY-MM-DD.jsonl                                       # first-person log, written by code

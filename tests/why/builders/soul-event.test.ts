@@ -135,4 +135,27 @@ describe('soulEventToWhy', () => {
     expect(why.what).toBe('Memory edited (other)');
     expect(why.by).toBeUndefined();
   });
+
+  it('lesson: a self-improvement lesson, the measurement rule, details not read as daily logs', () => {
+    const why = soulEventToWhy({
+      botId: 'b1',
+      event: base({
+        file: 'LESSONS.json',
+        op: 'lesson',
+        actor: 'agent',
+        summary: 'Lesson created for file_read file-not-found.',
+        detail: ['l-0000abcd'],
+        cycleId: 'c1',
+      }),
+    });
+    valid(why);
+    expect(why.what).toBe('Self-improvement lesson');
+    expect(why.by).toBe('agent');
+    expect(why.rule).toContain('fails the same way');
+    expect(why.rule).toContain('kept only if');
+    expect(why.outcome).toBe('Lesson created for file_read file-not-found.');
+    expect(why.notes).toContainEqual({ label: 'File', text: 'LESSONS.json' });
+    expect(why.notes).toContainEqual({ label: 'Details', text: 'l-0000abcd' });
+    expect(why.notes?.some((n) => n.label === 'Daily logs')).toBe(false);
+  });
 });

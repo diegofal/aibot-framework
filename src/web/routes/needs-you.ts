@@ -209,6 +209,15 @@ export interface NeedsYouSources {
    * the hash of the proposal the operator read on the watcher page (C3, C7).
    */
   watcherProposals?: () => Proposal[];
+  /**
+   * The watcher's self-improvement tool problems (admin-only, kind `watcher`):
+   * the last fleet run's (`self-improve.json`), dismissed ones already left out.
+   * Dismissed on the watcher page, never from here.
+   */
+  watcherToolProblems?: () => {
+    ranAt: string;
+    toolProblems: Array<{ classKey: string; bots: Array<{ id: string; failures: number }> }>;
+  } | null;
 }
 
 /**
@@ -1094,6 +1103,45 @@ function buildWatcherProposals(ctx: BuildContext, sources: NeedsYouSources): Nee
   });
 }
 
+function buildWatcherToolProblems(ctx: BuildContext, sources: NeedsYouSources): NeedsYouItem[] {
+  // The watcher sees the whole fleet: admin / single-tenant only, like its proposals.
+  if (!ctx.admin || !sources.watcherToolProblems) return [];
+  let last: ReturnType<NonNullable<NeedsYouSources['watcherToolProblems']>> = null;
+  try {
+    last = sources.watcherToolProblems();
+  } catch (err) {
+    ctx.logger.warn({ err, source: 'watcherToolProblems' }, 'needs-you: source failed, skipping');
+    return [];
+  }
+  if (!last || !Array.isArray(last.toolProblems)) return [];
+  const ranAt = last.ranAt;
+  return safeMap(ctx, 'watcherToolProblems', last.toolProblems, (p) => {
+    if (typeof p?.classKey !== 'string' || !p.classKey) return null;
+    const i = p.classKey.indexOf(':');
+    const tool = i > 0 ? p.classKey.slice(0, i) : p.classKey;
+    const cls = i > 0 ? p.classKey.slice(i + 1) : '';
+    const bots = Array.isArray(p.bots) ? p.bots : [];
+    const counts = bots.map((b) => `${ctx.nameOf(str(b?.id))} ${Number(b?.failures) || 0}`);
+    return {
+      id: `watcher:tool-problem:${p.classKey}`,
+      kind: 'watcher',
+      botId: WATCHER_ITEM_BOT_ID,
+      botName: 'Watcher',
+      title: truncate(`Tool problem: ${tool}${cls ? ` ${cls}` : ''} in ${bots.length} bots`),
+      body: [
+        `The same failure shows up in ${bots.length} bots this week, so it is the tool, not a habit. Failures per bot: ${counts.join(', ')}.`,
+        'No bot gets a lesson for it while this is open. Fix the tool, then dismiss it on the watcher page.',
+      ].join('\n\n'),
+      options: null,
+      createdAt: toIso(ranAt, ctx.nowMs),
+      urgency: 'low',
+      actions: [],
+      href: '#/watcher',
+      meta: { toolProblem: p.classKey, tool },
+    };
+  });
+}
+
 // ─── composition ───
 
 /**
@@ -1126,6 +1174,7 @@ export function buildNeedsYou(
     ...buildFeedback(ctx, s),
     ...buildTools(ctx, s),
     ...buildWatcherProposals(ctx, s),
+    ...buildWatcherToolProblems(ctx, s),
   ]);
   // Only items that survived mapping: a row safeMap skipped never costs a read.
   const listed = new Set(items);

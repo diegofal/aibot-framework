@@ -1,7 +1,7 @@
 /**
  * Why for one edit to a bot's memory or soul files (`soul-events.jsonl`,
  * `src/bot/soul-events.ts`): memory consolidation, facts saved by a memory
- * flush, hygiene fixes. Everything comes from the row written at the time:
+ * flush, hygiene fixes, self-improvement lessons. Everything comes from the row written at the time:
  * the heads of what was added or dropped, the conversation, the hygiene run,
  * the backup. Pure.
  */
@@ -21,6 +21,7 @@ const WHAT: Record<string, string> = {
   'consolidate-rejected': 'Memory consolidation rejected',
   'facts-saved': 'Facts saved from a conversation',
   'hygiene-fix': 'Hygiene fix',
+  lesson: 'Self-improvement lesson',
 };
 
 const ACTORS: Record<string, WhyActor> = {
@@ -55,6 +56,8 @@ function ruleOf(e: SoulEvent): string | undefined {
       return 'A consolidation is refused when its output lacks the header or would shrink MEMORY.md by more than half.';
     case 'facts-saved':
       return flushRule(e);
+    case 'lesson':
+      return 'A lesson is written when a tool fails the same way again and again, and kept only if that failure rate drops after it.';
     default:
       return undefined;
   }
@@ -101,7 +104,9 @@ export function soulEventToWhy(input: SoulEventWhyInput): Why {
 
   const notes: Array<{ label: string; text: string }> = [];
   if (e.file) notes.push({ label: 'File', text: e.file });
-  if (e.op !== 'hygiene-fix' && e.detail?.length)
+  if (e.op === 'lesson' && e.detail?.length)
+    notes.push({ label: 'Details', text: e.detail.join(', ') });
+  else if (e.op !== 'hygiene-fix' && e.detail?.length)
     notes.push({ label: 'Daily logs', text: e.detail.join(', ') });
   if (e.conversation) notes.push({ label: 'Conversation', text: e.conversation });
   if (e.observedAt) notes.push({ label: 'Said on', text: e.observedAt });

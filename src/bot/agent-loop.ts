@@ -15,7 +15,9 @@ import type { Logger } from '../logger';
 import type { ChatMessage } from '../ollama';
 import { type DocumentSize, LIVING_DOC_DEFAULTS, listDocuments } from '../productions/living-docs';
 import { loopIntervalMs } from '../stats/goal-activity';
+import { resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
+import { readToolEntries } from '../stats/readers/tool-audit';
 import { isTenantBot } from '../tenant/tenant-scoping';
 import { editGoal, parseGoals, startGoal } from '../tools/goals';
 import { resolveProactiveLimits } from '../tools/send-proactive-message';
@@ -106,6 +108,10 @@ import {
 import { runExecutorTurn } from './executor-turn';
 import { usageExtras } from './llm-query-log';
 import type { LlmQueryEntry } from './llm-query-log';
+import { resolveSelfImprove } from './self-improve/config';
+import { type SelfImproveRunResult, runSelfImprove } from './self-improve/runner';
+import { LessonStore } from './self-improve/store';
+import type { Lesson } from './self-improve/types';
 import type { SystemPromptBuilder } from './system-prompt-builder';
 import { toolEndToAuditEntry } from './tool-audit-log';
 import { type ToolExecutionRecord, ToolExecutor } from './tool-executor';
@@ -297,6 +303,13 @@ export function dispatchOnlySummary(acted: { added: number; dispatched: number }
 
 /** Upper bound for the post-cycle curiosity step (extractor + editor + delivery). */
 const CURIOSITY_FINISH_TIMEOUT_MS = 120_000;
+
+/** Upper bound for the post-cycle self-improvement step (measure + one writer call). */
+const SELF_IMPROVE_TIMEOUT_MS = 60_000;
+/** The lesson writer wants a plain, repeatable sentence. */
+const SELF_IMPROVE_TEMPERATURE = 0.2;
+/** Query-log caller of the lesson writer. */
+const SELF_IMPROVE_CALLER: LlmQueryEntry['caller'] = 'self-improve';
 
 /** Resolve `p`, or `fallback` after `ms` — the timer never outlives the race. */
 async function raceTimeout<T>(
@@ -661,6 +674,119 @@ export class AgentLoop {
     });
     const model = resolvePlannerModel(backend, botConfig, this.ctx.config, activeModel);
     return { backend, client, model };
+  }
+
+  /**
+   * The bot's lessons for the planner and executor prompts
+   * (`src/bot/self-improve/`); undefined when its self-improvement is off or
+   * there is nothing to show. Never throws.
+   */
+  private lessonsForPrompt(
+    botConfig: BotConfig,
+    soulLoader: { getDir?: () => string }
+  ): Lesson[] | undefined {
+    const cfg = resolveSelfImprove(this.ctx.config, botConfig);
+    if (!cfg.enabled) return undefined;
+    try {
+      const dir = soulLoader.getDir?.();
+      if (!dir) return undefined;
+      const lessons = new LessonStore(dir).inPrompt(cfg.maxActive);
+      return lessons.length > 0 ? lessons : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Post-cycle self-improvement (`runSelfImprove`), when the bot has it on.
+   * The writer runs on the planner backend and is logged as `self-improve`
+   * under the cycle. Bounded by `SELF_IMPROVE_TIMEOUT_MS`: on timeout the
+   * writer call is aborted and the cycle goes on. Never throws.
+   */
+  private async runSelfImproveStep(
+    botId: string,
+    botConfig: BotConfig,
+    botLogger: Logger
+  ): Promise<SelfImproveRunResult | null> {
+    try {
+      const cfg = resolveSelfImprove(this.ctx.config, botConfig);
+      if (!cfg.enabled) return null;
+      // `?.` on getDir: test doubles of the soul loader may not have it.
+      const soulDir = this.ctx.soulLoaders.get(botId)?.getDir?.();
+      if (!soulDir) return null;
+      const cycleId = this.cycleAttribution.get(botId)?.cycleId;
+      const auditDir = resolveStatsDirs(this.ctx.config).toolAudit;
+      const planner = this.resolvePlannerLLM(
+        botId,
+        botConfig,
+        this.ctx.getLLMClient(botId),
+        this.ctx.getActiveModel(botId),
+        botLogger
+      );
+      const abort = new AbortController();
+      const generate = async (system: string, prompt: string): Promise<string> => {
+        const startMs = Date.now();
+        const base = {
+          botId,
+          caller: SELF_IMPROVE_CALLER,
+          backend: planner.backend,
+          temperature: SELF_IMPROVE_TEMPERATURE,
+          ...(cycleId ? { cycleId } : {}),
+        };
+        try {
+          const res = await planner.client.generate(prompt, {
+            system,
+            model: planner.model,
+            temperature: SELF_IMPROVE_TEMPERATURE,
+            signal: abort.signal,
+          });
+          this.appendQueryLog({
+            ...base,
+            timestamp: new Date().toISOString(),
+            model: res.usage?.model ?? planner.model,
+            promptTokens: res.usage?.promptTokens,
+            completionTokens: res.usage?.completionTokens,
+            ...usageExtras(res.usage),
+            totalTokens: res.usage?.totalTokens,
+            durationMs: Date.now() - startMs,
+            success: true,
+          });
+          return res.text;
+        } catch (err) {
+          this.appendQueryLog({
+            ...base,
+            timestamp: new Date().toISOString(),
+            model: planner.model,
+            durationMs: Date.now() - startMs,
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+      };
+      return await raceTimeout(
+        runSelfImprove(
+          {
+            store: new LessonStore(soulDir),
+            readAudit: (sinceMs, nowMs) => readToolEntries(auditDir, botId, sinceMs, nowMs),
+            generate,
+            nowMs: () => Date.now(),
+            logger: botLogger,
+            soulDir,
+          },
+          { botId, cfg, ...(cycleId ? { cycleId } : {}) }
+        ),
+        SELF_IMPROVE_TIMEOUT_MS,
+        { ok: false, error: 'timeout' },
+        () => {
+          abort.abort();
+          botLogger.warn({ botId }, 'Self-improve: timed out, cycle continues without');
+        }
+      );
+    } catch (err) {
+      botLogger.warn({ botId, err }, 'Self-improve: step failed, cycle continues');
+      return null;
+    }
   }
 
   setKarmaService(karmaService: KarmaService): void {
@@ -1675,6 +1801,10 @@ export class AgentLoop {
         if (surprise) this.ctx.activityStream?.publish(surprise);
       }
 
+      // Self-improvement: measure the bot's lessons, maybe write one for a
+      // failure class that kept repeating. Bounded; never fails the cycle.
+      await this.runSelfImproveStep(botId, botConfig, botLogger);
+
       // Record agent loop usage for tenant metering
       if (botConfig.tenantId && this.ctx.tenantFacade?.isMultiTenant() && !isIdle) {
         // Count LLM calls: planner + executor + optional strategist
@@ -1795,6 +1925,9 @@ export class AgentLoop {
         strategistRan: false,
       };
     }
+
+    // Self-improvement lessons for the planner and executor (read once per cycle).
+    const lessons = this.lessonsForPrompt(botConfig, soulLoader);
 
     const llmClient = this.ctx.getLLMClient(botId);
     const model = this.ctx.getActiveModel(botId);
@@ -2375,6 +2508,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        lessons,
         chatReplies,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
@@ -2500,6 +2634,7 @@ export class AgentLoop {
         toolCategoryList,
         allowedWritePaths,
         directives: directives.length > 0 ? directives : undefined,
+        lessons,
         chatReplies,
         activeUsersSummary: activeUsersSummary || undefined,
         engagementGateNote,
@@ -2800,6 +2935,7 @@ export class AgentLoop {
       workDir: agentConfig.workDir,
       fileTree,
       directives: directives.length > 0 ? directives : undefined,
+      lessons,
       chatReplies,
       productionsEnabled,
       documents: productionsEnabled ? this.livingDocuments(botId) : undefined,

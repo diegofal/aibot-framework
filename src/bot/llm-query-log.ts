@@ -21,6 +21,7 @@ export interface LlmQueryEntry {
     | 'curiosity:extractor'
     | 'curiosity:editor'
     | 'worker'
+    | 'self-improve'
     | 'watcher:notice'
     | 'watcher:integrate'
     | 'watcher:introspect'

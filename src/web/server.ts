@@ -388,6 +388,14 @@ export function startWebServer(deps: WebServerDeps): void {
         ...needsYouSourcesFromBotManager(deps.botManager),
         // The route keeps only pending proposals, and only for admin or single-tenant callers.
         ...(deps.autonomy ? { watcherProposals: () => deps.autonomy?.list().proposals ?? [] } : {}),
+        // Tool problems the watcher's self-improvement loop found (admin only in the route);
+        // nothing while the watcher is off, so an old state file never shows.
+        ...(deps.watcher
+          ? {
+              watcherToolProblems: () =>
+                config.watcher?.enabled ? (deps.watcher?.selfImproveStatus().last ?? null) : null,
+            }
+          : {}),
       },
       actions: needsYouActionsFromBotManager(deps.botManager),
       readCycles,

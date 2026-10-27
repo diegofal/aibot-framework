@@ -16,6 +16,7 @@ import { frontierItemToWhy } from './frontier';
 import { goalEventToWhy } from './goal-event';
 import { idleToWhy } from './idle';
 import { karmaEventToWhy } from './karma';
+import { lessonEntryToWhy } from './lesson';
 import { permissionToWhy } from './permission';
 import { postureToWhy } from './posture';
 import { proactiveToWhy } from './proactive';
@@ -50,6 +51,7 @@ export const WHY_BUILDERS = {
   workerRun: workerRunToWhy,
   neuron: neuronToWhy,
   broadcast: broadcastToWhy,
+  lesson: lessonEntryToWhy,
 } as const;
 
 export type WhyBuilderName = keyof typeof WHY_BUILDERS;

@@ -311,6 +311,27 @@ const FIXTURES: { [K in WhyBuilderName]: Parameters<(typeof WHY_BUILDERS)[K]>[0]
     },
     cycle: { cycleId: 'c1', startedAt: '2026-10-12T09:59:00Z', planSummary: 'P' },
   },
+  lesson: {
+    botId: 'b1',
+    lesson: {
+      id: 'l-0000abcd',
+      classKey: 'file_read:file-not-found',
+      tool: 'file_read',
+      errorClass: 'file-not-found',
+      text: 'Use the full path.',
+      textSource: 'fallback',
+      evidence: ['2026-10-26T10:00:00.000Z|file_read'],
+      source: 'borrowed',
+      borrowedFrom: { botId: 'b2', lessonId: 'l-11112222' },
+      status: 'proven',
+      statusReason: 'r',
+      createdAt: '2026-10-26T12:00:00.000Z',
+      updatedAt: '2026-10-27T12:00:00.000Z',
+      cycleId: 'c1',
+      baseline: { failures: 4, calls: 10, rate: 0.4, sinceMs: 0, untilMs: 1 },
+      measure: { failures: 0, calls: 20, rate: 0, sinceMs: 1, untilMs: 2 },
+    },
+  },
 };
 
 describe('Why contract', () => {
