@@ -102,6 +102,15 @@ export function evaluateLesson(
     };
   }
 
+  // No failures before the lesson: nothing to improve on, so never proven.
+  if (lesson.baseline.failures === 0) {
+    return {
+      status: 'unproven',
+      statusReason: 'no failures of this class before the lesson: nothing to measure',
+      measure,
+      extended,
+    };
+  }
   const change = `failure rate ${pct(lesson.baseline.rate)} → ${pct(measure.rate)} over ${measure.calls} calls`;
   if (measure.rate <= lesson.baseline.rate * (1 - cfg.minDrop)) {
     return { status: 'proven', statusReason: change, measure, extended };

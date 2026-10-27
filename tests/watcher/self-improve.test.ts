@@ -311,6 +311,17 @@ describe('propagation', () => {
     expect(read(y).lessons).toHaveLength(1);
   });
 
+  test('never into a bot whose failures of the class are all outside its cycles', async () => {
+    // Conversation calls (no cycleId) never see a lesson: the class is not
+    // present for borrowing, and a borrowed lesson would start from 0.
+    const [x, y] = [bot('x'), bot('y')];
+    seed(x, [lesson()]);
+    const conversationOnly = notFound(4).map((e) => ({ ...e, cycleId: undefined }));
+    const r = await runFleetSelfImprove(deps([x, y], { y: conversationOnly }));
+    expect(r.borrowed).toEqual([]);
+    expect(read(y).lessons).toEqual([]);
+  });
+
   test('never into a bot whose prompt is already at its maxActive', async () => {
     const [x, y] = [bot('x'), { ...bot('y'), maxActive: 1 }];
     seed(x, [lesson()]);

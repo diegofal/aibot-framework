@@ -211,25 +211,27 @@ describe('evaluateLesson', () => {
     expect(r?.statusReason).toBe('too few calls to tell after two windows (4)');
   });
 
-  test('a baseline of 0 is proven when the class does not appear', () => {
+  // A lesson with no failures before it has nothing to improve on: it can
+  // never be proven (review round 2 on #29), whatever happens after.
+  test('a baseline of 0 is unproven when the class does not appear', () => {
     const r = evaluateLesson(
       lesson({ baseline: ZERO_BASELINE }),
       calls(CREATED, 0, 20),
       CFG,
       CREATED + DAY
     );
-    expect(r?.status).toBe('proven');
+    expect(r?.status).toBe('unproven');
+    expect(r?.statusReason).toBe('no failures of this class before the lesson: nothing to measure');
   });
 
-  test('a baseline of 0 is retired when the class appears', () => {
+  test('a baseline of 0 is unproven when the class appears too', () => {
     const r = evaluateLesson(
       lesson({ baseline: ZERO_BASELINE }),
       calls(CREATED, 1, 19),
       CFG,
       CREATED + DAY
     );
-    expect(r?.status).toBe('retired');
-    expect(r?.statusReason).toBe('failure rate 0% → 5% over 20 calls, did not drop by 50%');
+    expect(r?.status).toBe('unproven');
   });
 
   test('an unparseable createdAt is not evaluated', () => {

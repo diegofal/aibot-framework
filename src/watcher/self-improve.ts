@@ -20,7 +20,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { classifyFailure } from '../bot/self-improve/classes';
+import { classifyFailure, isLoopCall } from '../bot/self-improve/classes';
 import { SELF_IMPROVE_DEFAULTS } from '../bot/self-improve/config';
 import { baselineFor } from '../bot/self-improve/measure';
 import {
@@ -304,7 +304,7 @@ export async function runFleetSelfImprove(
     for (const { from, lesson } of lenders) {
       if (from.bot.id === v.bot.id) continue;
       const key = lesson.classKey;
-      if (taken.has(key) || problemKeys.has(key) || !present(v, key)) continue;
+      if (taken.has(key) || problemKeys.has(key)) continue;
       if (suppressed.some((s) => s.classKey === key)) continue;
       if (hasRecentOrLive({ ...file, lessons: nextLessons }, key, nowMs)) continue;
       // Never past the borrower's prompt cap: a lesson over it would be measured unseen.
@@ -312,6 +312,13 @@ export async function runFleetSelfImprove(
       if (nextLessons.filter(isLessonInPrompt).length >= cap) continue;
       const row = v.failures.get(key);
       if (!row) continue;
+      // Borrowing counts only the borrower's own cycle calls (tool problems
+      // count every context): a lesson can only reach a cycle, and a lesson
+      // that starts from a baseline of no failures could never be measured.
+      const loopFailures = row.entries.filter(isLoopCall);
+      if (loopFailures.length < PRESENT_MIN_FAILURES) continue;
+      const baseline = baselineFor(v.entries, row.cls, nowMs);
+      if (baseline.failures === 0) continue;
       const ids = new Set(nextLessons.map((l) => l.id));
       let id = deps.newId?.() ?? newLessonId();
       while (ids.has(id)) id = newLessonId();
@@ -322,13 +329,13 @@ export async function runFleetSelfImprove(
         errorClass: lesson.errorClass,
         text: lesson.text,
         textSource: lesson.textSource,
-        evidence: row.entries.slice(0, EVIDENCE_MAX).map(auditRowRef),
+        evidence: loopFailures.slice(0, EVIDENCE_MAX).map(auditRowRef),
         source: 'borrowed',
         borrowedFrom: { botId: from.bot.id, lessonId: lesson.id },
         status: 'active',
         createdAt: at,
         updatedAt: at,
-        baseline: baselineFor(v.entries, row.cls, nowMs),
+        baseline,
       };
       nextLessons.push(lent);
       mine.push({ lesson: lent, from });
