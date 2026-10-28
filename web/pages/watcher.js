@@ -960,6 +960,9 @@ async function refreshSlow() {
     api('/api/watcher/metrics?window=7d').catch(() => null),
     api(`/api/watcher/broadcasts?limit=${BROADCAST_LIMIT}`).catch(() => null),
     refreshEmbedding(),
+    // Approvals and the mind's bots change outside this page (review #30);
+    // unsaved brief edits are kept and the card never redraws under typing.
+    refreshRoster(),
   ]);
   if (page !== mine || !page) return;
   if (metrics && !metrics.error) page.metrics = metrics;

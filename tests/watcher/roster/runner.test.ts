@@ -239,6 +239,47 @@ describe('RosterRunner.run', () => {
     expect(readRosterState(join(root, 'watcher'))).toEqual({});
   });
 
+  test('a brief saved during the call discards the answer and stays due (review #30)', async () => {
+    saveBrief();
+    const r = await new RosterRunner(
+      deps({
+        client: () => ({
+          tier: 'integrate',
+          model: 'opus',
+          backend: 'claude-cli',
+          chat: async () => {
+            calls++;
+            writeBrief(
+              join(root, 'watcher'),
+              {
+                wants: [
+                  {
+                    id: 'w-bbbbbb',
+                    what: 'Something else',
+                    cadence: '',
+                    delivery: '',
+                    success: '',
+                  },
+                ],
+                notes: '',
+              },
+              now + 1000
+            );
+            return answer;
+          },
+        }),
+      })
+    ).run('manual');
+    expect(r.status === 'ran' && r.outcome).toMatchObject({
+      status: 'nothing',
+      reason: 'The brief changed during the run',
+    });
+    expect(store.list()).toEqual([]);
+    const state = readRosterState(join(root, 'watcher'));
+    expect(state.briefSeen).toBeUndefined();
+    expect(state.lastRunAt).toBeDefined();
+  });
+
   test('unavailable: asleep, killed, off, no proposal store', async () => {
     const reasons = await Promise.all(
       [

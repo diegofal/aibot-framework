@@ -578,10 +578,16 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       settings: () => this.cfg().roster ?? ROSTER_DEFAULTS,
       config: () => this.deps.config(),
       store: () => this.deps.agentProposals?.(),
-      // Designing a roster is rare and consequential: the integrate tier, else notice.
-      client: () =>
-        this.tierClient('integrate', 'watcher:roster') ??
-        this.tierClient('notice', 'watcher:roster'),
+      // Designing a roster is rare and consequential: the integrate tier, else
+      // notice; only a tier switched on in the live config.
+      client: () => {
+        const cfg = this.cfg();
+        if (cfg.integrate.enabled) {
+          const c = this.tierClient('integrate', 'watcher:roster');
+          if (c) return c;
+        }
+        return cfg.notice.enabled ? this.tierClient('notice', 'watcher:roster') : undefined;
+      },
       mind: () => ({ counts: this.graph.counts(), broadcasts7d: this.broadcasts7d() }),
       botOutcome: (botId, sinceMs) => this.rosterBotOutcome(botId, sinceMs),
       presets: () =>

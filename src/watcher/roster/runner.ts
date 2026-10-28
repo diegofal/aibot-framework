@@ -355,6 +355,20 @@ export class RosterRunner {
       ...(brief.updatedAt ? { briefSeen: brief.updatedAt } : {}),
     };
 
+    // The brief is what authorises a proposal: one saved during the call
+    // voids the answer, and the run stays due for the new brief.
+    if (readBrief(this.deps.watcherDir).updatedAt !== brief.updatedAt) {
+      this.deps.log(
+        'roster:stale',
+        'The brief changed while I was designing; I set the answer aside.'
+      );
+      const { briefSeen: _seen, ...unseen } = ran;
+      return finish(
+        { ...base, ...paid, status: 'nothing', reason: 'The brief changed during the run' },
+        { ...unseen, briefSeen: readRosterState(this.deps.watcherDir).briefSeen }
+      );
+    }
+
     const answer = parseRosterAnswer(res.text);
     if (!answer) {
       this.deps.log(

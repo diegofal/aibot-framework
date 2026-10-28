@@ -40,11 +40,22 @@ export function parseResetMindArgs(argv: string[]): ResetMindArgs {
   };
 }
 
-/** `paths.data` from the raw config (no env expansion needed), resolved against the cwd. */
+/**
+ * `paths.data` from the raw config, resolved against the cwd. `${VAR}`
+ * references are expanded the way `loadConfig` does; one to an unset
+ * variable is refused, never resolved literally (that would turn the bots
+ * off and archive no watcher).
+ */
 export function dataDirOf(configPath: string): string {
   const raw = JSON.parse(readFileSync(configPath, 'utf-8')) as { paths?: { data?: unknown } };
   const data = typeof raw.paths?.data === 'string' ? raw.paths.data : './data';
-  return resolve(data);
+  const expanded = data.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
+    const value = process.env[name];
+    if (value === undefined || value === '')
+      throw new Error(`paths.data references \${${name}}, but ${name} is not set`);
+    return value;
+  });
+  return resolve(expanded);
 }
 
 function main(argv: string[]): void {

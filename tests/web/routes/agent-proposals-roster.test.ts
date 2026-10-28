@@ -14,7 +14,10 @@ import type { Logger } from '../../../src/logger';
 import { AgentProposalStore } from '../../../src/tools/agent-proposal-store';
 import { parseGoals } from '../../../src/tools/goals';
 import { WATCHER_PROPOSER } from '../../../src/watcher/roster/types';
-import { agentProposalRoutes } from '../../../src/web/routes/agent-proposals';
+import {
+  agentProposalRoutes,
+  proposalGoalsMarkdown,
+} from '../../../src/web/routes/agent-proposals';
 
 const noopLogger: Logger = {
   info: () => {},
@@ -57,6 +60,42 @@ function makeApp() {
   );
   return { app, store, config };
 }
+
+describe('proposalGoalsMarkdown (review #30)', () => {
+  const base = {
+    agentId: 'x-one',
+    agentName: 'X',
+    role: 'r',
+    personalityDescription: '',
+    skills: [],
+    justification: '',
+    proposedBy: WATCHER_PROPOSER,
+    status: 'pending' as const,
+    id: 'p',
+    createdAt: '',
+    updatedAt: '',
+    goals: ['Do it'],
+  };
+
+  test('long wants never push the kill criterion out of the note', () => {
+    const md = proposalGoalsMarkdown({
+      ...base,
+      serves: [
+        { id: 'w-aaaaaa', what: 'a'.repeat(300) },
+        { id: 'w-bbbbbb', what: 'b'.repeat(300) },
+      ],
+      killCriterion: 'No role opened in two weeks',
+    });
+    const [goal] = parseGoals(md).active;
+    expect(goal.notes).toContain('Kill if: No role opened in two weeks');
+    expect((goal.notes ?? '').length).toBeLessThanOrEqual(500);
+  });
+
+  test('the delivery channel reaches the bot in its first goal', () => {
+    const md = proposalGoalsMarkdown({ ...base, delivery: 'Telegram' });
+    expect(parseGoals(md).active[0].notes).toContain('Deliver via: Telegram');
+  });
+});
 
 describe('approving a mind proposal', () => {
   test('writes the goals as the operator’s, applies the preset, keeps the bot off', async () => {

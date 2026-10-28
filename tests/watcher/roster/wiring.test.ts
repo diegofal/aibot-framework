@@ -60,7 +60,13 @@ function make(opts: { proposals?: boolean; integrate?: boolean } = {}) {
     paths: { data: join(root, 'data') },
     soul: {},
     operator: {},
-    watcher: { ...WATCHER_DEFAULTS, enabled: true },
+    // Both tiers on, as on the live fleet (`WATCHER_DEFAULTS` has them off).
+    watcher: {
+      ...WATCHER_DEFAULTS,
+      enabled: true,
+      notice: { ...WATCHER_DEFAULTS.notice, enabled: true },
+      integrate: { ...WATCHER_DEFAULTS.integrate, enabled: true },
+    },
   } as unknown as Config;
   const store =
     opts.proposals === false ? undefined : new AgentProposalStore(join(root, 'agent-proposals'));
@@ -146,6 +152,32 @@ describe('the Watcher designs a roster', () => {
     const r = await watcher.rosterNow();
     expect(r.status === 'ran' && r.outcome.status).toBe('proposed');
     expect(entries.find((e) => e.caller === 'watcher:roster')?.model).toBe('claude-haiku-5-5');
+    await watcher.stop();
+  });
+
+  test('integrate switched off in the live config: the notice tier designs (review #30)', async () => {
+    const { watcher, config, entries, setReply } = make();
+    const w = config.watcher as { integrate: { enabled: boolean } };
+    w.integrate = { ...w.integrate, enabled: false };
+    await watcher.start();
+    const saved = watcher.saveBrief(briefBody);
+    if (!saved.ok) throw new Error(saved.error);
+    setReply(saved.brief.wants[0].id);
+    await watcher.rosterNow();
+    expect(entries.find((e) => e.caller === 'watcher:roster')?.model).toBe('claude-haiku-5-5');
+    await watcher.stop();
+  });
+
+  test('both tiers switched off: refused without a call', async () => {
+    const { watcher, config, entries } = make();
+    const w = config.watcher as { integrate: { enabled: boolean }; notice: { enabled: boolean } };
+    w.integrate = { ...w.integrate, enabled: false };
+    w.notice = { ...w.notice, enabled: false };
+    await watcher.start();
+    watcher.saveBrief(briefBody);
+    const r = await watcher.rosterNow();
+    expect(r.status === 'ran' && r.outcome.status).toBe('refused');
+    expect(entries.some((e) => e.caller === 'watcher:roster')).toBe(false);
     await watcher.stop();
   });
 

@@ -27,6 +27,27 @@ describe('parseResetMindArgs', () => {
   });
 });
 
+describe('dataDirOf with ${VAR} references (review #30)', () => {
+  test('expands a reference the way loadConfig does', () => {
+    root = mkdtempSync(join(tmpdir(), 'reset-mind-'));
+    const path = join(root, 'c.json');
+    writeFileSync(path, JSON.stringify({ paths: { data: '${RESET_MIND_TEST_DATA}/x' } }));
+    process.env.RESET_MIND_TEST_DATA = '/srv/live';
+    try {
+      expect(dataDirOf(path)).toBe(resolve('/srv/live/x'));
+    } finally {
+      delete process.env.RESET_MIND_TEST_DATA;
+    }
+  });
+
+  test('refuses a reference to an unset variable instead of resolving it literally', () => {
+    root = mkdtempSync(join(tmpdir(), 'reset-mind-'));
+    const path = join(root, 'c.json');
+    writeFileSync(path, JSON.stringify({ paths: { data: '${RESET_MIND_TEST_UNSET}' } }));
+    expect(() => dataDirOf(path)).toThrow(/RESET_MIND_TEST_UNSET is not set/);
+  });
+});
+
 describe('dataDirOf', () => {
   test('reads paths.data, defaulting to ./data', () => {
     root = mkdtempSync(join(tmpdir(), 'reset-mind-'));

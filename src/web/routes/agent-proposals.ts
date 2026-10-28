@@ -48,13 +48,17 @@ const GOAL_NOTES_MAX = 500;
  * carries what it serves and when to stop.
  */
 export function proposalGoalsMarkdown(proposal: AgentProposal): string {
-  const notes = [
-    proposal.serves?.length ? `Serves: ${proposal.serves.map((s) => s.what).join('; ')}.` : '',
-    proposal.killCriterion ? `Kill if: ${proposal.killCriterion}` : '',
+  // The kill criterion and the delivery go first: only the wants are clipped.
+  const head = [
+    proposal.killCriterion ? `Kill if: ${proposal.killCriterion}.` : '',
+    proposal.delivery ? `Deliver via: ${proposal.delivery}.` : '',
   ]
     .filter(Boolean)
-    .join(' ')
-    .slice(0, GOAL_NOTES_MAX);
+    .join(' ');
+  const serves = proposal.serves?.length
+    ? `Serves: ${proposal.serves.map((s) => s.what).join('; ')}.`
+    : '';
+  const notes = [head, serves].filter(Boolean).join(' ').slice(0, GOAL_NOTES_MAX);
   const goals = (proposal.goals ?? []).map((text, i) => ({
     text,
     status: 'active',
