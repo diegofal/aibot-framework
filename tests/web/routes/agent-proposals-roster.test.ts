@@ -91,6 +91,22 @@ describe('proposalGoalsMarkdown (review #30)', () => {
     expect((goal.notes ?? '').length).toBeLessThanOrEqual(500);
   });
 
+  test('a long kill criterion and delivery are never cut; only the wants are (review #30 round 2)', () => {
+    const kill = `k${'x'.repeat(398)}K`;
+    const delivery = `Telegram chat 1234567890${'y'.repeat(54)}END`;
+    const md = proposalGoalsMarkdown({
+      ...base,
+      killCriterion: kill,
+      delivery,
+      serves: [{ id: 'w-aaaaaa', what: 'a'.repeat(300) }],
+    });
+    const notes = parseGoals(md).active[0].notes ?? '';
+    expect(notes).toContain(`Kill if: ${kill}.`);
+    expect(notes).toContain(`Deliver via: ${delivery}.`);
+    // Under goal-lint's oversized-notes cap, so hygiene never trims it.
+    expect(notes.length).toBeLessThanOrEqual(600);
+  });
+
   test('the delivery channel reaches the bot in its first goal', () => {
     const md = proposalGoalsMarkdown({ ...base, delivery: 'Telegram' });
     expect(parseGoals(md).active[0].notes).toContain('Deliver via: Telegram');

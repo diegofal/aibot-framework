@@ -58,7 +58,10 @@ export function proposalGoalsMarkdown(proposal: AgentProposal): string {
   const serves = proposal.serves?.length
     ? `Serves: ${proposal.serves.map((s) => s.what).join('; ')}.`
     : '';
-  const notes = [head, serves].filter(Boolean).join(' ').slice(0, GOAL_NOTES_MAX);
+  // The head is never cut (vetting bounds it: ≤ 400 + 80 chars, under
+  // goal-lint's 600); the wants get what is left of GOAL_NOTES_MAX.
+  const room = GOAL_NOTES_MAX - head.length - (head ? 1 : 0);
+  const notes = [head, room > 0 ? serves.slice(0, room) : ''].filter(Boolean).join(' ');
   const goals = (proposal.goals ?? []).map((text, i) => ({
     text,
     status: 'active',
