@@ -18,7 +18,7 @@ export const ARM_MS = 4000;
 
 const AMBER_AT = 0.75;
 
-function relTime(iso, nowMs) {
+export function relTime(iso, nowMs) {
   const t = Date.parse(iso ?? '');
   if (!Number.isFinite(t)) return '';
   const abs = Math.max(0, nowMs - t);

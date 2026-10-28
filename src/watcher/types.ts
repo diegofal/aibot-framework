@@ -288,6 +288,8 @@ export interface WatcherConfig {
   fastLane?: { enabled: boolean; minBots: number; maxPerDay: number };
   /** Self-improvement loop (`src/watcher/self-improve.ts`); absent = `WATCHER_DEFAULTS.selfImprove`. */
   selfImprove?: { enabled: boolean; toolProblemBots: number; everyHours: number };
+  /** The mind-proposed roster (`src/watcher/roster/`); absent = `WATCHER_DEFAULTS.roster`. */
+  roster?: { enabled: boolean; everyHours: number; maxProposals: number; maxPending: number };
   /** O10 forgetting (`importance.ts`); absent = `WATCHER_DEFAULTS.forget`. */
   forget?: {
     threshold: number;
@@ -345,6 +347,7 @@ export const WATCHER_DEFAULTS: WatcherConfig = {
   log: { senseSummaryEveryMs: 60_000 },
   fastLane: { enabled: true, minBots: 2, maxPerDay: 6 },
   selfImprove: { enabled: true, toolProblemBots: 3, everyHours: 24 },
+  roster: { enabled: true, everyHours: 168, maxProposals: 2, maxPending: 2 },
   forget: { threshold: 0.15, graceDays: 7, maxPerRun: 200 },
   consolidate: {
     enabled: false,

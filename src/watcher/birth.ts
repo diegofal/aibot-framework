@@ -263,6 +263,16 @@ const STAGES: Record<BirthStage, (ctx: StageCtx) => Promise<void> | void> = {
   done: stageDone,
 };
 
+/**
+ * The bots whose material (contacts, goals, knowledge, memory, history) the
+ * mind reads: enabled ones only. A disabled bot is paused or archived (the
+ * mind reset of `docs/plans/mind-roster-plan.md` turns every bot off), so
+ * its memory stays out of a fresh graph; the fleet stage still lists it.
+ */
+function materialBots(config: Config): NonNullable<Config['bots']> {
+  return (config.bots ?? []).filter((b) => b.enabled !== false);
+}
+
 function stageFleet(ctx: StageCtx): void {
   for (const bot of ctx.config.bots ?? []) {
     const key = `bot:${bot.id}`;
@@ -340,7 +350,7 @@ function stagePeople(ctx: StageCtx): void {
     return;
   }
   const drafts: PersonDraft[] = [];
-  for (const bot of ctx.config.bots ?? []) {
+  for (const bot of materialBots(ctx.config)) {
     for (const contact of ctx.userDirectory.list(bot.id)) mergeContact(drafts, contact, bot.id);
   }
   const op = ctx.config.operator;
@@ -424,7 +434,7 @@ function mergeContact(drafts: PersonDraft[], contact: ContactEntry, botId: strin
 }
 
 function stageGoals(ctx: StageCtx): void {
-  for (const bot of ctx.config.bots ?? []) {
+  for (const bot of materialBots(ctx.config)) {
     const soulDir = soulDirOf(ctx.config, bot);
     const loader = loaderFor(ctx, soulDir);
     const { active, completed } = parseGoals(loader.readGoals());
@@ -493,7 +503,7 @@ function stageGoals(ctx: StageCtx): void {
 }
 
 function stageKnowledge(ctx: StageCtx): void {
-  for (const bot of ctx.config.bots ?? []) {
+  for (const bot of materialBots(ctx.config)) {
     const soulDir = soulDirOf(ctx.config, bot);
     if (!existsSync(join(soulDir, 'KNOWLEDGE.json'))) continue;
     if (!checkJson(ctx, bot.id, soulDir, 'KNOWLEDGE.json')) continue;
@@ -627,7 +637,7 @@ export function isBookkeepingLine(text: string): boolean {
 const BULLET = /^\s*[-*]\s+(.+)$/;
 
 function stageMemory(ctx: StageCtx): void {
-  for (const bot of ctx.config.bots ?? []) {
+  for (const bot of materialBots(ctx.config)) {
     const soulDir = soulDirOf(ctx.config, bot);
     const facts: Array<{ text: string; source: string; category?: string }> = [];
     const memoryMd = join(soulDir, 'MEMORY.md');
@@ -739,7 +749,7 @@ function stageHistory(ctx: StageCtx): void {
   let worked = 0;
   let never = 0;
   const touched: string[] = [];
-  for (const bot of ctx.config.bots ?? []) {
+  for (const bot of materialBots(ctx.config)) {
     const rows = read(bot.id, sinceMs, nowMs);
     cycles += rows.length;
     const perGoal = new Map<string, { count: number; last: number }>();

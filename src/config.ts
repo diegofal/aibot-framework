@@ -974,6 +974,21 @@ export const WatcherConfigSchema = z
         everyHours: z.number().min(1).max(168).default(24),
       })
       .default({}),
+    /**
+     * The mind-proposed roster (`src/watcher/roster/`): from the operator's
+     * brief the mind proposes at most `maxProposals` bots a run into the agent
+     * proposal queue, never more than `maxPending` waiting; every
+     * `everyHours`, or 30 min after the brief changes. Not a watcher tunable
+     * (locked to the self-study).
+     */
+    roster: z
+      .object({
+        enabled: z.boolean().default(true),
+        everyHours: z.number().min(1).max(720).default(168),
+        maxProposals: z.number().int().min(1).max(3).default(2),
+        maxPending: z.number().int().min(1).max(5).default(2),
+      })
+      .default({}),
     fastLane: z
       .object({
         enabled: z.boolean().default(true),

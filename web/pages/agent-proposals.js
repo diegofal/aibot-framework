@@ -1,4 +1,5 @@
 import { confirmInline, promptDialog, showToast, undoable } from '../ui/index.js';
+import { proposerLabel, rosterFieldsHtml } from './agent-proposals-helpers.js';
 import { api, escapeHtml, timeAgo } from './shared.js';
 import { whyPanel } from './why-helpers.js';
 
@@ -67,7 +68,8 @@ export async function renderAgentProposals(el) {
         </div>
         <div class="detail-grid mb-8">
           <div class="detail-row"><span class="detail-label">Role</span><span>${escapeHtml(p.role)}</span></div>
-          <div class="detail-row"><span class="detail-label">Proposed By</span><span>${escapeHtml(p.proposedBy)}</span></div>
+          <div class="detail-row"><span class="detail-label">Proposed By</span><span>${escapeHtml(proposerLabel(p))}</span></div>
+          ${rosterFieldsHtml(p)}
           <div class="detail-row"><span class="detail-label">Skills</span><span>${p.skills.map((s) => `<code>${escapeHtml(s)}</code>`).join(', ') || '<span class="text-dim">none</span>'}</span></div>
           ${p.model ? `<div class="detail-row"><span class="detail-label">Model</span><span>${escapeHtml(p.model)}</span></div>` : ''}
           ${p.llmBackend ? `<div class="detail-row"><span class="detail-label">Backend</span><span>${escapeHtml(p.llmBackend)}</span></div>` : ''}
@@ -166,7 +168,7 @@ export async function renderAgentProposals(el) {
         <td>${p.emoji ? `${escapeHtml(p.emoji)} ` : ''}${escapeHtml(p.agentName)} <span class="text-dim">(${escapeHtml(p.agentId)})</span>${whyPanel(p.why, { botId: p.proposedBy })}</td>
         <td class="text-dim">${escapeHtml(p.role)}</td>
         <td>${STATUS_BADGES[p.status] || p.status}</td>
-        <td class="text-dim">${escapeHtml(p.proposedBy)}</td>
+        <td class="text-dim">${escapeHtml(proposerLabel(p))}</td>
         <td class="text-dim">${timeAgo(p.updatedAt)}</td>
         <td class="actions">
           <button class="btn btn-sm btn-danger" data-action="delete" data-id="${escapeHtml(p.id)}">Delete</button>

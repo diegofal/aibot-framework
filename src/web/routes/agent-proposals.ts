@@ -1,13 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Hono } from 'hono';
+import { getPreset } from '../../bot/presets';
 import type { BotConfig, Config } from '../../config';
 import { persistBots, resolveAgentConfig } from '../../config';
 import type { Logger } from '../../logger';
 import { backupSoulFile } from '../../soul';
-import { generateSoul } from '../../soul-generator';
+import { generateSoul as generateSoulDefault } from '../../soul-generator';
 import { getTenantId, scopeBots } from '../../tenant/tenant-scoping';
 import type { AgentProposal, AgentProposalStore } from '../../tools/agent-proposal-store';
+import { serializeGoals } from '../../tools/goals';
 import { agentProposalToWhy } from '../../why/builders/agent-proposal';
 import { CycleIndex, type CycleReader } from '../../why/cycle-index';
 import type { Why } from '../../why/types';
@@ -37,6 +39,39 @@ export function withProposalWhy(
   });
 }
 
+const GOAL_NOTES_MAX = 500;
+
+/**
+ * GOALS.md for an approved proposal with goals (the mind's, from the
+ * operator's brief): the operator approved them, so they are his
+ * (`source: operator`, "Set by your operator" in the prompts). The first
+ * carries what it serves and when to stop.
+ */
+export function proposalGoalsMarkdown(proposal: AgentProposal): string {
+  // The kill criterion and the delivery go first: only the wants are clipped.
+  const head = [
+    proposal.killCriterion ? `Kill if: ${proposal.killCriterion}.` : '',
+    proposal.delivery ? `Deliver via: ${proposal.delivery}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const serves = proposal.serves?.length
+    ? `Serves: ${proposal.serves.map((s) => s.what).join('; ')}.`
+    : '';
+  // The head is never cut (vetting bounds it: ≤ 400 + 80 chars, under
+  // goal-lint's 600); the wants get what is left of GOAL_NOTES_MAX.
+  const room = GOAL_NOTES_MAX - head.length - (head ? 1 : 0);
+  const notes = [head, room > 0 ? serves.slice(0, room) : ''].filter(Boolean).join(' ');
+  const goals = (proposal.goals ?? []).map((text, i) => ({
+    text,
+    status: 'active',
+    priority: i === 0 ? 'high' : 'medium',
+    source: 'operator',
+    ...(i === 0 && notes ? { notes } : {}),
+  }));
+  return `${serializeGoals(goals, [])}\n`;
+}
+
 export function agentProposalRoutes(deps: {
   store: AgentProposalStore;
   config: Config;
@@ -44,7 +79,10 @@ export function agentProposalRoutes(deps: {
   logger: Logger;
   /** Agent-loop cycle rows of a bot (shared `readCycles` of server.ts): plan and goal for `why`. */
   readCycles?: CycleReader;
+  /** The soul generator (tests); default the Claude CLI one. */
+  generateSoul?: typeof generateSoulDefault;
 }) {
+  const generateSoul = deps.generateSoul ?? generateSoulDefault;
   const app = new Hono();
 
   /** Filter proposals to only those from bots belonging to the requesting tenant */
@@ -116,12 +154,23 @@ export function agentProposalRoutes(deps: {
       };
     }
 
+    // A proposal of the mind (`src/watcher/roster/`): its deliverable and preset.
+    const preset = getPreset(proposal.preset);
+    if (proposal.deliverable) newBot.description = proposal.deliverable;
+    if (preset) {
+      newBot.preset = preset.id;
+      newBot.disabledTools = [...preset.disabledTools];
+    }
+
     deps.config.bots.push(newBot);
     persistBots(deps.configPath, deps.config.bots);
 
     // 2. Create soul directory + basic IDENTITY.md
     const soulDir = resolveAgentConfig(deps.config, newBot).soulDir;
     mkdirSync(join(soulDir, 'memory'), { recursive: true });
+    if (proposal.goals?.length) {
+      writeFileSync(join(soulDir, 'GOALS.md'), proposalGoalsMarkdown(proposal), 'utf-8');
+    }
     writeFileSync(
       join(soulDir, 'IDENTITY.md'),
       `name: ${proposal.agentName}\nemoji: ${proposal.emoji || ''}\nvibe: ${proposal.role}\n`,

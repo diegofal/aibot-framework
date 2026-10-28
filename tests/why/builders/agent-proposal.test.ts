@@ -77,3 +77,30 @@ describe('proposalOutcome', () => {
     expect(proposalOutcome({ status: 'rejected' })).toBe('You rejected it.');
   });
 });
+
+describe('agentProposalToWhy for a proposal of the mind', () => {
+  it('is by the watcher, from the brief: the wants it serves, the kill criterion, no cycle missing', () => {
+    const why = agentProposalToWhy({
+      proposal: {
+        ...proposal,
+        proposedBy: '__watcher__',
+        justification: 'Serves: roles.',
+        serves: [{ id: 'w-aaaaaa', what: 'Five AI roles a week' }],
+        killCriterion: 'Two lists with no role opened',
+        mindObjective: 'check my hiring predictions',
+      },
+    });
+    expect(why.by).toBe('watcher');
+    expect(why.what).toBe('The mind proposed a new agent: Scout');
+    expect(why.reason).toEqual({ text: 'Serves: roles.', source: "The mind's design" });
+    expect(why.related).toEqual({
+      label: 'Serves your brief',
+      items: [{ text: 'Five AI roles a week' }],
+    });
+    expect(why.rule).toBe('Kill if: Two lists with no role opened');
+    expect(why.notes).toEqual([{ label: 'For the mind', text: 'check my hiring predictions' }]);
+    expect(why.cycle).toBeUndefined();
+    expect(why.missing).toBeUndefined();
+    expect(WhySchema.safeParse(why).success).toBe(true);
+  });
+});
