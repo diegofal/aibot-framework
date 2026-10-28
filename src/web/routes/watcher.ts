@@ -43,6 +43,12 @@
  *   POST /self-improve/tool-problems/:classKey/dismiss
  *                          → 200 { dismissed, status }: never a tool problem again, its
  *                          suppression lifted from loop-on bots; 400 for a malformed key
+ *   GET  /brief            the operator's brief { wants, notes, updatedAt? } (mind roster)
+ *   PUT  /brief            save it: 200 { brief } (new wants get an id), 400 { error }
+ *   GET  /roster           { enabled, proposalsOn, running, lastRunAt, nextRunAt,
+ *                          lastOutcome, proposals, bots } (`src/watcher/roster/`)
+ *   POST /roster           design now: 200 { outcome, status }, 409 { error } (roster or
+ *                          agent proposals off, asleep, killed, one already running)
  *
  * Admin or single tenant only: a tenant gets 404 on every route (the watcher
  * sees the whole fleet). With the watcher off every route but GET / is 404
@@ -435,6 +441,38 @@ export function watcherRoutes(deps: WatcherRouteDeps): Hono {
     const r = w.dismissToolProblem(c.req.param('classKey'));
     if (!r.ok) return c.json({ error: r.error }, 400);
     return c.json({ dismissed: r.dismissed, status: w.selfImproveStatus() });
+  });
+
+  // ── The mind-proposed roster (`watcher/roster/`) ──
+  app.get('/brief', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    return c.json(w.brief());
+  });
+
+  app.put('/brief', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const body = await c.req.json().catch(() => null);
+    const r = w.saveBrief(body);
+    if (!r.ok) return c.json({ error: r.error }, 400);
+    return c.json({ brief: r.brief });
+  });
+
+  app.get('/roster', (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    return c.json(w.rosterStatus());
+  });
+
+  app.post('/roster', async (c) => {
+    const w = live();
+    if (!w) return c.json(off, 404);
+    const r = await w.rosterNow();
+    if (r.status === 'unavailable') return c.json({ error: r.reason }, 409);
+    if (r.status === 'cancelled')
+      return c.json({ error: 'The watcher stopped during the run' }, 409);
+    return c.json({ outcome: r.outcome, status: w.rosterStatus() });
   });
 
   return app;

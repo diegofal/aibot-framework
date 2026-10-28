@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import type { SelfStateInput } from '../bot/agent-loop-prompts';
 import type { HumanInboundEvent } from '../bot/agent-loop-utils';
 import type { LlmQueryEntry } from '../bot/llm-query-log';
+import { listPresets } from '../bot/presets';
 import { resolveSelfImprove } from '../bot/self-improve/config';
 import { LessonStore } from '../bot/self-improve/store';
 import type { ChannelStatus } from '../bot/telegram-errors';
@@ -39,11 +40,13 @@ import type { Config } from '../config';
 import { type CliSemaphoreStats, getClaudeCliStats } from '../core/cli-semaphore';
 import type { Logger } from '../logger';
 import type { OllamaClient } from '../ollama';
+import { readEntries } from '../productions/changelog';
 import { backupSoulFile } from '../soul';
 import { resolveBotPaths, resolveStatsDirs } from '../stats/paths';
 import { readAgentCycles } from '../stats/readers/agent-cycles';
 import { readToolEntries } from '../stats/readers/tool-audit';
 import { isTenantBot } from '../tenant/tenant-scoping';
+import { AgentProposalStore } from '../tools/agent-proposal-store';
 import type { ProactiveThrottle } from '../tools/send-proactive-message';
 import {
   SELF_STUDY_CHECK_MS,
@@ -122,6 +125,14 @@ import {
 } from './outcomes';
 import { bufferFile, maintainStateFile, noticeStateFile, watcherDir, watcherLogDir } from './paths';
 import { WatcherPresence } from './presence';
+import { parseBriefInput, readBrief, writeBrief } from './roster/brief';
+import {
+  type BotOutcomeCounts,
+  ROSTER_CHECK_MS,
+  type RosterRunResult,
+  RosterRunner,
+} from './roster/runner';
+import { type OperatorBrief, ROSTER_DEFAULTS, type RosterStatus } from './roster/types';
 import {
   type DismissResult,
   type FleetSelfImproveBot,
@@ -326,6 +337,11 @@ export interface WatcherDeps {
   selfStudyReaders?: SelfStudyReaders;
   /** Self-improvement: a bot's tool audit in `[sinceMs, nowMs]` (tests). Default: the audit on disk. */
   selfImproveAudit?: (botId: string, sinceMs: number, nowMs: number) => ToolAuditEntry[];
+  /**
+   * The agent proposal queue the roster designer submits into
+   * (`src/watcher/roster/`); undefined with `agentProposals.enabled` off.
+   */
+  agentProposals?: () => AgentProposalStore | undefined;
 }
 
 /** The monthly ceiling of a watcher config (`watcher.autonomy.monthlyCeilingUsd`, else the default). */
@@ -412,6 +428,8 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   private readonly selfStudy: SelfStudy;
   /** The fleet self-improvement loop (`self-improve.ts`): tool problems and lent lessons. */
   private readonly selfImprove: SelfImproveRunner;
+  /** The mind-proposed roster (`roster/runner.ts`): bots proposed from the operator's brief. */
+  private readonly roster: RosterRunner;
   /** C1: the stop the kill started, in flight. */
   private killStop: Promise<WatcherState> | null = null;
 
@@ -555,6 +573,26 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       now: this.now,
       logger: this.logger,
     });
+    this.roster = new RosterRunner({
+      watcherDir: this.dir,
+      settings: () => this.cfg().roster ?? ROSTER_DEFAULTS,
+      config: () => this.deps.config(),
+      store: () => this.deps.agentProposals?.(),
+      // Designing a roster is rare and consequential: the integrate tier, else notice.
+      client: () =>
+        this.tierClient('integrate', 'watcher:roster') ??
+        this.tierClient('notice', 'watcher:roster'),
+      mind: () => ({ counts: this.graph.counts(), broadcasts7d: this.broadcasts7d() }),
+      botOutcome: (botId, sinceMs) => this.rosterBotOutcome(botId, sinceMs),
+      presets: () =>
+        listPresets().map((p) => ({ id: p.id, description: p.description, skills: p.skills })),
+      log: (op, text) => this.log.say('integrate', op, text),
+      running: () => this.running && !this.stopping,
+      killed: () => this.readKill().killed,
+      signal: () => this.stopCtrl.signal,
+      now: this.now,
+      logger: this.logger,
+    });
   }
 
   /**
@@ -629,6 +667,90 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
   /** Resolves when the self-study in flight (if any) has finished. */
   selfStudyIdle(): Promise<unknown> {
     return this.selfStudy.current() ?? Promise.resolve();
+  }
+
+  // ── The mind-proposed roster (`roster/`) ──
+
+  /** The operator's brief (`GET /api/watcher/brief`). */
+  brief(): OperatorBrief {
+    return readBrief(this.dir);
+  }
+
+  /** Validate and save the brief (`PUT /api/watcher/brief`). Never throws on input. */
+  saveBrief(body: unknown): { ok: true; brief: OperatorBrief } | { ok: false; error: string } {
+    const parsed = parseBriefInput(body);
+    if (!parsed.ok) return parsed;
+    const brief = writeBrief(this.dir, parsed.brief, this.now());
+    const n = brief.wants.length;
+    this.log.say(
+      'integrate',
+      'roster:brief',
+      `The operator updated the brief: ${n} want${n === 1 ? '' : 's'}.`
+    );
+    return { ok: true, brief };
+  }
+
+  /** Design a roster now (`POST /api/watcher/roster`). Never throws. */
+  rosterNow(): Promise<RosterRunResult> {
+    return this.roster.run('manual');
+  }
+
+  /** `GET /api/watcher/roster`. */
+  rosterStatus(): RosterStatus {
+    return this.roster.status();
+  }
+
+  /** The timer's check (exposed for tests). True when it started a run. */
+  rosterTick(): boolean {
+    return this.roster.tick();
+  }
+
+  /** Broadcasts of the last 7 days: delivered, and acted on by a cycle. */
+  private broadcasts7d(): { delivered: number; served: number } {
+    const since = this.now() - 7 * DAY_MS;
+    let delivered = 0;
+    let served = 0;
+    try {
+      for (const b of this.broadcaster.list()) {
+        if (Date.parse(b.createdAt) < since) continue;
+        if (b.deliveredAt) delivered++;
+        if (b.servedByCycle) served++;
+      }
+    } catch {
+      // A broadcast file that cannot be read shows as none.
+    }
+    return { delivered, served };
+  }
+
+  /** What a mind-proposed bot did since `sinceMs`: completed cycles, created productions and their reviews. */
+  private rosterBotOutcome(botId: string, sinceMs: number): BotOutcomeCounts {
+    const rows = this.deps.readCycles?.(botId, sinceMs, this.now()) ?? [];
+    const completed = rows.filter((r) => r.status === 'completed');
+    const lastCycleAt = completed
+      .map((r) => r.endedAt ?? r.startedAt)
+      .filter((x): x is string => !!x)
+      .sort()
+      .at(-1);
+    const config = this.deps.config();
+    const bot = config.bots?.find((b) => b.id === botId);
+    let created: ReturnType<typeof readEntries> = [];
+    if (bot) {
+      try {
+        const changelog = join(resolveBotPaths(config, bot).workDir, 'changelog.jsonl');
+        created = readEntries(changelog).filter(
+          (e) => e.action === 'create' && Date.parse(e.timestamp) >= sinceMs
+        );
+      } catch {
+        created = [];
+      }
+    }
+    return {
+      cyclesCompleted: completed.length,
+      ...(lastCycleAt ? { lastCycleAt } : {}),
+      productions: created.length,
+      approved: created.filter((e) => e.evaluation?.status === 'approved').length,
+      rejected: created.filter((e) => e.evaluation?.status === 'rejected').length,
+    };
   }
 
   /**
@@ -1376,6 +1498,7 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
       this.consolidateRun,
       this.selfStudy.current(),
       this.selfImprove.current(),
+      this.roster.current(),
     ].filter((p): p is Promise<never> => !!p);
     if (!(await this.waitBounded(Promise.allSettled(work)))) {
       this.logger.warn(
@@ -1681,15 +1804,17 @@ export class Watcher extends EventEmitter implements WatcherSelfStateSource {
     const selfStudy = setInterval(() => this.selfStudyTick(), SELF_STUDY_CHECK_MS);
     // The fleet self-improvement loop (checks hourly whether a run is due).
     const selfImprove = setInterval(() => this.selfImproveTick(), SELF_IMPROVE_CHECK_MS);
+    // The mind-proposed roster (checks every 10 min whether a run is due).
+    const roster = setInterval(() => this.rosterTick(), ROSTER_CHECK_MS);
     // C1: the kill poll lives with the run (cleared by `stop` and `abandonStart`).
     const kill = setInterval(
       () => void this.checkKillSwitch(),
       this.deps.killPollMs ?? KILL_POLL_MS
     );
-    for (const t of [summary, daily, nightly, selfStudy, selfImprove, kill]) {
+    for (const t of [summary, daily, nightly, selfStudy, selfImprove, roster, kill]) {
       (t as { unref?: () => void }).unref?.();
     }
-    this.timers = [summary, daily, nightly, selfStudy, selfImprove, kill];
+    this.timers = [summary, daily, nightly, selfStudy, selfImprove, roster, kill];
   }
 
   /**
@@ -2208,6 +2333,13 @@ export function fleetToolCalls(
  * new runs). Embeds with the shared Ollama client and `soul.search.embeddingModel`;
  * without a model there is no `embed` and the graph links nothing.
  */
+/** The agent proposal queue the roster submits into: one store, none with proposals off. */
+function fleetAgentProposals(config: Config): () => AgentProposalStore | undefined {
+  const ap = config.agentProposals;
+  const store = ap?.enabled ? new AgentProposalStore(ap.storePath) : undefined;
+  return () => store;
+}
+
 export function createFleetWatcher(
   config: Config,
   logger: Logger,
@@ -2239,6 +2371,7 @@ export function createFleetWatcher(
       }
     },
     broadcastDelivery: fleetBroadcastDelivery(config, manager, logger),
+    agentProposals: fleetAgentProposals(config),
     karmaScores: () => {
       const karma = manager.getKarmaService?.();
       if (!karma) return [];

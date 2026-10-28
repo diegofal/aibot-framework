@@ -20,6 +20,19 @@ export interface AgentProposal {
   cycleId?: string;
   /** The goal that cycle served (the tool's `_goalId`). */
   goalId?: string;
+  // Set when the watcher proposed it (`proposedBy: '__watcher__'`, src/watcher/roster/).
+  /** The operator's wants (brief) it serves. */
+  serves?: Array<{ id: string; what: string }>;
+  /** Initial goals; approval writes them to GOALS.md as the operator's. */
+  goals?: string[];
+  deliverable?: string;
+  delivery?: string;
+  /** When it is not worth running; the designer reads it back to suggest retiring. */
+  killCriterion?: string;
+  /** A preset id (`src/bot/presets.ts`): approval applies its skills and disabled tools. */
+  preset?: string;
+  /** How the agent also helps the mind; never the reason for it. */
+  mindObjective?: string;
   status: 'pending' | 'approved' | 'rejected';
   createdAt: string;
   updatedAt: string;

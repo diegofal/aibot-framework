@@ -363,3 +363,9 @@ Each entry is a `###` heading with this table and these paragraphs:
 ### Watcher self-study: notes and digest accuracy (2026-10-26, PR #26)
 
 - **What.** Four advisories accepted as debt on PR #26 (Fable round 1, 0 bugs; the review counted five because the spend-window one was posted twice, once inline and once in a summary comment): a throw mid-way through the submit loop leaves proposals the store already accepted out of the run's outcome and NOTES.md (the queue stays right); the watcher's per-tier spend covers the last 7 whole UTC days while `byCaller` and the bot figures cover the rolling window, so the digest's watcher numbers disagree (the first live run flagged it itself: $0.80/day headline vs $8.43 by caller); extra keys in the model's JSON are spread into the store input (the rung 0 parser still validates every field it uses); a refused or errored call that then throws in `afterCall` is reported as "failed after the model answered". **Trigger.** A proposal whose rationale rests on the watcher's own spend, or the operator reading NOTES.md as the record of what was proposed. **Cost.** An hour: one window for every digest figure, an outcome assembled from the store's results, an allowlist of keys copied from the model's answer.
+
+### Mind roster: follow-ups (2026-10-27, `docs/plans/mind-roster-plan.md`)
+
+- **Notice keeps too much.** The reset clears the graph, not the policy that filled it (1.9k facts, 760 questions, 480 surprises against 43 insights). **Trigger:** two weeks after the reset, live neurons other than entity/person/goal pass 1,000 while insights stay under 5 % of them.
+- **Retire suggestions are shown only.** The operator turns a bot off by hand. **Trigger:** a retire suggestion stays on the card for two designer runs without the operator acting on it.
+- **The brief is a form, not a conversation.** The designer's `questions` stand in for one. **Trigger:** two runs in a row end with questions and no proposal.

@@ -1050,3 +1050,31 @@ describe('birth: tagged error lines go through the one bookkeeping rule', () => 
     ]);
   });
 });
+
+describe('birth over disabled bots (mind reset)', () => {
+  test('a disabled bot is listed in the fleet but its material is not read', async () => {
+    const ctx = deps();
+    (ctx.config.bots[0] as { enabled: boolean }).enabled = false;
+    const record = beginBirth(ctx.d);
+    await continueBirth(ctx.d, record);
+    const texts = ctx.graph.list().map((n) => n.text);
+    const counts = ctx.graph.counts();
+    // Fleet: both bots are still entities, the disabled one says so.
+    expect(counts.entity).toBe(2);
+    // Goals, knowledge, memory and contacts of b1 never enter the graph.
+    expect(counts.goal ?? 0).toBe(0);
+    expect(texts.some((t) => t.includes('Acme'))).toBe(false);
+    expect(texts.some((t) => t.includes('Elm street'))).toBe(false);
+    expect(texts.some((t) => t.includes('Bo'))).toBe(false);
+    // b2's operator contact is still read.
+    expect(ctx.graph.list().some((n) => n.kind === 'person')).toBe(true);
+  });
+
+  test('resync after a wake skips a disabled bot too', async () => {
+    const ctx = deps();
+    (ctx.config.bots[0] as { enabled: boolean }).enabled = false;
+    const result = await runResync(ctx.d);
+    expect(result.goals).toBe(0);
+    expect(ctx.graph.list().some((n) => n.text.includes('Bo'))).toBe(false);
+  });
+});

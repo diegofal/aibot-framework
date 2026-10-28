@@ -7,6 +7,16 @@ describe('watcher types', () => {
     expect(WatcherConfigSchema.parse(undefined)).toEqual(WATCHER_DEFAULTS);
   });
 
+  test('the mind-proposed roster is on by default, two proposals a week at most', () => {
+    expect(WatcherConfigSchema.parse(undefined).roster).toEqual({
+      enabled: true,
+      everyHours: 168,
+      maxProposals: 2,
+      maxPending: 2,
+    });
+    expect(() => WatcherConfigSchema.parse({ roster: { maxProposals: 6 } })).toThrow();
+  });
+
   test('the watcher is off by default', () => {
     expect(WATCHER_DEFAULTS.enabled).toBe(false);
     expect(WATCHER_DEFAULTS.notice.enabled).toBe(false);

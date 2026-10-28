@@ -26,7 +26,8 @@ export interface LlmQueryEntry {
     | 'watcher:integrate'
     | 'watcher:introspect'
     | 'watcher:consolidate'
-    | 'watcher:self-study';
+    | 'watcher:self-study'
+    | 'watcher:roster';
   model: string;
   backend: string;
   temperature?: number;

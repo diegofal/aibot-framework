@@ -22,6 +22,9 @@
  * `KILL_POLL_MS` so clearing the switch re-enables Start without a reload.
  * Rung 2: the Self-study card under it (`/api/watcher/self-study`: last and
  * next run, the notes code wrote, a two-step "Run now").
+ * The Roster card under that (`watcher-roster-helpers.js`; `/api/watcher/brief`
+ * and `/api/watcher/roster`): the operator's brief editor, a two-step
+ * "Propose bots", the last designer run, the mind's proposals and their bots.
  *
  * The pure half lives in `watcher-helpers.js`; WebGL in `watcher-ball.js`.
  */
@@ -93,6 +96,15 @@ import {
   passRecordBodyHtml,
 } from './watcher-ops-helpers.js';
 import {
+  BRIEF_MAX_WANTS,
+  ROSTER_RUN_KEY,
+  briefPayload,
+  draftFromBrief,
+  isRosterRow,
+  isRosterStatus,
+  rosterCardHtml,
+} from './watcher-roster-helpers.js';
+import {
   attendingHtml,
   cardHeadHtml,
   howIAmHtml,
@@ -136,6 +148,8 @@ export function destroyWatcher() {
   clearTimeout(page.autonomy?.disarm);
   clearTimeout(page.selfStudy?.refetch);
   clearTimeout(page.selfStudy?.disarm);
+  clearTimeout(page.roster?.refetch);
+  clearTimeout(page.roster?.disarm);
   page = null;
 }
 
@@ -459,6 +473,157 @@ async function runSelfStudy() {
   await Promise.all([refreshSelfStudy(), refreshProposals()]);
 }
 
+/* ── Roster (mind-proposed bots) ─────────────────────────────────── */
+
+const blankWant = () => ({ what: '', cadence: '', delivery: '', success: '' });
+
+/**
+ * The Roster card. Rebuilt only when its markup changed and, unless `force`,
+ * never while the operator types in it (the draft is kept as typed, so a
+ * forced rebuild puts the text back); the focused control keeps the focus.
+ */
+function drawRoster({ force = false } = {}) {
+  const host = $('#watcher-roster');
+  if (!host) return;
+  const r = page.roster;
+  const html = rosterCardHtml(r.status, r.brief, { nowMs: Date.now(), ui: r.ui });
+  const focused = host.contains(document.activeElement) ? document.activeElement : null;
+  const typing = focused?.tagName === 'INPUT' || focused?.tagName === 'TEXTAREA';
+  if (!shouldRedrawProposals(r.html, html, { typing, force })) return;
+  const focusKey = focused?.dataset?.focusKey ?? (focused?.id ? `#${focused.id}` : null);
+  host.innerHTML = html;
+  host.hidden = !html;
+  r.html = html;
+  if (!focusKey) return;
+  const again = focusKey.startsWith('#')
+    ? host.querySelector(`#${CSS.escape(focusKey.slice(1))}`)
+    : host.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`);
+  if (again && !again.disabled) again.focus();
+}
+
+async function refreshRoster() {
+  const mine = page;
+  const [status, brief] = await Promise.all([
+    api('/api/watcher/roster').catch(() => null),
+    api('/api/watcher/brief').catch(() => null),
+  ]);
+  if (page !== mine || !page) return;
+  const r = page.roster;
+  r.refetch = null;
+  // The watcher off (404 `{ enabled: false }`) hides the card.
+  if (status && typeof status.enabled === 'boolean') {
+    r.status = isRosterStatus(status) ? status : null;
+  }
+  if (brief && Array.isArray(brief.wants)) {
+    r.brief = brief;
+    // Unsaved edits win over a re-read; a clean editor follows the saved brief.
+    if (!r.ui.dirty || !r.ui.draft) r.ui.draft = draftFromBrief(brief);
+  }
+  if (!r.ui.draft) r.ui.draft = draftFromBrief(null);
+  drawRoster();
+}
+
+function scheduleRosterRefetch() {
+  if (!page || page.roster.refetch) return;
+  page.roster.refetch = setTimeout(() => void refreshRoster(), PROPOSALS_REFETCH_DEBOUNCE_MS);
+}
+
+function rosterDraft() {
+  const ui = page.roster.ui;
+  if (!ui.draft) ui.draft = draftFromBrief(page.roster.brief);
+  return ui.draft;
+}
+
+/** One typed field of the brief editor, kept in the draft. */
+function rosterInput(target) {
+  const draft = rosterDraft();
+  if (target.dataset.rosterNotes !== undefined) {
+    draft.notes = target.value;
+  } else {
+    const want = draft.wants[Number(target.dataset.rosterIndex)];
+    if (!want) return;
+    want[target.dataset.rosterField] = target.value;
+  }
+  page.roster.ui.dirty = true;
+}
+
+function addWant() {
+  const draft = rosterDraft();
+  if (draft.wants.length >= BRIEF_MAX_WANTS) return;
+  draft.wants.push(blankWant());
+  page.roster.ui.dirty = true;
+  drawRoster({ force: true });
+  $(`#roster-what-${draft.wants.length - 1}`)?.focus();
+}
+
+function removeWant(index) {
+  const draft = rosterDraft();
+  draft.wants.splice(Number(index), 1);
+  if (draft.wants.length === 0) draft.wants.push(blankWant());
+  page.roster.ui.dirty = true;
+  drawRoster({ force: true });
+}
+
+/** Save: `PUT /api/watcher/brief`; a 400 `{ error }` shows inline under the editor. */
+async function saveBrief() {
+  const r = page.roster;
+  if (r.ui.saving) return;
+  const mine = page;
+  r.ui.saving = true;
+  r.ui.saveError = null;
+  drawRoster({ force: true });
+  const res = await api('/api/watcher/brief', {
+    method: 'PUT',
+    body: briefPayload(rosterDraft()),
+  }).catch((err) => ({ error: err?.message || 'Request failed' }));
+  if (page !== mine || !page) return;
+  r.ui.saving = false;
+  if (!res || res.error || !res.brief) {
+    r.ui.saveError = res?.error || (res?.enabled === false ? 'The watcher is off.' : 'No answer');
+  } else {
+    r.brief = res.brief;
+    r.ui.draft = draftFromBrief(res.brief);
+    r.ui.dirty = false;
+    showToast('Brief saved.');
+  }
+  drawRoster({ force: true });
+  await refreshRoster();
+}
+
+/** "Propose bots": first click arms, a second within `ARM_MS` runs the designer (409 shows inline). */
+async function runRoster() {
+  const r = page.roster;
+  if (r.ui.busy) return;
+  const out = armClick(r.ui.armed, ROSTER_RUN_KEY, Date.now());
+  r.ui.armed = out.armed;
+  clearTimeout(r.disarm);
+  r.disarm = out.armed
+    ? setTimeout(
+        () => {
+          if (!page) return;
+          page.roster.ui.armed = null;
+          drawRoster({ force: true });
+        },
+        Math.max(0, out.armed.until - Date.now()) + 50
+      )
+    : null;
+  if (!out.fire) return drawRoster({ force: true });
+  const mine = page;
+  r.ui.busy = true;
+  r.ui.error = null;
+  drawRoster({ force: true });
+  const res = await api('/api/watcher/roster', { method: 'POST' }).catch((err) => ({
+    error: err?.message || 'Request failed',
+  }));
+  if (page !== mine || !page) return;
+  r.ui.busy = false;
+  if (!res || res.error) r.ui.error = res?.error || 'No answer';
+  else showToast('Roster run done: its outcome is below.');
+  if (isRosterStatus(res?.status)) r.status = res.status;
+  drawRoster({ force: true });
+  await refreshRoster();
+}
+
 function revertChange(button) {
   const id = button?.dataset.changeId;
   if (!id || !armedFire(`revert:${id}`)) return;
@@ -562,6 +727,7 @@ function shell() {
     </section>
     <section class="watcher-autonomy" id="watcher-proposals" aria-label="Proposals" hidden></section>
     <section class="watcher-autonomy" id="watcher-self-study" aria-label="Self-study" hidden></section>
+    <section class="watcher-autonomy" id="watcher-roster" aria-label="Roster" hidden></section>
     <section class="watcher-mind" aria-label="What the watcher holds">
       <div class="watcher-mind-head"><div class="watcher-log-title">Mind</div><div class="watcher-card-sub">Everything in the ball, readable: pick a kind, search, click a row to light it in the ball and see where it came from.</div></div>
       <div id="watcher-mind-tabs"></div>
@@ -925,6 +1091,7 @@ function onEffect(effect) {
         scheduleSelfStudyRefetch();
         scheduleProposalsRefetch();
       }
+      if (isRosterRow(effect.row)) scheduleRosterRefetch();
       if (page.paused) {
         page.pending++;
         drawLogHead();
@@ -1239,6 +1406,14 @@ function wire(el, signal) {
           return cancelReject(e.target.closest('[data-action]').dataset.proposalId);
         case 'self-study-run':
           return runSelfStudy();
+        case 'roster-add':
+          return addWant();
+        case 'roster-remove':
+          return removeWant(e.target.closest('[data-action]').dataset.rosterIndex);
+        case 'roster-save':
+          return saveBrief();
+        case 'roster-run':
+          return runRoster();
         default:
           break;
       }
@@ -1272,6 +1447,11 @@ function wire(el, signal) {
       if (page && noteId) {
         page.autonomy.ui.rejecting[noteId] = e.target.value;
         return;
+      }
+      // A brief field is kept in the draft as typed (see `drawRoster`).
+      const rosterField = e.target?.dataset?.rosterField;
+      if (page && (rosterField || e.target?.dataset?.rosterNotes !== undefined)) {
+        return rosterInput(e.target);
       }
       if (!page || e.target?.id !== 'watcher-mind-search') return;
       page.mind.query = e.target.value;
@@ -1425,6 +1605,22 @@ export async function renderWatcher(el) {
       disarm: null,
       ui: { armed: null, busy: false, error: null },
     },
+    roster: {
+      status: null,
+      brief: null,
+      html: null,
+      refetch: null,
+      disarm: null,
+      ui: {
+        draft: null,
+        dirty: false,
+        armed: null,
+        busy: false,
+        error: null,
+        saving: false,
+        saveError: null,
+      },
+    },
   };
   el.innerHTML = shell();
   const dateInput = $('#watcher-replay-date');
@@ -1439,6 +1635,7 @@ export async function renderWatcher(el) {
   void refreshEmbedding();
   void refreshProposals();
   void refreshSelfStudy();
+  void refreshRoster();
   wire(el, page.listeners.signal);
   page.slowClock = setInterval(() => {
     if (page) void refreshSlow();
@@ -1454,6 +1651,7 @@ export async function renderWatcher(el) {
     if (!page.paused) drawLog();
     drawProposals();
     drawSelfStudy();
+    drawRoster();
   }, CLOCK_MS);
 
   await mountTheBall();
